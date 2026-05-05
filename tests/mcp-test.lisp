@@ -17,6 +17,11 @@
                 #:make-mcp-client
                 #:mcp-client-url
                 #:mcp-client-session-id
+                #:mcp-client-transport
+                #:mcp-transport
+                #:http-mcp-transport
+                #:transport-send-request
+                #:transport-close
                 #:mcp-error
                 #:mcp-error-code
                 #:mcp-error-message
@@ -25,7 +30,8 @@
                 #:mcp-parse-response
                 #:initialize-mcp
                 #:list-tools
-                #:call-tool))
+                #:call-tool
+                #:close-mcp-client))
 
 (in-package #:cl-harness/tests/mcp-test)
 
@@ -161,3 +167,42 @@ RESPONDER receives the request body and returns (values BODY STATUS HEADERS)."
                       :key (lambda (h) (gethash "name" h))
                       :test #'equal))))
         (skip "set CL_HARNESS_INTEGRATION=1 to enable"))))
+
+;; --- Phase A: transport abstraction --------------------------------------
+
+(deftest mcp-client-wraps-closure-transport-into-http-transport
+  ;; Legacy contract: passing a (URL HEADERS BODY) closure as :TRANSPORT
+  ;; must continue to work. The closure is now wrapped into an
+  ;; HTTP-MCP-TRANSPORT instance behind the scenes; tests should not
+  ;; have to know the internal representation changed.
+  (let* ((transport (lambda (u h b)
+                      (declare (ignore u h b))
+                      (values "" 202 (make-hash-table :test 'equal))))
+         (c (make-mcp-client "http://example.test/mcp" :transport transport)))
+    (ok (typep (mcp-client-transport c) 'mcp-transport))
+    (ok (typep (mcp-client-transport c) 'http-mcp-transport))
+    (ok (equal "http://example.test/mcp" (mcp-client-url c)))
+    (ok (null (mcp-client-session-id c)))))
+
+(deftest mcp-client-accepts-direct-transport-instance
+  ;; Phase B / Phase C plug stdio in by passing an MCP-TRANSPORT instance
+  ;; directly. Verify the constructor accepts that path now (URL ignored).
+  (let ((sent '())
+        (responses '("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"serverInfo\":{\"name\":\"x\",\"version\":\"0\"}}}"
+                     ""))
+        (closed-p nil))
+    (defclass %fake-transport (mcp-transport) ())
+    (defmethod transport-send-request ((tr %fake-transport) body)
+      (push body sent)
+      (or (pop responses) ""))
+    (defmethod transport-close ((tr %fake-transport))
+      (setf closed-p t))
+    (let ((c (make-mcp-client nil :transport (make-instance '%fake-transport))))
+      (ok (typep (mcp-client-transport c) '%fake-transport))
+      (ok (null (mcp-client-url c)))
+      (ok (null (mcp-client-session-id c)))
+      (initialize-mcp c :client-name "t" :client-version "0")
+      (ok (= 2 (length sent))
+          "initialize + initialized notification both went through transport-send-request")
+      (close-mcp-client c)
+      (ok closed-p "close-mcp-client invoked transport-close"))))

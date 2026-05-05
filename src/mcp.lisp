@@ -1,9 +1,17 @@
 ;;;; src/mcp.lisp
 ;;;;
-;;;; PRD §8.3, §10.2, §10.3 — JSON-RPC 2.0 over HTTP client for cl-mcp.
-;;;; Streamable HTTP transport (single POST per call) is the only flavour
-;;;; required for MVP. The TRANSPORT slot is an injectable function so tests
-;;;; can replace dexador with a recording stub.
+;;;; PRD §8.3, §10.2, §10.3 — JSON-RPC 2.0 client for cl-mcp.
+;;;;
+;;;; The transport is now an object (HTTP-MCP-TRANSPORT for the original
+;;;; HTTP path; STDIO-MCP-TRANSPORT lands in Phase B per
+;;;; docs/notes/2026-05-06-stdio-transport.md). MCP-CLIENT delegates the
+;;;; wire-level send/receive to TRANSPORT-SEND-REQUEST so the rest of the
+;;;; code never branches on transport.
+;;;;
+;;;; Tests still inject a (URL HEADERS BODY) closure as :transport;
+;;;; MAKE-MCP-CLIENT wraps that closure into an HTTP-MCP-TRANSPORT
+;;;; transparently, so existing call sites do not need to know the
+;;;; refactor happened.
 
 (defpackage #:cl-harness/src/mcp
   (:use #:cl)
@@ -19,6 +27,12 @@
            #:mcp-client-url
            #:mcp-client-session-id
            #:mcp-client-protocol-version
+           #:mcp-client-transport
+           #:mcp-transport
+           #:http-mcp-transport
+           #:transport-send-request
+           #:transport-close
+           #:default-http-transport
            #:mcp-error
            #:mcp-error-code
            #:mcp-error-message
@@ -29,6 +43,7 @@
            #:initialize-mcp
            #:list-tools
            #:call-tool
+           #:close-mcp-client
            #:+mcp-protocol-version+))
 
 (in-package #:cl-harness/src/mcp)
@@ -45,23 +60,39 @@
              (format stream "MCP error ~A: ~A"
                      (mcp-error-code c) (mcp-error-message c)))))
 
-(defclass mcp-client ()
-  ((url :initarg :url :reader mcp-client-url)
-   (transport :initarg :transport :reader mcp-client-transport)
-   (protocol-version :initarg :protocol-version
-                     :initform +mcp-protocol-version+
-                     :reader mcp-client-protocol-version)
-   (session-id :initform nil :accessor mcp-client-session-id)
-   (next-id :initform 0 :accessor %mcp-next-id))
-  (:documentation
-   "JSON-RPC 2.0 over HTTP client for cl-mcp (PRD §10.2 mcp-client).
-TRANSPORT is a function of (URL HEADERS BODY) returning
-(values RESPONSE-BODY STATUS RESPONSE-HEADERS); tests inject a stub."))
+;; --- Transport -----------------------------------------------------------
 
-;; --- Stubs ---------------------------------------------------------------
-;; These are intentionally wrong return values so the failing tests will
-;; surface assertion failures (not just load errors). The real
-;; implementation replaces every body below.
+(defclass mcp-transport ()
+  ()
+  (:documentation
+   "Abstract base for an MCP wire transport. Concrete subclasses
+implement TRANSPORT-SEND-REQUEST and (optionally) TRANSPORT-CLOSE. The
+HTTP transport is in this file; the stdio transport lands in Phase B."))
+
+(defgeneric transport-send-request (transport body)
+  (:documentation
+   "Send BODY (a JSON-RPC request or notification string) over TRANSPORT
+and return the response body as a string. For notifications the returned
+string is empty (HTTP 202) or NIL (stdio); the caller discards it."))
+
+(defgeneric transport-close (transport)
+  (:documentation
+   "Release any resources held by TRANSPORT. Default is a no-op so HTTP
+transports (which own no resources beyond keep-alive disabled sockets)
+do nothing.")
+  (:method ((transport mcp-transport)) nil))
+
+;; --- HTTP transport ------------------------------------------------------
+
+(defclass http-mcp-transport (mcp-transport)
+  ((url :initarg :url :reader http-transport-url)
+   (raw-fn :initarg :raw-fn :reader http-transport-raw-fn)
+   (session-id :initform nil :accessor http-transport-session-id))
+  (:documentation
+   "JSON-RPC over HTTP transport for cl-mcp. RAW-FN is a function of
+(URL HEADERS BODY) returning (values RESPONSE-BODY STATUS HEADERS); tests
+inject a stub here. SESSION-ID is captured from the first response that
+carries an Mcp-Session-Id header and forwarded on subsequent calls."))
 
 (defun default-http-transport (url headers body)
   "POST BODY to URL with HEADERS hash-table using dexador.
@@ -86,17 +117,111 @@ MCP server that closes idle sockets do not surface stale streams."
                 (response-status c)
                 (make-hash-table :test 'equal))))))
 
-(defun make-mcp-client (url &key transport (protocol-version +mcp-protocol-version+))
-  "Construct an MCP-CLIENT against URL.
+(defun %extract-session-id (response-headers)
+  "Return the MCP session id from RESPONSE-HEADERS or NIL.
 
-TRANSPORT defaults to a dexador-backed POST. PROTOCOL-VERSION pins the version
-sent during initialize."
-  (check-type url string)
+Server implementations spell the header inconsistently across casings, so
+check both lowercase and the canonical mixed-case spelling."
+  (when (hash-table-p response-headers)
+    (or (gethash "mcp-session-id" response-headers)
+        (gethash "Mcp-Session-Id" response-headers))))
+
+(defun %http-request-headers (transport)
+  "Build the per-request header table for TRANSPORT, including the
+captured session-id once the initialize handshake has assigned one."
+  (let ((hdrs (alist-hash-table
+               '(("Content-Type" . "application/json")
+                 ("Accept" . "application/json, text/event-stream"))
+               :test 'equal)))
+    (when-let ((sid (http-transport-session-id transport)))
+      (setf (gethash "Mcp-Session-Id" hdrs) sid))
+    hdrs))
+
+(defmethod transport-send-request ((transport http-mcp-transport) body)
+  (let ((headers (%http-request-headers transport)))
+    (multiple-value-bind (resp-body status resp-headers)
+        (funcall (http-transport-raw-fn transport)
+                 (http-transport-url transport) headers body)
+      (declare (ignore status))
+      (when-let ((sid (%extract-session-id resp-headers)))
+        (unless (http-transport-session-id transport)
+          (setf (http-transport-session-id transport) sid)))
+      resp-body)))
+
+;; --- Client --------------------------------------------------------------
+
+(defclass mcp-client ()
+  ((transport :initarg :transport :reader mcp-client-transport)
+   (protocol-version :initarg :protocol-version
+                     :initform +mcp-protocol-version+
+                     :reader mcp-client-protocol-version)
+   (next-id :initform 0 :accessor %mcp-next-id))
+  (:documentation
+   "JSON-RPC 2.0 client for cl-mcp (PRD §10.2). The wire-level details
+live in TRANSPORT; the client owns only the request-id counter and the
+protocol-version handshake state."))
+
+(defgeneric mcp-client-url (client)
+  (:documentation
+   "Backward-compat reader: the URL of the underlying HTTP transport, or
+NIL when the client uses a non-HTTP transport.")
+  (:method ((client mcp-client))
+    (let ((tr (mcp-client-transport client)))
+      (when (typep tr 'http-mcp-transport)
+        (http-transport-url tr)))))
+
+(defgeneric mcp-client-session-id (client)
+  (:documentation
+   "Backward-compat reader: the HTTP session-id captured during
+INITIALIZE-MCP, or NIL for non-HTTP transports.")
+  (:method ((client mcp-client))
+    (let ((tr (mcp-client-transport client)))
+      (when (typep tr 'http-mcp-transport)
+        (http-transport-session-id tr)))))
+
+(defun %coerce-transport (transport url)
+  "Return an MCP-TRANSPORT instance for TRANSPORT, lifting legacy
+function-shaped transports into an HTTP-MCP-TRANSPORT against URL.
+
+- TRANSPORT NIL ⇒ HTTP transport using DEFAULT-HTTP-TRANSPORT against URL.
+- TRANSPORT a function ⇒ HTTP transport using that function as RAW-FN
+  (the legacy test contract: (URL HEADERS BODY) → (values BODY STATUS HEADERS)).
+- TRANSPORT an MCP-TRANSPORT instance ⇒ used as-is; URL is ignored."
+  (cond
+    ((typep transport 'mcp-transport) transport)
+    ((or (functionp transport) (null transport))
+     (unless url
+       (error "make-mcp-client: URL is required for an HTTP transport"))
+     (make-instance 'http-mcp-transport
+                    :url url
+                    :raw-fn (or transport #'default-http-transport)))
+    (t (error "make-mcp-client: unsupported :transport value ~A" transport))))
+
+(defun make-mcp-client (url &key transport
+                                 (protocol-version +mcp-protocol-version+))
+  "Construct an MCP-CLIENT.
+
+URL is the HTTP endpoint when TRANSPORT is nil or a closure, and is
+ignored when TRANSPORT is an MCP-TRANSPORT instance.
+
+TRANSPORT may be:
+- NIL — default HTTP transport via DEFAULT-HTTP-TRANSPORT against URL.
+- a function (URL HEADERS BODY) → (values BODY STATUS HEADERS) — wrapped
+  into an HTTP-MCP-TRANSPORT with that function as the raw send. Tests
+  inject a stub here.
+- an MCP-TRANSPORT instance — used directly. Stdio transports plug in
+  this way (Phase B)."
+  (check-type url (or string null))
   (check-type protocol-version string)
   (make-instance 'mcp-client
-                 :url url
-                 :transport (or transport #'default-http-transport)
+                 :transport (%coerce-transport transport url)
                  :protocol-version protocol-version))
+
+(defun close-mcp-client (client)
+  "Release the transport's resources. Safe to call multiple times."
+  (transport-close (mcp-client-transport client)))
+
+;; --- Wire helpers --------------------------------------------------------
 
 (defun mcp-build-request (id method &key params)
   "Build a JSON-RPC 2.0 request string with ID, METHOD, and optional PARAMS.
@@ -136,45 +261,19 @@ Signals MCP-ERROR if the response carries an error envelope."
                :data (gethash "data" err))))
     (gethash "result" parsed)))
 
-(defun %request-headers (client)
-  "Build the per-request header table for CLIENT, including the captured
-session-id once the initialize handshake has assigned one."
-  (let ((hdrs (alist-hash-table
-               '(("Content-Type" . "application/json")
-                 ("Accept" . "application/json, text/event-stream"))
-               :test 'equal)))
-    (when-let ((sid (mcp-client-session-id client)))
-      (setf (gethash "Mcp-Session-Id" hdrs) sid))
-    hdrs))
-
-(defun %extract-session-id (response-headers)
-  "Return the MCP session id from RESPONSE-HEADERS or NIL.
-
-Server implementations spell the header inconsistently across casings, so
-check both lowercase and the canonical mixed-case spelling."
-  (when (hash-table-p response-headers)
-    (or (gethash "mcp-session-id" response-headers)
-        (gethash "Mcp-Session-Id" response-headers))))
-
 (defun %send (client body)
-  "POST BODY using CLIENT's transport, capturing a session-id when one is
-returned. Returns the response body string."
-  (let ((headers (%request-headers client)))
-    (multiple-value-bind (resp-body status resp-headers)
-        (funcall (mcp-client-transport client)
-                 (mcp-client-url client) headers body)
-      (declare (ignore status))
-      (when-let ((sid (%extract-session-id resp-headers)))
-        (unless (mcp-client-session-id client)
-          (setf (mcp-client-session-id client) sid)))
-      resp-body)))
+  "Forward BODY to CLIENT's transport and return the response body string."
+  (transport-send-request (mcp-client-transport client) body))
+
+;; --- Public API ----------------------------------------------------------
 
 (defun initialize-mcp (client &key (client-name "cl-harness")
                                    (client-version "0.0.1"))
   "Run the MCP initialize handshake and send notifications/initialized.
 
-Updates CLIENT's session-id from the response headers and returns the
-server's INITIALIZE result hash-table (PRD §8.3 REQ-MCP-001)."
+For HTTP transports the response's Mcp-Session-Id header is captured and
+forwarded on subsequent calls. Returns the server's INITIALIZE result
+hash-table (PRD §8.3 REQ-MCP-001)."
   (let* ((id (incf (%mcp-next-id client)))
          (params (alist-hash-table
                   `(("protocolVersion" . ,(mcp-client-protocol-version client))
