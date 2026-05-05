@@ -14,6 +14,7 @@
                 #:make-tool-policy
                 #:policy-mode
                 #:policy-allowed-tools
+                #:policy-available-tools
                 #:allowed-tool-p))
 
 (in-package #:cl-harness/tests/policy-test)
@@ -74,3 +75,50 @@
   (let ((p (make-tool-policy :generic-mcp)))
     (ok (handler-case (progn (allowed-tool-p p :load-system) nil)
           (type-error () t)))))
+
+;; --- Tier 4 C-1: dynamic tool schema -----------------------------------
+
+(deftest allowed-tool-p-accepts-future-lisp-tool-via-prefix-rule
+  ;; A hypothetical cl-mcp tool the harness has never seen ("lisp-format-form")
+  ;; matches the lisp-* glob in :generic-mcp's allow rules and must
+  ;; therefore satisfy ALLOWED-TOOL-P, even though it is not in
+  ;; +KNOWN-TOOL-NAMES+. Ensures the policy continues to work when
+  ;; cl-mcp ships a new lisp-aware tool without a cl-harness release.
+  (let ((p (make-tool-policy :generic-mcp)))
+    (ok (allowed-tool-p p "lisp-format-form"))))
+
+(deftest allowed-tool-p-still-denies-non-matching-future-tool
+  ;; Negative case: a future tool whose name doesn't match any glob
+  ;; must remain denied. (e.g. cl-mcp adds a `process-spawn` tool —
+  ;; cl-harness can't auto-trust it.)
+  (let ((p (make-tool-policy :generic-mcp)))
+    (ok (not (allowed-tool-p p "process-spawn")))
+    (ok (not (allowed-tool-p p "shell-exec")))))
+
+(deftest policy-available-tools-narrows-allowed-list
+  ;; When :available-tools is supplied, POLICY-ALLOWED-TOOLS is the
+  ;; intersection of the live catalog with the rule matches — so a
+  ;; cl-mcp instance that doesn't expose `pool-status` won't have it
+  ;; in the policy's display list, even though the rules permit it.
+  (let* ((live '("fs-read-file" "lisp-patch-form" "code-find"))
+         (p (make-tool-policy :runtime-native :available-tools live)))
+    (ok (equal live (policy-available-tools p)))
+    (let ((allowed (policy-allowed-tools p)))
+      (ok (= 3 (length allowed)))
+      (ok (every (lambda (n) (member n allowed :test #'equal)) live))
+      (ok (not (member "pool-status" allowed :test #'equal))
+          "pool-status is rule-permitted but absent from the live catalog"))))
+
+(deftest policy-allowed-tools-static-fallback-matches-v0.2-shape
+  ;; Without :available-tools, POLICY-ALLOWED-TOOLS materialises against
+  ;; +KNOWN-TOOL-NAMES+. The :generic-mcp output must include the same
+  ;; tools v0.2 used to expose.
+  (let* ((p (make-tool-policy :generic-mcp))
+         (a (policy-allowed-tools p)))
+    (dolist (must '("fs-set-project-root" "load-system" "run-tests"
+                    "lisp-read-file" "lisp-patch-form" "lisp-edit-form"
+                    "lisp-check-parens" "clgrep-search"))
+      (ok (member must a :test #'equal)))
+    (dolist (must-not '("repl-eval" "inspect-object" "code-find"
+                        "pool-kill-worker"))
+      (ok (not (member must-not a :test #'equal))))))
