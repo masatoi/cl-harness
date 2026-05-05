@@ -1,0 +1,26 @@
+.DS_Store
+*~
+.#*
+
+*.fasl
+*.dx32fsl
+*.dx64fsl
+*.lx32fsl
+*.lx64fsl
+*.x86f
+
+.serena/
+.cache/
+.direnv/
+.mcp.json
+
+# Test scratch space
+tests/tmp/*
+!tests/tmp/.gitkeep
+
+# Dogfooding: throwaway scaffold projects and feedback log
+experiments/
+claudedocs/
+
+# AI agent working documents (designs, plans, reports)
+docs/plans/
