@@ -35,11 +35,14 @@ resolver tests."
        (setf (uiop:getenv "CL_HARNESS_MCP_URL") (or url-saved ""))
        (setf (uiop:getenv "CL_HARNESS_MCP_COMMAND") (or cmd-saved "")))))
 
-(deftest resolve-mcp-spec-defaults-to-builtin-http
+(deftest resolve-mcp-spec-defaults-to-builtin-stdio
+  ;; Phase D: with no kwargs and no env config, the harness must spawn
+  ;; its own cl-mcp subprocess instead of talking to a shared HTTP
+  ;; server.
   (%with-clean-env
    (multiple-value-bind (kind arg) (resolve-mcp-spec)
-     (ok (eq :http kind))
-     (ok (search "127.0.0.1" arg)))))
+     (ok (eq :stdio kind))
+     (ok (null arg) "ARG is NIL — caller falls through to *DEFAULT-STDIO-COMMAND*"))))
 
 (deftest resolve-mcp-spec-mcp-url-wins
   (%with-clean-env

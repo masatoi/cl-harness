@@ -157,3 +157,66 @@ Optional / lower priority:
    `max_tokens` to e.g. 8192 when `:reasoning-effort` is set, so a
    user who forgets `enable_thinking: false` does not silently get
    `finish=length` with empty content.
+
+## Resolution Status (2026-05-06)
+
+- **Issue #1 (sandbox isolation):** closed by commit `367587a` — `run-agent`
+  now does `pool-kill-worker :reset t` and ASDF source-registry scoping at
+  entry under the new `:isolate-asdf-p` kwarg (default `t`).
+- **Issue #2 (mid-loop verify `is_error`):** closed implicitly by the
+  Phase A–D stdio-transport migration
+  (`docs/notes/2026-05-06-stdio-transport.md`, commits `e945d90`, `fc3809d`,
+  `b74c862`, `ed15f10`, and the Phase D default flip). The original
+  diagnosis ("ASDF FASL contamination" or "load-system tool re-installing
+  inherited source-registry") was wrong: the actual cause was cl-mcp's
+  shared HTTP worker pool getting exhausted when each `cl-harness:fix`
+  call leaked a bound worker, after which `load-system` returned
+  `Component "smoke" not found in pool` and verify reported `load-failed`
+  for the rest of the run. By default `cl-harness:fix` now spawns its own
+  cl-mcp subprocess via stdio and tears it down on exit, so the pool is
+  no longer shared. Re-running the same smoke fixture under this default
+  produced `:PASSED` in 7 turns / 8.8 s / 8 380 tokens — the first time
+  this fixture has gone clean end-to-end on a Qwen3.6-35B-A3B run.
+- **Next Action #3 (error_text in tool-result events):** still open —
+  worth doing for general post-mortem readability even though #2 was
+  resolved by transport, not by reading the missing payload.
+- **Next Action #4 (README Qwen recipe):** open.
+- **Next Action #5 (full Qwen sweep):** unblocked. After running, append
+  the report under `docs/benchmarks/`.
+
+## New Observation (2026-05-06): Qwen3 emits flat-arg tool calls at random
+
+A re-run of 000-smoke under the new stdio default produced
+`:LIMIT-EXHAUSTED` with 0 patches because every tool call landed as
+
+```json
+{"type":"tool_call","tool":"lisp-read-file","path":"...","collapsed":true}
+```
+
+instead of the schema-required
+
+```json
+{"type":"tool_call","tool":"lisp-read-file","arguments":{"path":"...","collapsed":true}}
+```
+
+`src/action.lisp:parse-action` only looks at the nested `arguments`
+object, so the flat layout decays to an empty argument hash and
+cl-mcp rejects every call with `path is required`. Same model, same
+temperature 0, same fixture as the Phase C smoke that landed `:PASSED`
+in 7 turns — the model is non-deterministic across runs even at
+temp 0 (Qwen3.6-35B-A3B is a MoE; expert routing introduces variance
+that ignores the temperature knob).
+
+Possible follow-ups, in priority order:
+
+- **Tolerate flat-args in `parse-action`.** If the parsed object has
+  no `arguments` and the `tool` key is set, take every key other
+  than `type`, `tool`, `thought` as the implicit arguments map. Cheap,
+  unambiguous, helps every model that occasionally drifts off schema.
+- **Reinforce schema in the system prompt.** Spell out the exact
+  envelope shape with one example, both nested and (as a negative
+  example) flat. Cheap but won't fully fix MoE variance.
+- **Separate Qwen-specific eval track.** Run multiple trials per cell
+  (already supported via `run-benchmark-task-trials`) and report
+  pass-rate ± stddev rather than single-trial outcomes for this model.
+

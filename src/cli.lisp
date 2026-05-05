@@ -54,11 +54,13 @@ environment variables.
 
 The cl-mcp connection is resolved (highest priority first) by:
 :MCP-URL > $CL_HARNESS_MCP_URL > :MCP-COMMAND > :MCP-STDIO >
-$CL_HARNESS_MCP_COMMAND > built-in HTTP default
-(http://127.0.0.1:3001/mcp). When stdio is selected the harness spawns
-its own cl-mcp subprocess and tears it down on exit, so each call gets
-an isolated worker pool — see docs/notes/2026-05-06-stdio-transport.md
-for why that matters.
+$CL_HARNESS_MCP_COMMAND > built-in stdio default. With nothing
+configured the harness spawns its own cl-mcp subprocess via
+*DEFAULT-STDIO-COMMAND* and tears it down on exit, so each FIX call
+runs against a private worker pool — see
+docs/notes/2026-05-06-stdio-transport.md for why that matters.
+Pass :MCP-URL or set $CL_HARNESS_MCP_URL to opt back into a shared
+HTTP server.
 
 REASONING-EFFORT, when non-NIL, is sent as the OpenAI o1 / gpt-oss
 \"reasoning_effort\" field (typically \"low\"/\"medium\"/\"high\").

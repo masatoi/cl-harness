@@ -104,13 +104,13 @@ NIL or empty string defaults to (:generic-mcp)."
                         :long-name "condition"
                         :initial-value "generic-mcp" :key :condition)
    (clingon:make-option :string :long-name "mcp-url"
-                        :description "cl-mcp HTTP URL (default $CL_HARNESS_MCP_URL or http://127.0.0.1:3001/mcp)"
+                        :description "talk to a remote cl-mcp HTTP endpoint instead of spawning a local one (env: $CL_HARNESS_MCP_URL)"
                         :key :mcp-url)
    (clingon:make-option :flag :long-name "mcp-stdio"
-                        :description "spawn cl-mcp via the built-in stdio command (each fix gets its own subprocess)"
+                        :description "force the built-in stdio launch command (default behaviour when nothing else is set)"
                         :key :mcp-stdio)
    (clingon:make-option :string :long-name "mcp-command"
-                        :description "explicit shell-style command to spawn cl-mcp on stdio (e.g. \"ros run -s cl-mcp -e (cl-mcp:run :transport :stdio)\")"
+                        :description "explicit shell-style command to spawn cl-mcp on stdio (env: $CL_HARNESS_MCP_COMMAND)"
                         :key :mcp-command)
    (clingon:make-option :string :long-name "base-url"
                         :description "LLM endpoint (default $CL_HARNESS_LLM_BASE_URL)"
@@ -153,13 +153,13 @@ NIL or empty string defaults to (:generic-mcp)."
                         :description "comma-separated condition list (default generic-mcp)"
                         :initial-value "generic-mcp" :key :conditions)
    (clingon:make-option :string :long-name "mcp-url"
-                        :description "cl-mcp HTTP URL (default $CL_HARNESS_MCP_URL)"
+                        :description "talk to a remote cl-mcp HTTP endpoint instead of spawning a local one (env: $CL_HARNESS_MCP_URL)"
                         :key :mcp-url)
    (clingon:make-option :flag :long-name "mcp-stdio"
-                        :description "spawn cl-mcp via the built-in stdio command (one subprocess per bench run)"
+                        :description "force the built-in stdio launch command (default behaviour when nothing else is set)"
                         :key :mcp-stdio)
    (clingon:make-option :string :long-name "mcp-command"
-                        :description "explicit shell-style command to spawn cl-mcp on stdio"
+                        :description "explicit shell-style command to spawn cl-mcp on stdio (env: $CL_HARNESS_MCP_COMMAND)"
                         :key :mcp-command)
    (clingon:make-option :string :long-name "base-url"
                         :description "LLM endpoint (default $CL_HARNESS_LLM_BASE_URL)"

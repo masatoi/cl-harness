@@ -24,10 +24,14 @@
 (in-package #:cl-harness/src/mcp-resolve)
 
 (defparameter +default-http-url+ "http://127.0.0.1:3001/mcp"
-  "Built-in cl-mcp HTTP endpoint used when nothing else is configured.
-Phase D will replace this fallback with a default stdio command so
-callers no longer share a server with whatever cl-mcp instance happens
-to be running on the host.")
+  "Conventional cl-mcp HTTP endpoint, used when an explicit HTTP path
+is requested but no URL is given (i.e. when callers pass
+:MCP-URL with no value through some other code path). The resolver
+itself no longer falls through to HTTP when nothing is configured —
+see RESOLVE-MCP-SPEC's docstring; the default is now stdio so the
+harness owns its cl-mcp subprocess instead of sharing whatever
+HTTP server happens to be running on the host
+(docs/notes/2026-05-06-stdio-transport.md, Phase D).")
 
 (defun %nonempty-env (name)
   "Return the value of NAME from the process environment, or NIL when
@@ -68,7 +72,13 @@ Priority (highest first):
   3. :mcp-command
   4. :mcp-stdio (flag)
   5. $CL_HARNESS_MCP_COMMAND
-  6. built-in HTTP default (+DEFAULT-HTTP-URL+)"
+  6. built-in stdio default (Phase D)
+
+Phase D flipped the no-config fallback from HTTP to stdio: with no
+kwargs and no env vars set, the harness spawns its own cl-mcp
+subprocess via *DEFAULT-STDIO-COMMAND* so it does not share a worker
+pool with anything else on the host. Pass :MCP-URL or set
+$CL_HARNESS_MCP_URL to opt back into HTTP."
   (let ((url-env (%nonempty-env "CL_HARNESS_MCP_URL"))
         (cmd-env (%nonempty-env "CL_HARNESS_MCP_COMMAND")))
     (cond
@@ -77,7 +87,7 @@ Priority (highest first):
       (mcp-command (values :stdio (%split-command mcp-command)))
       (mcp-stdio   (values :stdio nil))
       (cmd-env     (values :stdio (%split-command cmd-env)))
-      (t           (values :http +default-http-url+)))))
+      (t           (values :stdio nil)))))
 
 (defun build-mcp-client-from-spec (kind arg)
   "Construct an MCP-CLIENT for the (KIND, ARG) pair returned by

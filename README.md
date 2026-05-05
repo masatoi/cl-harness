@@ -32,8 +32,9 @@ metric — see `docs/benchmarks/results-2026-05-05-2.md`.
 
 - SBCL with Quicklisp + Roswell (the project is at
   `~/.roswell/local-projects/cl-harness/`)
-- A running cl-mcp HTTP server (default URL
-  `http://127.0.0.1:3001/mcp`)
+- `cl-mcp` installed where Roswell can find it (no separate server
+  process required — `cl-harness` spawns its own `cl-mcp` subprocess
+  via stdio by default; see "MCP transport selection" below)
 - An OpenAI-compatible LLM endpoint (Groq, OpenAI, local llama.cpp,
   Ollama, LM Studio — anything that speaks `/v1/chat/completions`)
 
@@ -46,9 +47,33 @@ prefer):
 export CL_HARNESS_LLM_BASE_URL=https://api.groq.com/openai/v1
 export CL_HARNESS_LLM_API_KEY=sk-...
 export CL_HARNESS_LLM_MODEL=llama-3.3-70b-versatile
-# optional:
-export CL_HARNESS_MCP_URL=http://127.0.0.1:3001/mcp
+# optional MCP overrides — see "MCP transport selection" below:
+# export CL_HARNESS_MCP_URL=http://127.0.0.1:3001/mcp
+# export CL_HARNESS_MCP_COMMAND="ros run -s cl-mcp -e (cl-mcp:run :transport :stdio)"
 ```
+
+### MCP transport selection
+
+By default, every `fix` / `bench` invocation spawns its own `cl-mcp`
+subprocess and talks to it over stdio. The launch command is
+`ros run -s cl-mcp -e "(cl-mcp:run :transport :stdio)"`, matching the
+form Codex / Claude Code stdio configs use, and the subprocess is
+torn down when the run finishes. This isolates the harness from any
+other `cl-mcp` instance that might already be running on the host —
+sharing a server with Claude Code would pin one of its workers per
+`fix` call and exhaust the pool.
+
+Resolution order, highest priority first:
+
+1. `--mcp-url <url>` — talk to that HTTP endpoint
+2. `$CL_HARNESS_MCP_URL` — same, from the environment
+3. `--mcp-command "<argv>"` — shell-style launch command for stdio
+4. `--mcp-stdio` flag — explicitly use the built-in stdio command
+5. `$CL_HARNESS_MCP_COMMAND` — same as `--mcp-command`, from env
+6. Built-in stdio default
+
+Set `--mcp-url` or `$CL_HARNESS_MCP_URL` to opt back into talking to
+a shared HTTP server.
 
 ### Build the shell binary (optional)
 
@@ -146,22 +171,26 @@ markdown report.
 ```
 cl-harness/
 ├── src/
-│   ├── action.lisp     LLM JSON action parser (tool_call / finish)
-│   ├── agent.lisp      turn-based loop, system prompt, finalize
-│   ├── bench.lisp      benchmark runner (task, suite, trials, report)
-│   ├── cli.lisp        fix / bench entry points
-│   ├── config.lisp     run-config + run-limits
-│   ├── log.lisp        JSONL transcript writer
-│   ├── main.lisp       facade re-exports under nickname `cl-harness`
-│   ├── mcp.lisp        JSON-RPC 2.0 over HTTP client for cl-mcp
-│   ├── model.lisp      OpenAI-compatible chat client
-│   ├── policy.lisp     tool allow-list per condition
-│   └── verify.lisp     incremental + clean verification
-├── tests/              rove unit tests, mostly stub-driven (no LLM)
-├── benchmarks/         10 deliberately broken mini ASDF projects
+│   ├── action.lisp       LLM JSON action parser (tool_call / finish)
+│   ├── agent.lisp        turn-based loop, system prompt, finalize
+│   ├── bench.lisp        benchmark runner (task, suite, trials, report)
+│   ├── cli.lisp          fix / bench entry points
+│   ├── cli-main.lisp     clingon shell command for the binary build
+│   ├── config.lisp       run-config + run-limits
+│   ├── log.lisp          JSONL transcript writer
+│   ├── main.lisp         facade re-exports under nickname `cl-harness`
+│   ├── mcp.lisp          JSON-RPC 2.0 client + transport abstraction
+│   ├── mcp-stdio.lisp    stdio transport: spawns its own cl-mcp
+│   ├── mcp-resolve.lisp  picks HTTP vs stdio from kwargs / env
+│   ├── model.lisp        OpenAI-compatible chat client
+│   ├── policy.lisp       tool allow-list per condition
+│   └── verify.lisp       incremental + clean verification
+├── tests/                rove unit tests, mostly stub-driven (no LLM)
+├── benchmarks/           deliberately broken mini ASDF projects
 └── docs/
     ├── cl-harness-prd.md
-    └── benchmarks/results-2026-05-05*.md
+    ├── notes/            stdio-transport / qwen-smoke / v0.2 notes
+    └── benchmarks/       per-run results
 ```
 
 Conditions (PRD §8.5) gate which cl-mcp tools the LLM can invoke:
