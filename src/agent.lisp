@@ -89,6 +89,7 @@
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
+           #:summarize-tool-by-key
            #:+source-mutating-tools+))
 
 (in-package #:cl-harness/src/agent)
@@ -493,24 +494,61 @@ to a JSON dump only when no content text is present."
          (format s "~A" text))
         (t (yason:encode (or result (make-hash-table :test 'equal)) s))))))
 
+(defun %tool-name-to-key (tool-name)
+  "Coerce a tool-name string into its dispatch keyword.
+\"run-tests\" → :RUN-TESTS, etc. Strings that already are keywords
+or symbols pass through unchanged."
+  (etypecase tool-name
+    (keyword tool-name)
+    (symbol (intern (symbol-name tool-name) :keyword))
+    (string (intern (string-upcase tool-name) :keyword))))
+
+(defgeneric summarize-tool-by-key (tool-key result)
+  (:documentation
+   "Per-tool summarizer dispatched on a keyword TOOL-KEY (e.g.
+:RUN-TESTS). Specialize with an eql method to register a custom
+summarizer for a new MCP tool — the default method falls through to
+DEFAULT-TOOL-RESULT-SUMMARY, which surfaces isError + content text or
+JSON-dumps the result.
+
+Tier 4 C-2 refactor (was a cond inside SUMMARIZE-TOOL-RESULT). The
+SUMMARIZE-TOOL-RESULT public entry handles the (null result) guard
+and the string→keyword conversion, then dispatches here."))
+
+(defmethod summarize-tool-by-key (tool-key result)
+  (declare (ignore tool-key))
+  (default-tool-result-summary result))
+
+(defmethod summarize-tool-by-key ((tool-key (eql :run-tests)) result)
+  (summarize-run-tests result))
+
+(defmethod summarize-tool-by-key ((tool-key (eql :repl-eval)) result)
+  (summarize-repl-eval result))
+
+(macrolet ((deftext-method (key)
+             `(defmethod summarize-tool-by-key ((tool-key (eql ,key)) result)
+                (or (extract-content-text result) "(empty)"))))
+  ;; Read-only probes whose useful payload is just the first content
+  ;; text block. Adding a new probe? Drop another deftext-method here
+  ;; or define your own (defmethod summarize-tool-by-key ...).
+  (deftext-method :code-find)
+  (deftext-method :code-describe)
+  (deftext-method :code-find-references)
+  (deftext-method :inspect-object)
+  (deftext-method :lisp-read-file)
+  (deftext-method :clgrep-search))
+
 (defun summarize-tool-result (tool-name result)
   "Return a compact human-readable summary of the MCP tools/call RESULT
 hash-table for TOOL-NAME (PRD §10.3 SUMMARIZE-TOOL-RESULT).
 
-Specialized summarizers exist for the high-volume tools (run-tests,
-repl-eval) and the read-only probes (code-find, code-describe,
-inspect-object, lisp-read-file). Unknown tools fall through to a
-generic content/isError dump."
+Dispatch is via SUMMARIZE-TOOL-BY-KEY's keyword-eql methods; specialize
+that generic to register a new tool's summarizer. The default method
+calls DEFAULT-TOOL-RESULT-SUMMARY, which surfaces isError + content
+text or JSON-dumps the result."
   (cond
     ((null result) "(no result)")
-    ((equal tool-name "run-tests") (summarize-run-tests result))
-    ((equal tool-name "repl-eval") (summarize-repl-eval result))
-    ((member tool-name
-             '("code-find" "code-describe" "code-find-references"
-               "inspect-object" "lisp-read-file" "clgrep-search")
-             :test #'equal)
-     (or (extract-content-text result) "(empty)"))
-    (t (default-tool-result-summary result))))
+    (t (summarize-tool-by-key (%tool-name-to-key tool-name) result))))
 
 (defun verify-event-payload (turn verify-result)
   "Return an alist describing VERIFY-RESULT for the JSONL transcript."

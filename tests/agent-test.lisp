@@ -348,6 +348,24 @@ order. Helper for tests that assert against the on-disk transcript."
     (ok (search "ERROR" s))
     (ok (search "boom" s))))
 
+(deftest summarize-tool-by-key-is-extensible-via-defmethod
+  ;; Tier 4 C-2: external code (or future cl-harness extensions) can
+  ;; register a custom summarizer for a new MCP tool by defining an
+  ;; eql-keyword method on summarize-tool-by-key. Verify the dispatch
+  ;; reaches the new method without any change to summarize-tool-result.
+  ;; defmethod on the same specializers is idempotent, so re-running
+  ;; the suite just rebinds the same method.
+  (defmethod cl-harness/src/agent:summarize-tool-by-key
+      ((tool-key (eql :extensibility-probe-tool)) result)
+    (declare (ignore result))
+    "extensibility-probe-tool: hello from a third-party method")
+  (let ((result (alexandria:alist-hash-table
+                 '(("isError" . nil) ("content" . #()))
+                 :test 'equal)))
+    (let ((s (summarize-tool-result "extensibility-probe-tool" result)))
+      (ok (search "third-party method" s)
+          "the eql-method got dispatched"))))
+
 (deftest summarize-load-failure-finds-marker-line
   (testing "first matching marker line wins"
     (let ((text (format nil "Compiling foo~%no symbol named \"BAR\" in \"PKG\"~%more output~%")))
