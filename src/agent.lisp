@@ -695,9 +695,13 @@ step since no real patch was applied."
                                              (mcp-error-message c))))
                                :test 'equal))))
                        :test 'equal)))))))
-         (log-event logger :tool-result
-                    `(("turn" . ,turn) ("tool" . ,tool)
-                      ("is_error" . ,(and (gethash "isError" result) t))))
+         (let* ((is-error (and (gethash "isError" result) t))
+                (error-text (and is-error (extract-content-text result))))
+           (log-event logger :tool-result
+                      `(("turn" . ,turn) ("tool" . ,tool)
+                        ("is_error" . ,is-error)
+                        ,@(when (and error-text (plusp (length error-text)))
+                            `(("error_text" . ,error-text))))))
          (let ((next (append-message
                       messages "user"
                       (format nil "Tool ~A result:~%~A"

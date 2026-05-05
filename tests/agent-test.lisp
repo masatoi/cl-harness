@@ -95,6 +95,23 @@ do not have to special-case them."
     (when failed (format s ",\"failed\":~D" failed))
     (format s "}}")))
 
+(defun %error-tool-result (id text)
+  "Build a JSON-RPC response that mirrors how cl-mcp signals a
+tool-level error: isError=true with a single content[].text item
+carrying the human-readable diagnostic. Used by tests that need to
+exercise the JSONL `error_text' field."
+  (format nil
+          "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":~A}]}}"
+          id (with-output-to-string (s) (yason:encode text s))))
+
+(defun %read-jsonl-events (path)
+  "Read every line from PATH and return the parsed YASON objects in file
+order. Helper for tests that assert against the on-disk transcript."
+  (with-open-file (in path :direction :input)
+    (loop for line = (read-line in nil nil)
+          while line
+          collect (yason:parse line))))
+
 (defun %make-config ()
   (make-run-config :project-root "/tmp/proj"
                    :system "demo"
@@ -765,4 +782,85 @@ do not have to special-case them."
            (let ((first-non-isolation (first (last ordered))))
              (ok (search "\"fs-set-project-root\"" first-non-isolation)
                  "first non-isolation MCP call is fs-set-project-root")))
+      (when (probe-file path) (delete-file path)))))
+
+(deftest run-agent-records-error-text-in-tool-result-event
+  ;; Qwen-smoke Next Action #3: when the LLM-issued tool call returns
+  ;; isError=true, the JSONL :tool-result event must carry the cl-mcp
+  ;; content[].text payload as `error_text' so post-mortems do not
+  ;; need a re-run with extra logging to find the cause.
+  (let ((*llm-responses*
+         (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"/tmp/proj/x.lisp\"}}"
+               "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"observed the error\"}"))
+        (*mcp-handler*
+         (lambda (body)
+           (let ((id (%jsonrpc-id body)))
+             (cond
+               ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+               ((search "\"load-system\"" body) (%ok-tool-result id))
+               ((search "\"run-tests\"" body)
+                (%ok-tool-result id :passed 0 :failed 1))
+               ((search "\"lisp-read-file\"" body)
+                (%error-tool-result id "path is required"))
+               (t (error "unexpected MCP body: ~A" body))))))
+        (mcp (%make-mcp-client-with-handler))
+        (provider (%make-stub-provider))
+        (policy (make-tool-policy :generic-mcp))
+        (path (%temp-log-path)))
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (run-agent (%make-config) provider mcp policy logger)
+           (cl-harness/src/log:close-run-logger logger)
+           (let* ((events (%read-jsonl-events path))
+                  (tool-result
+                   (find-if (lambda (e)
+                              (and (equal "tool-result" (gethash "type" e))
+                                   (equal "lisp-read-file" (gethash "tool" e))))
+                            events)))
+             (ok tool-result "tool-result event was logged")
+             (when tool-result
+               (ok (eq t (gethash "is_error" tool-result))
+                   "is_error stayed truthy")
+               (ok (equal "path is required"
+                          (gethash "error_text" tool-result))
+                   "error_text carries the cl-mcp content[].text payload"))))
+      (when (probe-file path) (delete-file path)))))
+
+(deftest run-agent-omits-error-text-when-tool-succeeded
+  ;; Symmetric guarantee: a successful tool call should not carry an
+  ;; error_text key (so consumers can use its presence as the signal).
+  (let ((*llm-responses*
+         (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"/tmp/proj/x.lisp\"}}"
+               "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"done\"}"))
+        (*mcp-handler*
+         (lambda (body)
+           (let ((id (%jsonrpc-id body)))
+             (cond
+               ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+               ((search "\"load-system\"" body) (%ok-tool-result id))
+               ((search "\"run-tests\"" body)
+                (%ok-tool-result id :passed 0 :failed 1))
+               ((search "\"lisp-read-file\"" body) (%ok-tool-result id))
+               (t (error "unexpected MCP body: ~A" body))))))
+        (mcp (%make-mcp-client-with-handler))
+        (provider (%make-stub-provider))
+        (policy (make-tool-policy :generic-mcp))
+        (path (%temp-log-path)))
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (run-agent (%make-config) provider mcp policy logger)
+           (cl-harness/src/log:close-run-logger logger)
+           (let* ((events (%read-jsonl-events path))
+                  (tool-result
+                   (find-if (lambda (e)
+                              (and (equal "tool-result" (gethash "type" e))
+                                   (equal "lisp-read-file" (gethash "tool" e))))
+                            events)))
+             (ok tool-result "tool-result event was logged")
+             (when tool-result
+               (multiple-value-bind (val present-p)
+                   (gethash "error_text" tool-result)
+                 (declare (ignore val))
+                 (ok (not present-p)
+                     "error_text key is absent on successful calls")))))
       (when (probe-file path) (delete-file path)))))
