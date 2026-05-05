@@ -12,19 +12,48 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-**v0.1.0-mvp** (`a410edc`). The PRD §17 capability checklist is closed:
+**v0.2.0** (`62f62f5`). Builds on the v0.1.0 MVP with a credibility
+pass (Tier 1), usability pass (Tier 2), methodology pass (Tier 3),
+and an architecture cleanup that decouples the harness from any
+shared cl-mcp instance:
 
-- `fix` and `bench` CLIs work
-- cl-mcp HTTP + OpenAI-compatible Chat Completions wired up
-- 56 unit tests pass on a clean worker
-- 10 benchmark fixtures
-- 3-condition runner (`:file-only` / `:generic-mcp` / `:runtime-native`)
-- per-(task × condition) JSONL transcripts and an aggregated report
+- All seven `run-limits` slots are enforced uniformly; a `:run-end`
+  JSONL event carries the full per-run metric set.
+- Patch diffs (`:patch` events) include the unified diff inline.
+- Shell CLI via clingon (`asdf:make :cl-harness/binary`); exit codes
+  0 / 1 / 2 mirror the agent's terminal status.
+- `--dry-run` exercises the LLM end-to-end without invoking any MCP
+  tool; useful for prompt iteration.
+- `:max-action-parse-errors` budget aborts a run when the model is
+  stuck producing un-parseable JSON.
+- Bench mode does a true clean reverify (`pool-kill-worker` + fresh
+  load) before reporting `:passed`, on a per-task isolated sandbox.
+- `cl-harness:fix` clean-rooms the cl-mcp worker on entry by
+  default, so a same-named system loaded from a prior session can no
+  longer answer the initial verify against a different sandbox.
+- `parse-action` tolerates flat-arg tool calls (Qwen3 MoE
+  occasionally drops the `arguments` nesting even at temp 0).
+- `tool-result` JSONL events carry `error_text` when the call
+  failed — post-mortems no longer require a re-run with extra
+  logging.
+- **MCP transport: stdio by default**. Each `fix` / `bench` spawns
+  its own `cl-mcp` subprocess via the standard MCP stdio launch
+  command and tears it down on exit, so the harness no longer
+  competes with Claude Code / Codex / etc. for shared HTTP workers.
+  HTTP remains a one-flag opt-in via `--mcp-url` /
+  `$CL_HARNESS_MCP_URL`.
+- 90 unit tests pass on a clean worker; 12 benchmark fixtures.
 
-Single-trial pass-rate over the 10-task suite under `:generic-mcp` on
-`llama-3.3-70b-versatile` (Groq): **10 / 10**. Variance is large enough
-across runs that you should not quote that as a stable performance
-metric — see `docs/benchmarks/results-2026-05-05-2.md`.
+Single-trial pass-rate over the 10-task suite under `:generic-mcp`
+on `llama-3.3-70b-versatile` (Groq): **10 / 10**. Variance is large
+enough across runs that this number should not be quoted as a stable
+performance metric — see
+`docs/benchmarks/results-2026-05-05-2.md`.
+
+Local Qwen3.6-35B-A3B (SGLang) smoke under the new stdio default
+landed `:PASSED` in 7 turns / 9.4 s / 8 307 tokens
+(`docs/notes/2026-05-06-qwen-smoke.md`); a full sweep against this
+endpoint is queued.
 
 ## Quick start
 

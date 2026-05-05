@@ -100,7 +100,7 @@ Returns the populated AGENT-STATE."
                   :mcp-stdio mcp-stdio
                   :mcp-command mcp-command
                   :client-name "cl-harness"
-                  :client-version "0.0.1"))
+                  :client-version "0.2.0"))
          (policy (make-tool-policy condition))
          (path (or log-path
                    (merge-pathnames
@@ -165,7 +165,7 @@ report plus per-task detail to *STANDARD-OUTPUT*."
                   :mcp-stdio mcp-stdio
                   :mcp-command mcp-command
                   :client-name "cl-harness-bench"
-                  :client-version "0.0.1"))
+                  :client-version "0.2.0"))
          (effective-log-dir
           (or log-dir
               (merge-pathnames
