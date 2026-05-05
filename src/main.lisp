@@ -79,6 +79,15 @@
                 #:agent-state-limit-hit
                 #:run-agent
                 #:format-final-report)
+  (:import-from #:cl-harness/src/planner
+                #:plan-step
+                #:plan-step-index
+                #:plan-step-issue
+                #:plan-step-test-name
+                #:plan-step-test-source
+                #:plan-step-files-to-modify
+                #:plan-development
+                #:planner-error)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -156,6 +165,14 @@
            #:agent-state-limit-hit
            #:run-agent
            #:format-final-report
+           #:plan-step
+           #:plan-step-index
+           #:plan-step-issue
+           #:plan-step-test-name
+           #:plan-step-test-source
+           #:plan-step-files-to-modify
+           #:plan-development
+           #:planner-error
            #:bench-task
            #:bench-task-id
            #:bench-result
