@@ -1,0 +1,8 @@
+{
+  "id": "004-defmethod-specializer",
+  "description": "defmethod bark specializes on STRING instead of DOG, so calling on a DOG instance signals no-applicable-method.",
+  "system": "defmethod-bug",
+  "test-system": "defmethod-bug/tests",
+  "issue": "The defmethod-bug/tests::bark-from-dog rove test fails because BARK is specialized on the wrong type. Fix the defmethod's specializer so the test passes.",
+  "fixture-dir": "fixture"
+}

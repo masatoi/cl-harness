@@ -306,6 +306,19 @@
     (ok (search "ERROR" s))
     (ok (search "boom" s))))
 
+(deftest summarize-load-failure-finds-marker-line
+  (testing "first matching marker line wins"
+    (let ((text (format nil "Compiling foo~%no symbol named \"BAR\" in \"PKG\"~%more output~%")))
+      (let ((s (cl-harness/src/agent::summarize-load-failure text)))
+        (ok (search "no symbol named" s))
+        (ok (search "BAR" s)))))
+  (testing "returns NIL when no marker matches"
+    (ok (null (cl-harness/src/agent::summarize-load-failure
+               "ordinary build output without any error"))))
+  (testing "tolerates empty / non-string input"
+    (ok (null (cl-harness/src/agent::summarize-load-failure "")))
+    (ok (null (cl-harness/src/agent::summarize-load-failure nil)))))
+
 (deftest run-agent-survives-mcp-error-and-feeds-it-back
   (let* ((*llm-responses*
           (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"name_pattern\":\"add\"}}"

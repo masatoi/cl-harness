@@ -1,0 +1,8 @@
+{
+  "id": "006-format-arity",
+  "description": "describe-pair's format string only emits one argument, so the second value never appears in the output.",
+  "system": "format-arity",
+  "test-system": "format-arity/tests",
+  "issue": "The format-arity/tests::pair-mentions-both rove test fails because describe-pair drops its second argument from the format string. Fix the format directive so both arguments appear.",
+  "fixture-dir": "fixture"
+}

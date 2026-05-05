@@ -229,11 +229,48 @@ by cl-mcp's run-tests tool."
                (incf seen))
              failed-tests)))))
 
+(defparameter +load-failure-markers+
+  '("no symbol named"
+    "Package error"
+    "package error"
+    "undefined function"
+    "unbound variable"
+    "invalid initialization argument"
+    "is not of type"
+    "no applicable method"
+    "Could not load")
+  "Substrings inside a load-failure content block that almost always
+identify the root cause (\"no symbol named X in PKG\", etc.). Used by
+SUMMARIZE-LOAD-FAILURE to surface the precise diagnosis above the
+verbose content dump.")
+
+(defun summarize-load-failure (text)
+  "Return the first non-empty line of TEXT that contains a known
+load-failure marker, or NIL when no marker matches. Used to surface
+the precise root-cause line (e.g. \"no symbol named X in PKG\")
+above the full content dump in the system prompt."
+  (when (and (stringp text) (plusp (length text)))
+    (let ((lines (uiop:split-string text :separator #(#\Newline))))
+      (find-if (lambda (line)
+                 (let ((trimmed (string-trim
+                                 '(#\Space #\Tab #\Return)
+                                 line)))
+                   (and (plusp (length trimmed))
+                        (some (lambda (m) (search m trimmed :test #'char-equal))
+                              +load-failure-markers+))))
+               lines))))
+
 (defun verify-detail-prose (verify-result)
   "Return a string detailing failed_tests and/or load failure text from
 VERIFY-RESULT, or NIL when no such detail is available. Shared between
 the initial-user-prompt and post-patch verify-fail message so the LLM
-sees the same level of detail in both."
+sees the same level of detail in both.
+
+For load failures the precise root-cause line (when matched by
+SUMMARIZE-LOAD-FAILURE) is hoisted above the verbose content dump as
+a `Likely cause:` lead, since 003-missing-import in Phase 5.0 showed
+the LLM scanning src/ files for the missing function while the actual
+typo was in the tests/ :IMPORT-FROM clause."
   (let* ((tr (verify-result-test verify-result))
          (failed (and tr (gethash "failed_tests" tr)))
          (has-failed (and failed
@@ -246,11 +283,15 @@ sees the same level of detail in both."
           (when (and content (or (vectorp content) (listp content))
                      (plusp (length content)))
             (let ((first (elt content 0)))
-              (and (hash-table-p first) (gethash "text" first))))))
+              (and (hash-table-p first) (gethash "text" first)))))
+         (diagnosis (and load-text (summarize-load-failure load-text))))
     (when (or has-failed load-text)
       (with-output-to-string (s)
         (when has-failed
           (format s "Failing tests:~%~A" (format-failed-tests failed)))
+        (when diagnosis
+          (format s "Likely cause: ~A~%"
+                  (string-trim '(#\Space #\Tab #\Return) diagnosis)))
         (when load-text
           (format s "Load failure detail:~%~A~%" load-text))))))
 
@@ -491,7 +532,9 @@ the loop should continue, otherwise a terminal status keyword
     (incf (agent-state-token-total state)
           (or (chat-response-total-tokens chat) 0))
     (log-event logger :llm-response
-               `(("turn" . ,turn) ("content" . ,text)))
+               `(("turn" . ,turn)
+                 ("content" . ,text)
+                 ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
     (handler-case
         (let ((action (parse-action text)))
           (log-event logger :action (action-event-payload turn action))

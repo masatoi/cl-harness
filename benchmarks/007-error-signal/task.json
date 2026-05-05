@@ -1,0 +1,8 @@
+{
+  "id": "007-error-signal",
+  "description": "safe-div should signal an error when the divisor is zero, but currently returns 0 silently.",
+  "system": "error-signal",
+  "test-system": "error-signal/tests",
+  "issue": "The error-signal/tests::safe-div-rejects-zero rove test fails because (safe-div 1 0) returns 0 instead of signalling an error. Fix the function so it raises a condition on division by zero.",
+  "fixture-dir": "fixture"
+}

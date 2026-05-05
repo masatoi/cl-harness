@@ -1,0 +1,8 @@
+{
+  "id": "005-defclass-slot",
+  "description": "defclass user has slot 'name' but the initarg is misspelled :usrname, so make-instance with :name fails.",
+  "system": "defclass-bug",
+  "test-system": "defclass-bug/tests",
+  "issue": "The defclass-bug/tests::user-stores-name rove test fails because make-instance signals an invalid initialization argument. Fix the slot's :initarg so the test passes.",
+  "fixture-dir": "fixture"
+}
