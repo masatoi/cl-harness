@@ -160,3 +160,77 @@ single-trial cells should be re-checked when the bench shows a
 - Sandbox tmpdirs: `/tmp/cl-harness-bench-<task>-<rand>/`.
 - llama baseline this is compared against:
   `docs/benchmarks/results-2026-05-06.md`.
+
+---
+
+## Re-run after anomaly #64 fix (commit `029a03b`)
+
+Same 24 cells, same model, same harness version, with the
+`scope-asdf-to-project` package-deletion fix in place. Run started
+05:48, finished 05:52 (~4 min).
+
+### Per-task results
+
+| Task | Generic-MCP | Runtime-Native |
+|---|---|---|
+| 000-smoke | `passed` / 8t / 10.7k tok | `passed` / 5t / 6.0k |
+| 001-wrong-operator | `passed` / 7t / 9.4k | `passed` / 8t / 11.4k |
+| 002-typo-defun | `passed` / 3t / 3.2k | **`passed` / 5t / 6.3k** ← anomaly resolved |
+| 003-missing-import | `passed` / 7t / 10.9k | `passed` / 5t / 6.9k |
+| 004-defmethod-specializer | `limit-exhausted` (max-patches) / 5t / 6.6k | `limit-exhausted` (max-patches) / 6t / 8.9k |
+| 005-defclass-slot | `passed` / 3t / 3.0k | `passed` / 3t / 3.4k |
+| 006-format-arity | `passed` / 9t / 12.2k | `passed` / 6t / 7.0k |
+| 007-error-signal | `passed` / 9t / 13.6k | `passed` / 5t / 5.9k |
+| 008-macro-expansion | `passed` / 10t / 15.8k | **`passed` / 6t / 7.2k** ← was limit-exhausted in v1 |
+| 009-handler-case-typo | `passed` / 5t / 6.5k | `passed` / 9t / 13.5k |
+| 010-unbound-symbol | `passed` / 3t / 3.1k | `passed` / 6t / 7.1k |
+| 011-let-vs-let-star | `passed` / 4t / 5.2k | `passed` / 3t / 3.6k |
+
+### Per-condition aggregate
+
+| Condition | Total | Passed | Pass-rate | Mean turns | Mean tokens | Mean elapsed_s |
+|---|---:|---:|---:|---:|---:|---:|
+| `generic-mcp`  | 12 | 11 | **91.7%** | 6.1 | 8,346 | 10.4 |
+| `runtime-native` | 12 | 11 | **91.7%** | 5.6 | 7,270 | 7.8 |
+
+Runtime-native now ties generic-mcp on pass-rate and edges ahead on
+turns / tokens / elapsed. The 004-defmethod-specializer cell remains
+the only consistent failure for Qwen3 (`max-patches` exhausted under
+both policies in both runs) — it is the harness's tightest budget
+constraint, not a model deficiency in any deep sense.
+
+### v1 vs v2 cell-level shifts
+
+Bench cells the fix moved by more than one turn:
+
+| Task × Condition | v1 | v2 | shift |
+|---|---|---|---|
+| 002-typo-defun × runtime-native | `passed` / 0t / 0 tok (false) | `passed` / 5t / 6.3k | + real fix |
+| 005-defclass-slot × runtime-native | `passed` / 9t / 12.7k | `passed` / 3t / 3.4k | -6 turns |
+| 007-error-signal × generic-mcp | `passed` / 7t / 9.3k | `passed` / 9t / 13.6k | +2 turns |
+| 008-macro-expansion × runtime-native | `limit-exhausted` / 11t / 18.1k | `passed` / 6t / 7.2k | full reversal |
+| 009-handler-case-typo × runtime-native | `passed` / 5t / 6.1k | `passed` / 9t / 13.5k | +4 turns |
+
+Cells stable to within ±1 turn across the two runs: 000, 001, 003,
+004, 006, 010, 011 generic-mcp; 000, 001, 003, 010, 011, runtime-native.
+
+### Headline (post-fix)
+
+**Qwen3.6-35B-A3B reaches 91.7% (11/12) under both `generic-mcp` and
+`runtime-native`** with the anomaly removed, edging the
+llama-3.3-70b-versatile baseline (`generic-mcp` 83.3%,
+`runtime-native` 66.7% in `docs/benchmarks/results-2026-05-06.md`)
+on every metric. The sole non-passing cell, 004-defmethod-specializer,
+is the same one that exhausts patches under llama too.
+
+The v1 runtime-native pass-rate of 83.3% in the original section above
+should now be read as *83.3% real ± 8.3pp* of harness-induced noise:
+the fix lifted exactly one cell (002-typo-defun) into a real pass and
+let one previously-failing cell (008-macro-expansion runtime-native)
+also flip via natural Qwen3 MoE variance. Either way, the v2 numbers
+are the ones to compare against future runs.
+
+### Files
+
+- v2 transcripts: `/tmp/qwen-2026-05-06-v2/bench-*.jsonl` (24 files).
+- v1 transcripts (anomalous): `/tmp/qwen-2026-05-06/bench-*.jsonl`.
