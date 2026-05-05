@@ -154,6 +154,81 @@
         (ok (= 0.9 (gethash "temperature" parsed)))
         (ok (= 4 (gethash "max_tokens" parsed)))))))
 
+(deftest chat-build-request-body-includes-reasoning-effort
+  (testing "reasoning-effort kwarg lands as reasoning_effort in the JSON body"
+    (let* ((messages (list (make-chat-message "user" "hi")))
+           (parsed (yason:parse
+                    (chat-build-request-body "gpt-oss-20b" messages
+                                             :reasoning-effort "low"))))
+      (ok (equal "low" (gethash "reasoning_effort" parsed)))))
+  (testing "omitted reasoning-effort produces no field"
+    (let ((parsed (yason:parse
+                   (chat-build-request-body
+                    "m" (list (make-chat-message "user" "hi"))))))
+      (multiple-value-bind (val present) (gethash "reasoning_effort" parsed)
+        (declare (ignore val))
+        (ok (not present))))))
+
+(deftest chat-build-request-body-merges-extra-body
+  (testing "extra-body hash-table fields land at the top level"
+    (let* ((extra (alexandria:alist-hash-table
+                   '(("tool_choice" . "none")
+                     ("custom_field" . 42))
+                   :test 'equal))
+           (parsed (yason:parse
+                    (chat-build-request-body
+                     "m" (list (make-chat-message "user" "hi"))
+                     :extra-body extra))))
+      (ok (equal "none" (gethash "tool_choice" parsed)))
+      (ok (= 42 (gethash "custom_field" parsed)))))
+  (testing "extra-body alist also accepted"
+    (let ((parsed (yason:parse
+                   (chat-build-request-body
+                    "m" (list (make-chat-message "user" "hi"))
+                    :extra-body '(("seed" . 1234))))))
+      (ok (= 1234 (gethash "seed" parsed))))))
+
+(deftest complete-chat-applies-provider-defaults-for-reasoning-and-extra
+  (let* ((capture (cons nil nil))
+         (transport (lambda (u h b)
+                      (declare (ignore u h))
+                      (setf (car capture) b)
+                      (values
+                       "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"
+                       200 (make-hash-table :test 'equal))))
+         (extra (alexandria:alist-hash-table '(("tool_choice" . "none"))
+                                             :test 'equal))
+         (p (make-openai-provider :base-url "http://example.test/v1"
+                                  :api-key "k" :model "gpt-oss-20b"
+                                  :reasoning-effort "medium"
+                                  :extra-body extra
+                                  :transport transport)))
+    (complete-chat p (list (make-chat-message "user" "hi")))
+    (let ((parsed (yason:parse (car capture))))
+      (testing "reasoning_effort propagates from provider default"
+        (ok (equal "medium" (gethash "reasoning_effort" parsed))))
+      (testing "extra-body merges into request body"
+        (ok (equal "none" (gethash "tool_choice" parsed)))))))
+
+(deftest complete-chat-call-site-overrides-reasoning-and-extra
+  (let* ((capture (cons nil nil))
+         (transport (lambda (u h b)
+                      (declare (ignore u h))
+                      (setf (car capture) b)
+                      (values
+                       "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"
+                       200 (make-hash-table :test 'equal))))
+         (p (make-openai-provider :base-url "http://example.test/v1"
+                                  :api-key "k" :model "m"
+                                  :reasoning-effort "low"
+                                  :transport transport)))
+    (complete-chat p (list (make-chat-message "user" "hi"))
+                   :reasoning-effort "high"
+                   :extra-body '(("seed" . 7)))
+    (let ((parsed (yason:parse (car capture))))
+      (ok (equal "high" (gethash "reasoning_effort" parsed)))
+      (ok (= 7 (gethash "seed" parsed))))))
+
 (deftest complete-chat-live-roundtrip
   (testing "live OpenAI-compatible probe (CL_HARNESS_INTEGRATION_LLM=1)"
     (if (uiop:getenv "CL_HARNESS_INTEGRATION_LLM")

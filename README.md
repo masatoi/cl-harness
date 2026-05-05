@@ -70,6 +70,38 @@ on `:finish :fixed` does a clean-image reverify (pool-kill-worker +
 fresh load) before declaring success. A one-paragraph report is
 printed to stdout; the JSONL transcript path is included.
 
+### Reasoning models
+
+For OpenAI o1-style or `gpt-oss-*`-family models, two extra knobs are
+exposed both on `make-openai-provider` and on the `fix` / `bench`
+CLIs:
+
+- `:reasoning-effort` — passed through as the `reasoning_effort` field
+  (`"low"` / `"medium"` / `"high"`). Reasoning models route a chunk of
+  their `max_tokens` budget through this knob; lower values leave more
+  for visible content.
+- `:extra-body` — a hash-table or alist of extra top-level fields
+  merged into every `/v1/chat/completions` request body. Useful for
+  endpoint-specific quirks; e.g. Groq's `openai/gpt-oss-20b` returns
+  `400 "Tool choice is none, but model called a tool"` against our
+  default request shape, and an explicit `tool_choice: "none"` plus
+  empty `tools: []` plus `reasoning_effort: "low"` is one workaround
+  to try:
+
+  ```lisp
+  (cl-harness:fix
+   :project-root "..." :system "..." :test-system "..." :issue "..."
+   :model "openai/gpt-oss-20b"
+   :reasoning-effort "low"
+   :extra-body '(("tool_choice" . "none")
+                 ("tools" . #())))
+  ```
+
+  The values land at the request body's top level (not nested under
+  any other key), and `:extra-body` keys override anything set above
+  (model / messages / temperature / max_tokens / reasoning_effort) so
+  it can intentionally replace, not just augment.
+
 ### Run the benchmark suite
 
 ```lisp

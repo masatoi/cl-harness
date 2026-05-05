@@ -21,6 +21,8 @@
            #:provider-model
            #:provider-default-temperature
            #:provider-default-max-tokens
+           #:provider-default-reasoning-effort
+           #:provider-default-extra-body
            #:provider-transport
            #:make-chat-message
            #:chat-response
@@ -63,6 +65,17 @@
                         :reader provider-default-temperature)
    (default-max-tokens :initarg :default-max-tokens :initform nil
                        :reader provider-default-max-tokens)
+   (default-reasoning-effort
+     :initarg :default-reasoning-effort :initform nil
+     :reader provider-default-reasoning-effort
+     :documentation "Default reasoning_effort for reasoning models
+(typically \"low\"/\"medium\"/\"high\"). Sent only when non-NIL.")
+   (default-extra-body
+     :initarg :default-extra-body :initform nil
+     :reader provider-default-extra-body
+     :documentation "Default top-level extra fields merged into every
+request body (hash-table or alist of (string . value)). Useful for
+endpoint-specific quirks like \"tool_choice\":\"none\" on Groq gpt-oss.")
    (transport :initarg :transport :reader provider-transport))
   (:documentation
    "Blocking OpenAI-compatible chat client (PRD §8.2 REQ-LLM-001).
@@ -105,8 +118,13 @@ that closes idle sockets do not surface stale streams."
                 (make-hash-table :test 'equal))))))
 
 (defun make-openai-provider (&key base-url api-key model
-                                  temperature max-tokens transport)
-  "Construct an OPENAI-COMPATIBLE-PROVIDER (PRD §10.2)."
+                                  temperature max-tokens
+                                  reasoning-effort extra-body
+                                  transport)
+  "Construct an OPENAI-COMPATIBLE-PROVIDER (PRD §10.2).
+
+REASONING-EFFORT and EXTRA-BODY become per-provider defaults that any
+COMPLETE-CHAT call inherits unless the call-site overrides them."
   (check-type base-url string)
   (check-type api-key string)
   (check-type model string)
@@ -116,6 +134,8 @@ that closes idle sockets do not surface stale streams."
                  :model model
                  :default-temperature temperature
                  :default-max-tokens max-tokens
+                 :default-reasoning-effort reasoning-effort
+                 :default-extra-body extra-body
                  :transport (or transport #'default-llm-transport)))
 
 (defun make-chat-message (role content)
@@ -125,11 +145,25 @@ that closes idle sockets do not surface stale streams."
   (alist-hash-table `(("role" . ,role) ("content" . ,content))
                     :test 'equal))
 
-(defun chat-build-request-body (model messages &key temperature max-tokens)
+(defun chat-build-request-body (model messages
+                                &key temperature max-tokens
+                                     reasoning-effort extra-body)
   "Build the JSON body for POST /v1/chat/completions.
 
 MESSAGES is a sequence of hash-tables (see MAKE-CHAT-MESSAGE). TEMPERATURE
-and MAX-TOKENS are omitted from the body when NIL so server defaults apply."
+and MAX-TOKENS are omitted from the body when NIL so server defaults apply.
+
+REASONING-EFFORT, when non-NIL, is sent as the OpenAI o1-style /
+gpt-oss-style \"reasoning_effort\" field (typically \"low\"/\"medium\"/
+\"high\"); needed for reasoning models that route hidden tokens through
+that knob.
+
+EXTRA-BODY merges arbitrary top-level keys into the request body, useful
+for endpoint-specific quirks (e.g. Groq's gpt-oss-20b sometimes needs
+explicit \"tool_choice\":\"none\" or empty \"tools\":[] to suppress its
+native tool-call output). EXTRA-BODY accepts a hash-table (string keys)
+or an alist of (string . value); its keys override any field set above
+so callers can intentionally replace, not just augment, defaults."
   (check-type model string)
   (let ((tbl (alist-hash-table `(("model" . ,model)
                                  ("messages" . ,(coerce messages 'list)))
@@ -138,6 +172,15 @@ and MAX-TOKENS are omitted from the body when NIL so server defaults apply."
       (setf (gethash "temperature" tbl) temperature))
     (when max-tokens
       (setf (gethash "max_tokens" tbl) max-tokens))
+    (when reasoning-effort
+      (setf (gethash "reasoning_effort" tbl) reasoning-effort))
+    (when extra-body
+      (cond
+        ((hash-table-p extra-body)
+         (maphash (lambda (k v) (setf (gethash k tbl) v)) extra-body))
+        ((listp extra-body)
+         (dolist (cell extra-body)
+           (setf (gethash (car cell) tbl) (cdr cell))))))
     (with-output-to-string (s) (yason:encode tbl s))))
 
 (defun %first-choice-message (parsed)
@@ -185,7 +228,9 @@ call-site passes NIL."))
 
 (defmethod complete-chat ((provider openai-compatible-provider) messages
                           &key (temperature nil temperature-supplied-p)
-                               (max-tokens nil max-tokens-supplied-p))
+                               (max-tokens nil max-tokens-supplied-p)
+                               (reasoning-effort nil reasoning-effort-supplied-p)
+                               (extra-body nil extra-body-supplied-p))
   (let ((url (%join-url (provider-base-url provider) "/chat/completions"))
         (headers (alist-hash-table
                   `(("Content-Type" . "application/json")
@@ -200,7 +245,13 @@ call-site passes NIL."))
                                 (provider-default-temperature provider))
                :max-tokens (if max-tokens-supplied-p
                                max-tokens
-                               (provider-default-max-tokens provider)))))
+                               (provider-default-max-tokens provider))
+               :reasoning-effort (if reasoning-effort-supplied-p
+                                     reasoning-effort
+                                     (provider-default-reasoning-effort provider))
+               :extra-body (if extra-body-supplied-p
+                               extra-body
+                               (provider-default-extra-body provider)))))
     (multiple-value-bind (resp-body status resp-headers)
         (funcall (provider-transport provider) url headers body)
       (declare (ignore status resp-headers))

@@ -41,6 +41,7 @@
                  mcp-url
                  base-url api-key model
                  (temperature 0.0) (max-tokens 1024)
+                 reasoning-effort extra-body
                  log-path)
   "Run the Phase 2 basic fix loop.
 
@@ -49,6 +50,13 @@ TEST-SYSTEM, ISSUE. The LLM endpoint is taken from the keyword args or
 the CL_HARNESS_LLM_BASE_URL / CL_HARNESS_LLM_API_KEY / CL_HARNESS_LLM_MODEL
 environment variables. The cl-mcp HTTP URL defaults to
 http://127.0.0.1:3001/mcp (override via :MCP-URL or CL_HARNESS_MCP_URL).
+
+REASONING-EFFORT, when non-NIL, is sent as the OpenAI o1 / gpt-oss
+\"reasoning_effort\" field (typically \"low\"/\"medium\"/\"high\").
+EXTRA-BODY merges arbitrary top-level keys into every chat-completions
+request body (hash-table or alist of (string . value)) — useful for
+endpoint quirks like Groq gpt-oss-20b's need for explicit
+\"tool_choice\":\"none\" / \"tools\":[].
 
 Returns the populated AGENT-STATE."
   (let* ((config (make-run-config :project-root project-root
@@ -73,7 +81,9 @@ Returns the populated AGENT-STATE."
                     :api-key effective-api-key
                     :model effective-model
                     :temperature temperature
-                    :max-tokens max-tokens))
+                    :max-tokens max-tokens
+                    :reasoning-effort reasoning-effort
+                    :extra-body extra-body))
          (client (make-mcp-client
                   (or mcp-url
                       (uiop:getenv "CL_HARNESS_MCP_URL")
@@ -99,6 +109,7 @@ Returns the populated AGENT-STATE."
                    mcp-url
                    base-url api-key model
                    (temperature 0.0) (max-tokens 2048)
+                   reasoning-effort extra-body
                    log-dir)
   "Run the benchmark suite at SUITE across each condition.
 
@@ -107,6 +118,9 @@ with a task.json and a fixture/ tree (PRD §8.11 REQ-BENCH-001). CONDITIONS
 defaults to (:generic-mcp); pass (:file-only :generic-mcp :runtime-native)
 to compare modes (REQ-BENCH-002). LLM credentials and the cl-mcp HTTP URL
 are resolved the same way as FIX (kwarg overrides CL_HARNESS_LLM_*).
+
+REASONING-EFFORT and EXTRA-BODY pass through to MAKE-OPENAI-PROVIDER for
+reasoning models / endpoint quirks; see FIX's docstring.
 
 Returns the flat list of BENCH-RESULTs and prints a one-paragraph aggregate
 report plus per-task detail to *STANDARD-OUTPUT*."
@@ -129,7 +143,9 @@ report plus per-task detail to *STANDARD-OUTPUT*."
                     :api-key effective-api-key
                     :model effective-model
                     :temperature temperature
-                    :max-tokens max-tokens))
+                    :max-tokens max-tokens
+                    :reasoning-effort reasoning-effort
+                    :extra-body extra-body))
          (client (make-mcp-client
                   (or mcp-url
                       (uiop:getenv "CL_HARNESS_MCP_URL")

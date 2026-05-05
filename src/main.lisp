@@ -33,6 +33,8 @@
   (:import-from #:cl-harness/src/model
                 #:openai-compatible-provider
                 #:make-openai-provider
+                #:provider-default-reasoning-effort
+                #:provider-default-extra-body
                 #:make-chat-message
                 #:chat-response
                 #:chat-response-content
@@ -98,6 +100,8 @@
            #:call-tool
            #:openai-compatible-provider
            #:make-openai-provider
+           #:provider-default-reasoning-effort
+           #:provider-default-extra-body
            #:make-chat-message
            #:chat-response
            #:chat-response-content
