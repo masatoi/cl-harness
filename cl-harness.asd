@@ -9,6 +9,7 @@
   :depends-on ("alexandria"
                "yason"
                "local-time"
+               "dexador"
                "cl-harness/src/main")
   :in-order-to ((test-op (test-op "cl-harness/tests"))))
 
@@ -16,7 +17,9 @@
   :class :package-inferred-system
   :depends-on ("rove"
                "cl-harness"
-               "cl-harness/tests/main-test")
+               "cl-harness/tests/main-test"
+               "cl-harness/tests/mcp-test"
+               "cl-harness/tests/model-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages

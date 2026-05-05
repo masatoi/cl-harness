@@ -21,6 +21,24 @@
   (:import-from #:cl-harness/src/cli
                 #:fix
                 #:bench)
+  (:import-from #:cl-harness/src/mcp
+                #:mcp-client
+                #:make-mcp-client
+                #:mcp-client-url
+                #:mcp-client-session-id
+                #:mcp-error
+                #:initialize-mcp
+                #:list-tools
+                #:call-tool)
+  (:import-from #:cl-harness/src/model
+                #:openai-compatible-provider
+                #:make-openai-provider
+                #:make-chat-message
+                #:chat-response
+                #:chat-response-content
+                #:chat-response-total-tokens
+                #:complete-chat
+                #:model-error)
   (:export #:fix
            #:bench
            #:run-config
@@ -29,6 +47,22 @@
            #:open-run-logger
            #:close-run-logger
            #:log-event
-           #:with-run-logger))
+           #:with-run-logger
+           #:mcp-client
+           #:make-mcp-client
+           #:mcp-client-url
+           #:mcp-client-session-id
+           #:mcp-error
+           #:initialize-mcp
+           #:list-tools
+           #:call-tool
+           #:openai-compatible-provider
+           #:make-openai-provider
+           #:make-chat-message
+           #:chat-response
+           #:chat-response-content
+           #:chat-response-total-tokens
+           #:complete-chat
+           #:model-error))
 
 (in-package #:cl-harness/src/main)
