@@ -1,0 +1,8 @@
+{
+  "id": "011-let-vs-let-star",
+  "description": "compute-result uses LET where LET* is needed; the second binding's value form references a name that is not yet bound.",
+  "system": "let-bug",
+  "test-system": "let-bug/tests",
+  "issue": "The let-bug/tests::compute-result-correct rove test fails because the second LET binding cannot see the first one. Replace the binding form with the appropriate scope so dependent bindings work.",
+  "fixture-dir": "fixture"
+}

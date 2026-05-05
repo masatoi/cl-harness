@@ -1,0 +1,8 @@
+{
+  "id": "010-unbound-symbol",
+  "description": "process-items references an unbound symbol inside a loop body, signalling UNBOUND-VARIABLE at runtime.",
+  "system": "unbound-symbol",
+  "test-system": "unbound-symbol/tests",
+  "issue": "The unbound-symbol/tests::sum-counts rove test fails because process-items references an unbound symbol. Inspect the function and either bind or rename the symbol so it has a value at use time.",
+  "fixture-dir": "fixture"
+}

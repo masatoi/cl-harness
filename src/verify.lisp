@@ -96,13 +96,21 @@ masking the underlying failure."
                (test-result (call-tool client "run-tests" test-args)))
           (parse-verify-result load-result test-result)))))
 
-(defun clean-verify-task (client config)
+(defun clean-verify-task (client config &key before-load-fn)
   "Run verification on a freshly spawned cl-mcp worker (PRD §8.9
 REQ-VERIFY-002).
 
 Calls pool-kill-worker (reset=true) before delegating to VERIFY-TASK so
 the verification image carries no left-over REPL state from the agent's
-probing turns. Returns a VERIFY-RESULT."
+probing turns.
+
+BEFORE-LOAD-FN, when supplied, is invoked with CLIENT after pool-kill
+but before VERIFY-TASK runs. It is the hook the benchmark runner uses
+to re-scope the new worker's ASDF source-registry to the sandbox tree
+that disappears together with the previous worker (cf. v0.2 Tier 3:
+clean-verify in bench)."
   (call-tool client "pool-kill-worker"
              (alist-hash-table '(("reset" . t)) :test 'equal))
+  (when before-load-fn
+    (funcall before-load-fn client))
   (verify-task client config))

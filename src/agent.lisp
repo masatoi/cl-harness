@@ -573,7 +573,8 @@ at the last event in the transcript."
 
 (defun finalize-passed (state mcp-client config logger
                         incremental-verify action
-                        &key (clean-verify-p t))
+                        &key (clean-verify-p t)
+                             before-clean-verify-fn)
   "Confirm a :PASSED outcome via CLEAN-VERIFY-TASK on a fresh worker.
 
 When the clean reload also reports zero failures STATE's status stays
@@ -581,14 +582,18 @@ When the clean reload also reports zero failures STATE's status stays
 incremental success did not survive a fresh image (PRD §8.9
 REQ-VERIFY-002, REQ-VERIFY-003).
 
-CLEAN-VERIFY-P NIL skips the pool-kill + reverify step, used by the
-benchmark runner when the source system was registered via asdf:load-asd
-into the current worker only and a worker reset would lose that binding."
+CLEAN-VERIFY-P NIL skips the pool-kill + reverify step entirely.
+
+BEFORE-CLEAN-VERIFY-FN is forwarded to CLEAN-VERIFY-TASK so callers
+that registered ephemeral ASDF state into the previous worker (e.g.
+the benchmark runner's source-registry override) can re-apply it to
+the freshly spawned worker before the verify-task LOAD-SYSTEM call."
   (cond
     ((not clean-verify-p)
      (finalize state :passed :verify incremental-verify :action action))
     (t
-     (let ((clean (clean-verify-task mcp-client config)))
+     (let ((clean (clean-verify-task mcp-client config
+                                     :before-load-fn before-clean-verify-fn)))
        (log-event logger :clean-verify (verify-event-payload -1 clean))
        (cond
          ((verify-result-success-p clean)
@@ -774,7 +779,9 @@ the loop should continue, otherwise a terminal status keyword
          nil nil nil)))))
 
 (defun run-agent (config provider mcp-client policy logger
-                  &key (clean-verify-p t) dry-run-p)
+                  &key (clean-verify-p t)
+                       dry-run-p
+                       before-clean-verify-fn)
   "Execute the basic Phase 2 fix loop with a Phase 3 clean-verify safety net.
 
 CONFIG is a RUN-CONFIG. PROVIDER is an OPENAI-COMPATIBLE-PROVIDER (or any
@@ -827,7 +834,8 @@ offending slot."
         (return-from run-agent
           (emit-run-end
            (finalize-passed state mcp-client config logger initial nil
-                            :clean-verify-p clean-verify-p)
+                            :clean-verify-p clean-verify-p
+                            :before-clean-verify-fn before-clean-verify-fn)
            logger)))
       (let ((messages (list (make-chat-message "system" (system-prompt policy))
                             (make-chat-message
@@ -846,7 +854,8 @@ offending slot."
                            (:passed
                             (finalize-passed state mcp-client config logger
                                              verify action
-                                             :clean-verify-p clean-verify-p))
+                                             :clean-verify-p clean-verify-p
+                                             :before-clean-verify-fn before-clean-verify-fn))
                            (:give-up
                             (finalize state :give-up :action action)))
                          logger)))

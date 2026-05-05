@@ -156,16 +156,30 @@ task.json are silently skipped."
 
 (defun %sandbox-fixture (fixture-path tmp-prefix)
   "Recursively copy FIXTURE-PATH to a fresh tmpdir and return its
-absolute pathname. Used so each benchmark task starts from a pristine
-fixture and concurrent / repeated runs cannot stomp each other."
+absolute pathname.
+
+Used so each benchmark task starts from a pristine fixture and
+concurrent / repeated runs cannot stomp each other.
+
+The destination name combines TMP-PREFIX with both the high-resolution
+internal real time and a per-call random suffix. This is necessary
+because cl-mcp's worker pool re-spawns SBCL processes whose default
+*RANDOM-STATE* initialization can collide across spawns; a pure RANDOM
+suffix would alias `cl-harness-bench-000-...-568478650` across two
+sweeps and the FASL cache would silently return the previous run's
+patched build (mtime stays old since `cp -a` preserves mtime, so ASDF
+skips the recompile). Plain `cp -r` (without -a) bumps the mtime of
+the copied files so ASDF re-compiles correctly."
   (let ((src (uiop:ensure-directory-pathname fixture-path))
         (dst (uiop:ensure-directory-pathname
               (merge-pathnames
-               (format nil "~A-~A/" tmp-prefix
+               (format nil "~A-~A-~A/" tmp-prefix
+                       (get-internal-real-time)
                        (random 1000000000))
                (uiop:temporary-directory)))))
+    (uiop:delete-directory-tree dst :validate t :if-does-not-exist :ignore)
     (ensure-directories-exist dst)
-    (uiop:run-program (list "cp" "-a"
+    (uiop:run-program (list "cp" "-r"
                             (concatenate 'string (namestring src) ".")
                             (namestring dst))
                       :output :string :error-output :string)
@@ -229,9 +243,15 @@ status so a single broken task does not abort the whole suite (PRD §8.11)."
                  (%scope-asdf-to-sandbox mcp-client sandbox
                                          (bench-task-system task)
                                          (bench-task-test-system task))
-                 (let ((state (run-agent config provider mcp-client policy
-                                         logger
-                                         :clean-verify-p nil)))
+                 (let* ((rescope (lambda (client)
+                                   (%scope-asdf-to-sandbox
+                                    client sandbox
+                                    (bench-task-system task)
+                                    (bench-task-test-system task))))
+                        (state (run-agent config provider mcp-client policy
+                                          logger
+                                          :clean-verify-p t
+                                          :before-clean-verify-fn rescope)))
                    (make-instance 'bench-result
                                   :task task
                                   :condition condition
