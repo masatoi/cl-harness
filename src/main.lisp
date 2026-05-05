@@ -103,6 +103,9 @@
                 #:develop-result-replan-count
                 #:develop-result-limit-hit
                 #:execute-plan)
+  (:import-from #:cl-harness/src/compact
+                #:approximate-history-tokens
+                #:compact-history)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -202,6 +205,8 @@
            #:develop-result-replan-count
            #:develop-result-limit-hit
            #:execute-plan
+           #:approximate-history-tokens
+           #:compact-history
            #:bench-task
            #:bench-task-id
            #:bench-result
