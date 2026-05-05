@@ -65,6 +65,10 @@
                 #:agent-state-patch-count
                 #:agent-state-patch-attempts
                 #:agent-state-token-total
+                #:agent-state-tool-call-count
+                #:agent-state-read-file-count
+                #:agent-state-repl-eval-count
+                #:agent-state-limit-hit
                 #:run-agent
                 #:format-final-report)
   (:import-from #:cl-harness/src/bench
@@ -73,6 +77,10 @@
                 #:bench-result
                 #:bench-result-status
                 #:bench-result-success-p
+                #:bench-result-limit-hit
+                #:bench-result-tool-call-count
+                #:bench-result-read-file-count
+                #:bench-result-repl-eval-count
                 #:load-bench-task
                 #:discover-tasks
                 #:run-benchmark-task
@@ -128,6 +136,10 @@
            #:agent-state-patch-count
            #:agent-state-patch-attempts
            #:agent-state-token-total
+           #:agent-state-tool-call-count
+           #:agent-state-read-file-count
+           #:agent-state-repl-eval-count
+           #:agent-state-limit-hit
            #:run-agent
            #:format-final-report
            #:bench-task
@@ -135,6 +147,10 @@
            #:bench-result
            #:bench-result-status
            #:bench-result-success-p
+           #:bench-result-limit-hit
+           #:bench-result-tool-call-count
+           #:bench-result-read-file-count
+           #:bench-result-repl-eval-count
            #:load-bench-task
            #:discover-tasks
            #:run-benchmark-task

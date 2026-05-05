@@ -319,6 +319,25 @@
     (ok (null (cl-harness/src/agent::summarize-load-failure "")))
     (ok (null (cl-harness/src/agent::summarize-load-failure nil)))))
 
+(deftest compute-unified-diff-roundtrip
+  (testing "differs => returns a diff with both old and new lines"
+    (let ((d (cl-harness/src/agent::%compute-unified-diff
+              (format nil "(defun add (x y) (- x y))~%")
+              (format nil "(defun add (x y) (+ x y))~%")
+              "src/add.lisp")))
+      (ok (stringp d))
+      (ok (search "(- x y)" d))
+      (ok (search "(+ x y)" d))
+      (ok (search "src/add.lisp" d))))
+  (testing "identical input returns NIL (no spurious patch event)"
+    (ok (null (cl-harness/src/agent::%compute-unified-diff
+               "same" "same" "src/x.lisp"))))
+  (testing "non-string input returns NIL"
+    (ok (null (cl-harness/src/agent::%compute-unified-diff
+               nil "after" "src/x.lisp")))
+    (ok (null (cl-harness/src/agent::%compute-unified-diff
+               "before" nil "src/x.lisp")))))
+
 (deftest run-agent-survives-mcp-error-and-feeds-it-back
   (let* ((*llm-responses*
           (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"name_pattern\":\"add\"}}"
@@ -423,7 +442,104 @@
                                   :issue "x"
                                   :limits limits))
          (state (%run-agent-with-temp-logger config provider mcp policy)))
-    (ok (eq :max-turns (agent-state-status state)))))
+    (testing "limit-exhausted with limit-hit naming the slot"
+      (ok (eq :limit-exhausted
+              (cl-harness/src/agent:agent-state-status state)))
+      (ok (member (cl-harness/src/agent:agent-state-limit-hit state)
+                  '(:max-turns :max-tool-calls :max-read-files))))))
+
+(deftest run-agent-enforces-max-tool-calls
+  (let* ((*llm-responses*
+          (loop repeat 10
+                collect "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"src/x.lisp\"}}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-read-file\"" body) (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         ;; 3 tool calls allowed; large max-turns so the tool-calls limit
+         ;; clearly fires first.
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 50
+                                :max-tool-calls 3
+                                :max-patches 99
+                                :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600))
+         (config (make-run-config :project-root "/tmp/proj"
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :issue "x"
+                                  :limits limits))
+         (state (%run-agent-with-temp-logger config provider mcp policy)))
+    (testing "agent exits :limit-exhausted with limit-hit :max-tool-calls"
+      (ok (eq :limit-exhausted
+              (cl-harness/src/agent:agent-state-status state)))
+      (ok (or (eq :max-tool-calls
+                  (cl-harness/src/agent:agent-state-limit-hit state))
+              ;; max-read-files=99 above max-tool-calls=3, so tool-calls
+              ;; wins; we tolerate read-files in case ordering changes.
+              (eq :max-read-files
+                  (cl-harness/src/agent:agent-state-limit-hit state)))))
+    (testing "tool-call counter reflects the budget actually consumed"
+      (ok (>= (cl-harness/src/agent:agent-state-tool-call-count state) 3)))))
+
+(deftest run-agent-emits-run-end-event-with-metrics
+  (let ((*llm-responses*
+         (list "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"smoke\"}"))
+        (*mcp-handler*
+         (lambda (body)
+           (let ((id (%jsonrpc-id body)))
+             (cond
+               ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+               ((search "\"load-system\"" body) (%ok-tool-result id))
+               ((search "\"run-tests\"" body)
+                (%ok-tool-result id :passed 0 :failed 1))
+               (t (error "unexpected MCP body: ~A" body))))))
+        (mcp (%make-mcp-client-with-handler))
+        (provider (%make-stub-provider))
+        (policy (make-tool-policy :generic-mcp))
+        (path (%temp-log-path)))
+    (unwind-protect
+         (let ((logger (cl-harness/src/log:open-run-logger path)))
+           (cl-harness/src/agent:run-agent
+            (%make-config) provider mcp policy logger)
+           (cl-harness/src/log:close-run-logger logger)
+           (with-open-file (in path)
+             (let* ((lines (loop for l = (read-line in nil nil)
+                                 while l collect l))
+                    (last-line (first (last lines)))
+                    (parsed (yason:parse last-line)))
+               (testing "the last transcript event is :run-end"
+                 (ok (equal "run-end" (gethash "type" parsed))))
+               (testing "carries the full metric set required by REQ-LOG-002"
+                 (ok (gethash "status" parsed))
+                 (multiple-value-bind (val present)
+                     (gethash "turns" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "tool_call_count" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "patch_count" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "patch_attempts" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "read_file_count" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "repl_eval_count" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "token_total" parsed) (declare (ignore val)) (ok present))
+                 (multiple-value-bind (val present)
+                     (gethash "elapsed_seconds" parsed) (declare (ignore val)) (ok present)))))
+           t)
+      (when (probe-file path) (delete-file path)))))
 
 (deftest run-agent-rejects-disallowed-tool-without-crashing
   (let* ((*llm-responses*

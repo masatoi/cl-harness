@@ -27,7 +27,15 @@
                 #:run-config-test-system
                 #:run-config-issue
                 #:run-config-limits
-                #:run-limits-max-turns)
+                #:run-limits-max-turns
+                #:run-limits-max-tool-calls
+                #:run-limits-max-patches
+                #:run-limits-max-read-files
+                #:run-limits-max-repl-evals
+                #:run-limits-max-wall-clock-seconds)
+  (:import-from #:local-time
+                #:now
+                #:timestamp-difference)
   (:import-from #:cl-harness/src/log
                 #:log-event)
   (:import-from #:cl-harness/src/mcp
@@ -70,6 +78,11 @@
            #:agent-state-token-total
            #:agent-state-patch-count
            #:agent-state-patch-attempts
+           #:agent-state-tool-call-count
+           #:agent-state-read-file-count
+           #:agent-state-repl-eval-count
+           #:agent-state-started-at
+           #:agent-state-limit-hit
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -83,6 +96,68 @@
 fs-write-file is included so the file-only baseline condition still
 auto-verifies after each file rewrite, matching the lisp-* paths.")
 
+(defun %resolve-patch-target (config arguments tool)
+  "Return the absolute pathname the source-mutating TOOL is targeting,
+or NIL when ARGUMENTS does not name a file. The lisp-* tools use a
+\"file_path\" key, fs-write-file uses \"path\". Relative paths are
+resolved against CONFIG's project-root."
+  (let ((key (cond ((member tool '("lisp-patch-form" "lisp-edit-form")
+                            :test #'equal)
+                    "file_path")
+                   ((equal tool "fs-write-file")
+                    "path"))))
+    (when key
+      (let ((p (and (hash-table-p arguments) (gethash key arguments))))
+        (when (and (stringp p) (plusp (length p)))
+          (let ((path (pathname p)))
+            (if (uiop:absolute-pathname-p path)
+                path
+                (merge-pathnames
+                 path
+                 (uiop:ensure-directory-pathname
+                  (run-config-project-root config))))))))))
+
+(defun %read-file-safely (path)
+  "Read PATH as a string, returning NIL on any error. Used by the patch
+diff logger so a missing or unreadable target degrades to no-diff
+instead of aborting the agent loop."
+  (when (and path (probe-file path))
+    (handler-case (uiop:read-file-string path)
+      (error () nil))))
+
+(defun %compute-unified-diff (before after label)
+  "Return a unified-diff string (`diff -u`) between BEFORE and AFTER
+content strings, or NIL when they are equal / inputs are unusable / the
+external `diff` binary is unavailable. LABEL is used as the file label
+on both sides of the diff header."
+  (when (and (stringp before) (stringp after) (string/= before after))
+    (handler-case
+        (uiop:with-temporary-file (:pathname bp :stream sb
+                                   :direction :output)
+          (write-string before sb)
+          (finish-output sb)
+          (uiop:with-temporary-file (:pathname ap :stream sa
+                                     :direction :output)
+            (write-string after sa)
+            (finish-output sa)
+            (uiop:run-program (list "diff" "-u"
+                                    "--label" (format nil "~A (before)" label)
+                                    "--label" (format nil "~A (after)" label)
+                                    (namestring bp)
+                                    (namestring ap))
+                              :output :string
+                              :ignore-error-status t)))
+      (error () nil))))
+
+(defparameter +read-file-tools+
+  '("fs-read-file"
+    "lisp-read-file"
+    "fs-list-directory"
+    "clgrep-search")
+  "Tools whose successful invocation counts toward MAX-READ-FILES.
+LLM-driven inspection of the project surface; bounded so a runaway
+'read everything' loop is caught.")
+
 (defclass agent-state ()
   ((turn :initform 0 :accessor agent-state-turn)
    (status :initform :running :accessor agent-state-status)
@@ -90,12 +165,60 @@ auto-verifies after each file rewrite, matching the lisp-* paths.")
    (final-action :initform nil :accessor agent-state-final-action)
    (token-total :initform 0 :accessor agent-state-token-total)
    (patch-count :initform 0 :accessor agent-state-patch-count
-                :documentation "Number of source-mutating tool calls that
-returned isError=false (i.e. patches actually applied).")
+                :documentation "Source-mutating tool calls that returned
+isError=false (i.e. patches actually applied).")
    (patch-attempts :initform 0 :accessor agent-state-patch-attempts
-                   :documentation "Number of source-mutating tool calls,
-including failures, so the metric distinguishes \"tried\" from \"applied\"."))
+                   :documentation "Source-mutating tool calls including
+failures, so the metric distinguishes \"tried\" from \"applied\".")
+   (tool-call-count :initform 0 :accessor agent-state-tool-call-count
+                    :documentation "Total successful agent-driven tool
+invocations (LLM-proposed, dispatched via call-tool). Excludes
+harness-internal calls such as fs-set-project-root setup or verify-task
+plumbing.")
+   (read-file-count :initform 0 :accessor agent-state-read-file-count
+                    :documentation "Count of read-only file lookups
+(fs-read-file, lisp-read-file, fs-list-directory, clgrep-search).")
+   (repl-eval-count :initform 0 :accessor agent-state-repl-eval-count
+                    :documentation "Count of repl-eval invocations.")
+   (started-at :initform nil :accessor agent-state-started-at
+               :documentation "LOCAL-TIME timestamp captured at the top
+of RUN-AGENT, used to compute wall-clock elapsed for limit enforcement
+and metrics.")
+   (limit-hit :initform nil :accessor agent-state-limit-hit
+              :documentation "When STATUS is :LIMIT-EXHAUSTED, names the
+LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
+:MAX-PATCHES / :MAX-READ-FILES / :MAX-REPL-EVALS / :MAX-WALL-CLOCK)."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
+
+(defun check-limits (state limits)
+  "Compare STATE's counters against LIMITS and return the keyword for
+the first exceeded limit, or NIL when the run is still within budget.
+
+Limit keywords mirror the LIMIT slot names so the caller can stamp
+AGENT-STATE-LIMIT-HIT verbatim. Order matters only for tie-breaking;
+the agent loop calls this once per turn boundary so at most one
+limit can fire on any given check."
+  (cond
+    ((>= (agent-state-turn state) (run-limits-max-turns limits))
+     :max-turns)
+    ((>= (agent-state-tool-call-count state)
+         (run-limits-max-tool-calls limits))
+     :max-tool-calls)
+    ((>= (agent-state-patch-attempts state)
+         (run-limits-max-patches limits))
+     :max-patches)
+    ((>= (agent-state-read-file-count state)
+         (run-limits-max-read-files limits))
+     :max-read-files)
+    ((>= (agent-state-repl-eval-count state)
+         (run-limits-max-repl-evals limits))
+     :max-repl-evals)
+    ((let ((started (agent-state-started-at state)))
+       (and started
+            (>= (timestamp-difference (now) started)
+                (run-limits-max-wall-clock-seconds limits))))
+     :max-wall-clock)
+    (t nil)))
 
 ;; --- Stub ---------------------------------------------------------------
 
@@ -398,11 +521,43 @@ generic content/isError dump."
                                (symbol-name (agent-action-status action))))
                  ("summary" . ,(or (agent-action-summary action) ""))))))))
 
-(defun finalize (state status &key verify action)
+(defun finalize (state status &key verify action limit-hit)
   "Stamp STATE's terminal fields and return STATE."
   (setf (agent-state-status state) status)
   (when verify (setf (agent-state-final-verify state) verify))
   (when action (setf (agent-state-final-action state) action))
+  (when limit-hit (setf (agent-state-limit-hit state) limit-hit))
+  state)
+
+(defun run-end-event-payload (state)
+  "Return the alist used as the JSONL :RUN-END event body. Captures
+the full PRD §8.10 REQ-LOG-002 metric set (turn count, tool-call
+count, patch counts, read-file count, repl-eval count, token total,
+elapsed wall clock) plus terminal status / limit-hit."
+  (let ((started (agent-state-started-at state)))
+    (append
+     `(("status" . ,(string-downcase
+                     (symbol-name (agent-state-status state)))))
+     (when (agent-state-limit-hit state)
+       `(("limit_hit"
+          . ,(string-downcase
+              (symbol-name (agent-state-limit-hit state))))))
+     `(("turns" . ,(agent-state-turn state))
+       ("tool_call_count" . ,(agent-state-tool-call-count state))
+       ("patch_count" . ,(agent-state-patch-count state))
+       ("patch_attempts" . ,(agent-state-patch-attempts state))
+       ("read_file_count" . ,(agent-state-read-file-count state))
+       ("repl_eval_count" . ,(agent-state-repl-eval-count state))
+       ("token_total" . ,(agent-state-token-total state)))
+     (when started
+       `(("elapsed_seconds"
+          . ,(coerce (timestamp-difference (now) started) 'double-float)))))))
+
+(defun emit-run-end (state logger)
+  "Log the :RUN-END event for STATE and return STATE. Keeps every
+RUN-AGENT exit path uniform so post-mortem analysis only has to look
+at the last event in the transcript."
+  (log-event logger :run-end (run-end-event-payload state))
   state)
 
 (defun finalize-passed (state mcp-client config logger
@@ -466,7 +621,21 @@ the loop should continue, or a terminal status keyword."
                                 tool (policy-mode policy)))
         nil nil nil))
       (t
-       (let ((result
+       (incf (agent-state-tool-call-count state))
+       (cond
+         ((member tool +read-file-tools+ :test #'equal)
+          (incf (agent-state-read-file-count state)))
+         ((equal tool "repl-eval")
+          (incf (agent-state-repl-eval-count state))))
+       (let* ((target (when (member tool +source-mutating-tools+
+                                    :test #'equal)
+                        (%resolve-patch-target
+                         config
+                         (or (agent-action-arguments action)
+                             (make-hash-table :test 'equal))
+                         tool)))
+              (before (and target (%read-file-safely target)))
+              (result
               (handler-case
                   (call-tool mcp-client tool
                              (or (agent-action-arguments action)
@@ -508,6 +677,16 @@ the loop should continue, or a terminal status keyword."
                  (values next nil nil nil))
                 (t
                  (incf (agent-state-patch-count state))
+                 (when target
+                   (let* ((after (%read-file-safely target))
+                          (diff (%compute-unified-diff
+                                 before after (namestring target))))
+                     (log-event
+                      logger :patch
+                      `(("turn" . ,turn)
+                        ("tool" . ,tool)
+                        ("file" . ,(namestring target))
+                        ("diff" . ,(or diff ""))))))
                  (let ((v (verify-task mcp-client config)))
                    (log-event logger :verify (verify-event-payload turn v))
                    (if (verify-result-success-p v)
@@ -575,8 +754,15 @@ worker; failure of the clean reload downgrades the run to :DIRTY-ONLY.
 CLEAN-VERIFY-P NIL skips the clean-verify step. The benchmark runner
 sets this when it has registered a sandbox system via asdf:load-asd in
 the agent's current worker, since a worker reset would lose the
-registration."
+registration.
+
+Limits enforcement (PRD §8.4 REQ-AGENT-003): all six RUN-LIMITS slots
+are now checked at every turn boundary (max-turns / max-tool-calls /
+max-patches / max-read-files / max-repl-evals / max-wall-clock-seconds).
+On exceeding any of them STATE's STATUS becomes :LIMIT-EXHAUSTED and
+LIMIT-HIT names the offending slot."
   (let ((state (make-instance 'agent-state)))
+    (setf (agent-state-started-at state) (now))
     (call-tool mcp-client "fs-set-project-root"
                (alist-hash-table
                 `(("path" . ,(princ-to-string
@@ -590,18 +776,19 @@ registration."
                  ("issue" . ,(run-config-issue config))
                  ("policy" . ,(string-downcase
                                (symbol-name (policy-mode policy))))))
-    (let ((initial (verify-task mcp-client config)))
+    (let ((initial (verify-task mcp-client config))
+          (limits (run-config-limits config)))
       (log-event logger :verify (verify-event-payload 0 initial))
       (when (verify-result-success-p initial)
         (return-from run-agent
-          (finalize-passed state mcp-client config logger initial nil
-                           :clean-verify-p clean-verify-p)))
+          (emit-run-end
+           (finalize-passed state mcp-client config logger initial nil
+                            :clean-verify-p clean-verify-p)
+           logger)))
       (let ((messages (list (make-chat-message "system" (system-prompt policy))
                             (make-chat-message
                              "user" (initial-user-prompt config initial)))))
-        (loop with max-turns = (run-limits-max-turns
-                                (run-config-limits config))
-              for turn from 1 to max-turns
+        (loop for turn from 1
               do (setf (agent-state-turn state) turn)
                  (multiple-value-bind (next-messages outcome verify action)
                      (step-turn turn state config provider mcp-client
@@ -609,15 +796,28 @@ registration."
                    (cond
                      (outcome
                       (return-from run-agent
-                        (case outcome
-                          (:passed
-                           (finalize-passed state mcp-client config logger
-                                            verify action
-                                            :clean-verify-p clean-verify-p))
-                          (:give-up
-                           (finalize state :give-up :action action)))))
+                        (emit-run-end
+                         (case outcome
+                           (:passed
+                            (finalize-passed state mcp-client config logger
+                                             verify action
+                                             :clean-verify-p clean-verify-p))
+                           (:give-up
+                            (finalize state :give-up :action action)))
+                         logger)))
                      (t (setf messages next-messages))))
-              finally (return (finalize state :max-turns)))))))
+                 (let ((limit-hit (check-limits state limits)))
+                   (when limit-hit
+                     (log-event logger :limit-exhausted
+                                `(("limit"
+                                   . ,(string-downcase
+                                       (symbol-name limit-hit)))
+                                  ("turn" . ,(agent-state-turn state))))
+                     (return-from run-agent
+                       (emit-run-end
+                        (finalize state :limit-exhausted
+                                  :limit-hit limit-hit)
+                        logger)))))))))
 
 (defun format-final-report (state &key log-path)
   "Return a one-paragraph human-readable summary of STATE.
@@ -627,12 +827,21 @@ chat tokens, the final verify snapshot, and (optionally) the JSONL
 transcript path. Used by the CLI to print a closing report."
   (with-output-to-string (s)
     (format s "== cl-harness fix report ==~%")
-    (format s "Status:           ~S~%" (agent-state-status state))
+    (format s "Status:           ~S~@[ (limit: ~S)~]~%"
+            (agent-state-status state)
+            (agent-state-limit-hit state))
     (format s "Turns:            ~D~%" (agent-state-turn state))
+    (format s "Tool calls:       ~D~%" (agent-state-tool-call-count state))
     (format s "Patches applied:  ~D (attempted ~D)~%"
             (agent-state-patch-count state)
             (agent-state-patch-attempts state))
+    (format s "File reads:       ~D~%" (agent-state-read-file-count state))
+    (format s "REPL evals:       ~D~%" (agent-state-repl-eval-count state))
     (format s "Chat tokens:      ~D~%" (agent-state-token-total state))
+    (let ((started (agent-state-started-at state)))
+      (when started
+        (format s "Wall clock:       ~,1Fs~%"
+                (timestamp-difference (now) started))))
     (let ((v (agent-state-final-verify state)))
       (if v
           (format s "Final verify:     status ~S, passed ~A, failed ~A~%"

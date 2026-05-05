@@ -34,6 +34,10 @@
                 #:agent-state-turn
                 #:agent-state-patch-count
                 #:agent-state-patch-attempts
+                #:agent-state-tool-call-count
+                #:agent-state-read-file-count
+                #:agent-state-repl-eval-count
+                #:agent-state-limit-hit
                 #:agent-state-token-total)
   (:export #:bench-task
            #:bench-task-id
@@ -48,9 +52,13 @@
            #:bench-result-condition
            #:bench-result-status
            #:bench-result-success-p
+           #:bench-result-limit-hit
            #:bench-result-turns
            #:bench-result-patches
            #:bench-result-patch-attempts
+           #:bench-result-tool-call-count
+           #:bench-result-read-file-count
+           #:bench-result-repl-eval-count
            #:bench-result-tokens
            #:bench-result-elapsed-ms
            #:bench-result-transcript-path
@@ -83,9 +91,19 @@ sub-directory that holds the ASDF system + failing test."))
   ((task :initarg :task :reader bench-result-task)
    (condition :initarg :condition :reader bench-result-condition)
    (status :initarg :status :reader bench-result-status)
+   (limit-hit :initarg :limit-hit :initform nil
+              :reader bench-result-limit-hit
+              :documentation "When STATUS is :LIMIT-EXHAUSTED, the
+RUN-LIMITS slot keyword that fired.")
    (turns :initarg :turns :reader bench-result-turns)
    (patches :initarg :patches :reader bench-result-patches)
    (patch-attempts :initarg :patch-attempts :reader bench-result-patch-attempts)
+   (tool-call-count :initarg :tool-call-count :initform 0
+                    :reader bench-result-tool-call-count)
+   (read-file-count :initarg :read-file-count :initform 0
+                    :reader bench-result-read-file-count)
+   (repl-eval-count :initarg :repl-eval-count :initform 0
+                    :reader bench-result-repl-eval-count)
    (tokens :initarg :tokens :reader bench-result-tokens)
    (elapsed-ms :initarg :elapsed-ms :reader bench-result-elapsed-ms)
    (transcript-path :initarg :transcript-path :reader bench-result-transcript-path)
@@ -218,9 +236,13 @@ status so a single broken task does not abort the whole suite (PRD §8.11)."
                                   :task task
                                   :condition condition
                                   :status (agent-state-status state)
+                                  :limit-hit (agent-state-limit-hit state)
                                   :turns (agent-state-turn state)
                                   :patches (agent-state-patch-count state)
                                   :patch-attempts (agent-state-patch-attempts state)
+                                  :tool-call-count (agent-state-tool-call-count state)
+                                  :read-file-count (agent-state-read-file-count state)
+                                  :repl-eval-count (agent-state-repl-eval-count state)
                                   :tokens (agent-state-token-total state)
                                   :elapsed-ms
                                   (* 1000.0
@@ -233,7 +255,10 @@ status so a single broken task does not abort the whole suite (PRD §8.11)."
                        :task task
                        :condition condition
                        :status :error
-                       :turns 0 :patches 0 :patch-attempts 0 :tokens 0
+                       :turns 0 :patches 0 :patch-attempts 0
+                       :tool-call-count 0 :read-file-count 0
+                       :repl-eval-count 0
+                       :tokens 0
                        :elapsed-ms
                        (* 1000.0
                           (/ (- (get-internal-real-time) start-time)
