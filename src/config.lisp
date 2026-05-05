@@ -20,7 +20,8 @@
            #:run-limits-max-patches
            #:run-limits-max-read-files
            #:run-limits-max-repl-evals
-           #:run-limits-max-wall-clock-seconds))
+           #:run-limits-max-wall-clock-seconds
+           #:run-limits-max-action-parse-errors))
 
 (in-package #:cl-harness/src/config)
 
@@ -32,7 +33,14 @@
    (max-repl-evals :initarg :max-repl-evals :reader run-limits-max-repl-evals)
    (max-wall-clock-seconds
     :initarg :max-wall-clock-seconds
-    :reader run-limits-max-wall-clock-seconds))
+    :reader run-limits-max-wall-clock-seconds)
+   (max-action-parse-errors
+    :initarg :max-action-parse-errors
+    :initform 3
+    :reader run-limits-max-action-parse-errors
+    :documentation "Consecutive ACTION-PARSE-ERRORs tolerated before
+RUN-AGENT exits :limit-exhausted with limit-hit :max-action-parse-errors.
+Resets to zero on any successful PARSE-ACTION."))
   (:documentation "Resource budget for a single fix run (PRD §8.4 REQ-AGENT-003)."))
 
 (defun make-default-limits ()
@@ -43,7 +51,8 @@
                  :max-patches 3
                  :max-read-files 40
                  :max-repl-evals 40
-                 :max-wall-clock-seconds 600))
+                 :max-wall-clock-seconds 600
+                 :max-action-parse-errors 3))
 
 (defclass run-config ()
   ((project-root :initarg :project-root :reader run-config-project-root)

@@ -541,6 +541,87 @@
            t)
       (when (probe-file path) (delete-file path)))))
 
+(deftest run-agent-aborts-on-consecutive-action-parse-errors
+  (let* ((*llm-responses*
+          (list "this is not json" "still nope" "neither is this"
+                "fourth nope" "fifth nope"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 50
+                                :max-tool-calls 99
+                                :max-patches 99
+                                :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600
+                                :max-action-parse-errors 3))
+         (config (make-run-config :project-root "/tmp/proj"
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :issue "x"
+                                  :limits limits))
+         (state (%run-agent-with-temp-logger config provider mcp policy)))
+    (testing "limit-hit names :max-action-parse-errors"
+      (ok (eq :limit-exhausted
+              (cl-harness/src/agent:agent-state-status state)))
+      (ok (eq :max-action-parse-errors
+              (cl-harness/src/agent:agent-state-limit-hit state))))
+    (testing "agent stops after exactly the budget"
+      (ok (= 3 (cl-harness/src/agent:agent-state-parse-error-streak state))))))
+
+(deftest run-agent-dry-run-skips-mcp-tool-calls
+  (let* ((seen-patch-call (cons nil nil))
+         (*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"old_text\":\"a\",\"new_text\":\"b\"}}"
+                "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"end of dry run\"}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-patch-form\"" body)
+                 (setf (car seen-patch-call) t)
+                 (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (path (%temp-log-path)))
+    (unwind-protect
+         (let ((logger (cl-harness/src/log:open-run-logger path)))
+           (cl-harness/src/agent:run-agent
+            (%make-config) provider mcp policy logger
+            :dry-run-p t)
+           (cl-harness/src/log:close-run-logger logger)
+           (testing "lisp-patch-form was NOT actually invoked"
+             (ok (null (car seen-patch-call))))
+           (testing ":dry-run-skip event appears in the transcript"
+             (with-open-file (in path)
+               (let ((found nil))
+                 (loop for line = (read-line in nil nil)
+                       while line
+                       when (search "\"dry-run-skip\"" line)
+                         do (setf found t))
+                 (ok found))))
+           (testing "run-start event records dry_run=true"
+             (with-open-file (in path)
+               (let ((parsed (yason:parse (read-line in))))
+                 (ok (gethash "dry_run" parsed))))))
+      (when (probe-file path) (delete-file path)))))
+
 (deftest run-agent-rejects-disallowed-tool-without-crashing
   (let* ((*llm-responses*
           ;; First turn: try a forbidden tool. Second turn: give up.

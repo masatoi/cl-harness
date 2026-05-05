@@ -50,9 +50,36 @@ export CL_HARNESS_LLM_MODEL=llama-3.3-70b-versatile
 export CL_HARNESS_MCP_URL=http://127.0.0.1:3001/mcp
 ```
 
-### Fix one project
+### Build the shell binary (optional)
 
-From a SBCL REPL:
+```bash
+sbcl --non-interactive \
+  --eval '(asdf:load-asd "/abs/path/to/cl-harness/cl-harness.asd")' \
+  --eval '(ql:quickload :cl-harness)' \
+  --eval '(asdf:make :cl-harness/binary)'
+# produces ./cl-harness in the system source directory
+```
+
+The resulting binary is a self-contained SBCL image (~57 MB).
+
+### Fix one project — shell
+
+```bash
+cl-harness fix \
+  --project-root /path/to/your/asdf/project \
+  --system your-system \
+  --test-system your-system/tests \
+  --issue "Brief description of the failing test or symptom." \
+  --condition generic-mcp
+```
+
+Exit code: 0 on `:passed`, 1 on `:give-up` / `:limit-exhausted` / `:dirty-only`, 2 on uncaught error.
+
+`--dry-run` exercises the LLM end-to-end without invoking any MCP tool — useful for prompt iteration.
+
+`cl-harness fix --help` and `cl-harness bench --help` list every flag.
+
+### Fix one project — REPL
 
 ```lisp
 (ql:quickload :cl-harness)

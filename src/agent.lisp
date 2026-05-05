@@ -32,7 +32,8 @@
                 #:run-limits-max-patches
                 #:run-limits-max-read-files
                 #:run-limits-max-repl-evals
-                #:run-limits-max-wall-clock-seconds)
+                #:run-limits-max-wall-clock-seconds
+                #:run-limits-max-action-parse-errors)
   (:import-from #:local-time
                 #:now
                 #:timestamp-difference)
@@ -83,6 +84,7 @@
            #:agent-state-repl-eval-count
            #:agent-state-started-at
            #:agent-state-limit-hit
+           #:agent-state-parse-error-streak
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -184,6 +186,12 @@ plumbing.")
                :documentation "LOCAL-TIME timestamp captured at the top
 of RUN-AGENT, used to compute wall-clock elapsed for limit enforcement
 and metrics.")
+   (parse-error-streak :initform 0 :accessor agent-state-parse-error-streak
+                       :documentation "Consecutive ACTION-PARSE-ERROR
+count. Resets to zero on any successful PARSE-ACTION; when it reaches
+RUN-LIMITS-MAX-ACTION-PARSE-ERRORS the loop exits :limit-exhausted with
+limit-hit :max-action-parse-errors so a malformed-output streak cannot
+silently consume the whole turn budget.")
    (limit-hit :initform nil :accessor agent-state-limit-hit
               :documentation "When STATUS is :LIMIT-EXHAUSTED, names the
 LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
@@ -218,6 +226,9 @@ limit can fire on any given check."
             (>= (timestamp-difference (now) started)
                 (run-limits-max-wall-clock-seconds limits))))
      :max-wall-clock)
+    ((>= (agent-state-parse-error-streak state)
+         (run-limits-max-action-parse-errors limits))
+     :max-action-parse-errors)
     (t nil)))
 
 ;; --- Stub ---------------------------------------------------------------
@@ -604,10 +615,16 @@ into the current worker only and a worker reset would lose that binding."
     (:give-up :give-up)))
 
 (defun handle-tool-call (turn state config mcp-client policy logger
-                         messages action)
+                         messages action
+                         &key dry-run-p)
   "Dispatch a :TOOL-CALL ACTION via MCP-CLIENT, optionally auto-verifying.
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
-the loop should continue, or a terminal status keyword."
+the loop should continue, or a terminal status keyword.
+
+When DRY-RUN-P is non-NIL the call is intercepted before reaching MCP:
+a :dry-run-skip event is logged and the LLM receives a synthetic empty
+success result. Source-mutating tools additionally skip the auto-reverify
+step since no real patch was applied."
   (let ((tool (agent-action-tool action)))
     (cond
       ((not (allowed-tool-p policy tool))
@@ -634,31 +651,44 @@ the loop should continue, or a terminal status keyword."
                          (or (agent-action-arguments action)
                              (make-hash-table :test 'equal))
                          tool)))
-              (before (and target (%read-file-safely target)))
+              (before (and target (not dry-run-p)
+                           (%read-file-safely target)))
               (result
-              (handler-case
-                  (call-tool mcp-client tool
-                             (or (agent-action-arguments action)
-                                 (make-hash-table :test 'equal)))
-                (mcp-error (c)
-                  (log-event logger :tool-error
-                             `(("turn" . ,turn) ("tool" . ,tool)
-                               ("code" . ,(mcp-error-code c))
-                               ("message" . ,(mcp-error-message c))))
-                  ;; Synthesize an MCP-style error result so downstream
-                  ;; logic (summarizer, isError-aware logging) keeps working.
+               (cond
+                 (dry-run-p
+                  (log-event logger :dry-run-skip
+                             `(("turn" . ,turn) ("tool" . ,tool)))
                   (alist-hash-table
-                   `(("isError" . t)
+                   `(("isError" . :false)
                      ("content"
                       . ,(vector
                           (alist-hash-table
                            `(("type" . "text")
-                             ("text"
-                              . ,(format nil "MCP error ~A: ~A"
-                                         (mcp-error-code c)
-                                         (mcp-error-message c))))
+                             ("text" . "[dry-run: tool not executed]"))
                            :test 'equal))))
-                   :test 'equal)))))
+                   :test 'equal))
+                 (t
+                  (handler-case
+                      (call-tool mcp-client tool
+                                 (or (agent-action-arguments action)
+                                     (make-hash-table :test 'equal)))
+                    (mcp-error (c)
+                      (log-event logger :tool-error
+                                 `(("turn" . ,turn) ("tool" . ,tool)
+                                   ("code" . ,(mcp-error-code c))
+                                   ("message" . ,(mcp-error-message c))))
+                      (alist-hash-table
+                       `(("isError" . t)
+                         ("content"
+                          . ,(vector
+                              (alist-hash-table
+                               `(("type" . "text")
+                                 ("text"
+                                  . ,(format nil "MCP error ~A: ~A"
+                                             (mcp-error-code c)
+                                             (mcp-error-message c))))
+                               :test 'equal))))
+                       :test 'equal)))))))
          (log-event logger :tool-result
                     `(("turn" . ,turn) ("tool" . ,tool)
                       ("is_error" . ,(and (gethash "isError" result) t))))
@@ -670,10 +700,10 @@ the loop should continue, or a terminal status keyword."
              ((member tool +source-mutating-tools+ :test #'equal)
               (incf (agent-state-patch-attempts state))
               (cond
-                ;; Patch attempt that the MCP server rejected (e.g. wrong
-                ;; arg shape, form not found) — don't auto-reverify, the
-                ;; source was not modified.
                 ((gethash "isError" result)
+                 (values next nil nil nil))
+                (dry-run-p
+                 (incf (agent-state-patch-count state))
                  (values next nil nil nil))
                 (t
                  (incf (agent-state-patch-count state))
@@ -700,7 +730,8 @@ the loop should continue, or a terminal status keyword."
                                  nil nil nil)))))))
              (t (values next nil nil nil)))))))))
 
-(defun step-turn (turn state config provider mcp-client policy logger messages)
+(defun step-turn (turn state config provider mcp-client policy logger messages
+                  &key dry-run-p)
   "Run one turn of the agent loop.
 
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
@@ -716,6 +747,7 @@ the loop should continue, otherwise a terminal status keyword
                  ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
     (handler-case
         (let ((action (parse-action text)))
+          (setf (agent-state-parse-error-streak state) 0)
           (log-event logger :action (action-event-payload turn action))
           (let ((with-assistant (append-message messages "assistant" text)))
             (case (agent-action-type action)
@@ -725,10 +757,13 @@ the loop should continue, otherwise a terminal status keyword
                        nil action))
               (:tool-call
                (handle-tool-call turn state config mcp-client policy logger
-                                 with-assistant action)))))
+                                 with-assistant action
+                                 :dry-run-p dry-run-p)))))
       (action-parse-error (c)
+        (incf (agent-state-parse-error-streak state))
         (log-event logger :action-error
                    `(("turn" . ,turn)
+                     ("streak" . ,(agent-state-parse-error-streak state))
                      ("message" . ,(action-parse-error-message c))))
         (values
          (append-message
@@ -739,7 +774,7 @@ the loop should continue, otherwise a terminal status keyword
          nil nil nil)))))
 
 (defun run-agent (config provider mcp-client policy logger
-                  &key (clean-verify-p t))
+                  &key (clean-verify-p t) dry-run-p)
   "Execute the basic Phase 2 fix loop with a Phase 3 clean-verify safety net.
 
 CONFIG is a RUN-CONFIG. PROVIDER is an OPENAI-COMPATIBLE-PROVIDER (or any
@@ -756,11 +791,19 @@ sets this when it has registered a sandbox system via asdf:load-asd in
 the agent's current worker, since a worker reset would lose the
 registration.
 
-Limits enforcement (PRD §8.4 REQ-AGENT-003): all six RUN-LIMITS slots
-are now checked at every turn boundary (max-turns / max-tool-calls /
-max-patches / max-read-files / max-repl-evals / max-wall-clock-seconds).
-On exceeding any of them STATE's STATUS becomes :LIMIT-EXHAUSTED and
-LIMIT-HIT names the offending slot."
+DRY-RUN-P (PRD §8.1 REQ-CLI-003) routes every LLM-proposed
+source-mutating tool call through a synthetic success result instead of
+invoking call-tool, so the loop exercises the LLM and prompt without
+ever touching the project. Auto-reverify after a stubbed patch is also
+skipped (no real change to verify). Useful for prompt iteration without
+burning MCP turnaround.
+
+Limits enforcement (PRD §8.4 REQ-AGENT-003): all seven RUN-LIMITS
+slots are now checked at every turn boundary (max-turns / max-tool-calls
+/ max-patches / max-read-files / max-repl-evals /
+max-wall-clock-seconds / max-action-parse-errors). On exceeding any of
+them STATE's STATUS becomes :LIMIT-EXHAUSTED and LIMIT-HIT names the
+offending slot."
   (let ((state (make-instance 'agent-state)))
     (setf (agent-state-started-at state) (now))
     (call-tool mcp-client "fs-set-project-root"
@@ -775,7 +818,8 @@ LIMIT-HIT names the offending slot."
                  ("test_system" . ,(run-config-test-system config))
                  ("issue" . ,(run-config-issue config))
                  ("policy" . ,(string-downcase
-                               (symbol-name (policy-mode policy))))))
+                               (symbol-name (policy-mode policy))))
+                 ("dry_run" . ,(and dry-run-p t))))
     (let ((initial (verify-task mcp-client config))
           (limits (run-config-limits config)))
       (log-event logger :verify (verify-event-payload 0 initial))
@@ -792,7 +836,8 @@ LIMIT-HIT names the offending slot."
               do (setf (agent-state-turn state) turn)
                  (multiple-value-bind (next-messages outcome verify action)
                      (step-turn turn state config provider mcp-client
-                                policy logger messages)
+                                policy logger messages
+                                :dry-run-p dry-run-p)
                    (cond
                      (outcome
                       (return-from run-agent

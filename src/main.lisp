@@ -21,6 +21,8 @@
   (:import-from #:cl-harness/src/cli
                 #:fix
                 #:bench)
+  (:import-from #:cl-harness/src/cli-main
+                #:main)
   (:import-from #:cl-harness/src/mcp
                 #:mcp-client
                 #:make-mcp-client
@@ -91,6 +93,7 @@
                 #:format-suite-report-markdown)
   (:export #:fix
            #:bench
+           #:main
            #:run-config
            #:make-run-config
            #:run-logger

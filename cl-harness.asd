@@ -10,6 +10,7 @@
                "yason"
                "local-time"
                "dexador"
+               "clingon"
                "cl-harness/src/main")
   :in-order-to ((test-op (test-op "cl-harness/tests"))))
 
@@ -34,3 +35,14 @@
                                    (uiop:string-prefix-p "cl-harness/tests/" dep)))
                             (asdf:system-depends-on c))))
                       (uiop:symbol-call :rove :run test-packages))))
+
+(asdf:defsystem "cl-harness/binary"
+  :description "Build target that produces a `cl-harness` executable.
+ASDF:MAKE on this system invokes program-op with the cli-main entry
+point. The library system stays pure; this is just a thin wrapper so
+`cl-harness fix --project ...` and `cl-harness bench --suite ...` work
+from a shell."
+  :depends-on ("cl-harness")
+  :build-operation "program-op"
+  :build-pathname "cl-harness"
+  :entry-point "cl-harness/src/cli-main:main")

@@ -42,6 +42,7 @@
                  base-url api-key model
                  (temperature 0.0) (max-tokens 1024)
                  reasoning-effort extra-body
+                 dry-run-p
                  log-path)
   "Run the Phase 2 basic fix loop.
 
@@ -99,7 +100,8 @@ Returns the populated AGENT-STATE."
                     :client-version "0.0.1")
     (let ((logger (open-run-logger path)))
       (unwind-protect
-           (let ((state (run-agent config provider client policy logger)))
+           (let ((state (run-agent config provider client policy logger
+                                   :dry-run-p dry-run-p)))
              (format t "~A" (format-final-report state :log-path path))
              state)
         (close-run-logger logger)))))

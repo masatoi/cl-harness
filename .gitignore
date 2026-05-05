@@ -19,3 +19,6 @@ tests/tmp/*
 !tests/tmp/.gitkeep
 
 .envrc.local
+
+# Built shell binary (asdf:make :cl-harness/binary)
+/cl-harness
