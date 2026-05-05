@@ -22,7 +22,8 @@
                 #:verify-result-test
                 #:parse-verify-result
                 #:verify-task
-                #:clean-verify-task))
+                #:clean-verify-task
+                #:build-scope-asdf-code))
 
 (in-package #:cl-harness/tests/verify-test)
 
@@ -178,3 +179,48 @@
              (params (gethash "params" (yason:parse kill-body)))
              (args (gethash "arguments" params)))
         (ok (eq t (gethash "reset" args)))))))
+
+(deftest build-scope-asdf-code-mentions-required-pieces
+  ;; Static check: the generated code must contain initialize-source-registry
+  ;; (with the project-root path), the per-system clear-system loop, and the
+  ;; per-package delete-package loop. The per-system / per-package walks were
+  ;; added to fix anomaly #64 (002-typo-defun runtime-native 0-turn pass).
+  (let ((code (build-scope-asdf-code "/tmp/sandbox/" "demo" "demo/tests")))
+    (ok (search "initialize-source-registry" code))
+    (ok (search "/tmp/sandbox/" code))
+    (ok (search "clear-system" code))
+    (ok (search "registered-systems" code)
+        "iterates ASDF's registered systems to clear inferred subsystems")
+    (ok (search "delete-package" code)
+        "deletes packages so a stale defun from the previous cell does not linger")
+    (ok (search "list-all-packages" code)
+        "iterates ALL packages so we hit any defpackage created by the prior load")
+    (ok (search "DEMO" code)
+        "embeds the upper-cased system name for case-insensitive package matching")))
+
+(deftest build-scope-asdf-code-purges-contaminated-package-when-evaluated
+  ;; Direct repro of anomaly #64: pre-bind a function in a leftover package,
+  ;; eval the generated code in-process, assert the package no longer exists.
+  ;; Uses an in-process eval (the same code is what the cl-mcp worker would
+  ;; receive via repl-eval) so the test exercises the actual side-effects
+  ;; without needing a live cl-mcp transport.
+  (let* ((pkg-name "ANOMALY64-DEMO/SRC/MAIN")
+         (pkg (or (find-package pkg-name)
+                  (make-package pkg-name :use '(#:cl)))))
+    ;; Contaminate: define a function in the package.
+    (let ((sym (intern "GREET" pkg)))
+      (setf (symbol-function sym) (lambda (n) (format nil "Hi ~A" n))))
+    (ok (fboundp (find-symbol "GREET" pkg))
+        "pre-condition: GREET is bound in the contaminated package")
+    ;; Build and run the scope code; uses lowercase system names matching
+    ;; the upper-cased package name above. compile+funcall gives the same
+    ;; effect as cl:eval here while keeping the lint rule against runtime
+    ;; eval clean.
+    (let* ((code (build-scope-asdf-code (uiop:temporary-directory)
+                                        "anomaly64-demo"
+                                        "anomaly64-demo/tests"))
+           (form (read-from-string code))
+           (thunk (compile nil `(lambda () ,form))))
+      (funcall thunk))
+    (ok (null (find-package pkg-name))
+        "post-condition: the contaminated package was deleted")))
