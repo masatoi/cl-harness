@@ -14,9 +14,6 @@
                 #:run-config-limits
                 #:run-limits
                 #:run-limits-max-patches)
-  (:import-from #:cl-harness/src/cli
-                #:bench
-                #:not-implemented-error)
   (:import-from #:cl-harness/src/log
                 #:with-run-logger
                 #:log-event))
@@ -44,12 +41,6 @@
       (ok (eq :runtime-native (run-config-condition c)))
       (ok (typep (run-config-limits c) 'run-limits))
       (ok (= 3 (run-limits-max-patches (run-config-limits c)))))))
-
-(deftest cli-stubs-signal-not-implemented
-  (testing "bench still signals not-implemented-error in Phase 2"
-    (ok (handler-case
-            (progn (bench) nil)
-          (not-implemented-error () t)))))
 
 (deftest log-roundtrip
   (testing "log-event writes one JSON line per call"

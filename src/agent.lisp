@@ -348,28 +348,37 @@ generic content/isError dump."
   state)
 
 (defun finalize-passed (state mcp-client config logger
-                        incremental-verify action)
+                        incremental-verify action
+                        &key (clean-verify-p t))
   "Confirm a :PASSED outcome via CLEAN-VERIFY-TASK on a fresh worker.
 
 When the clean reload also reports zero failures STATE's status stays
 :PASSED. Otherwise the agent reports :DIRTY-ONLY so the caller knows the
 incremental success did not survive a fresh image (PRD §8.9
-REQ-VERIFY-002, REQ-VERIFY-003)."
-  (let ((clean (clean-verify-task mcp-client config)))
-    (log-event logger :clean-verify (verify-event-payload -1 clean))
-    (cond
-      ((verify-result-success-p clean)
-       (finalize state :passed :verify clean :action action))
-      (t
-       (log-event logger :dirty-only
-                  `(("incremental_status"
-                     . ,(string-downcase
-                         (symbol-name
-                          (verify-result-status incremental-verify))))
-                    ("clean_status"
-                     . ,(string-downcase
-                         (symbol-name (verify-result-status clean))))))
-       (finalize state :dirty-only :verify clean :action action)))))
+REQ-VERIFY-002, REQ-VERIFY-003).
+
+CLEAN-VERIFY-P NIL skips the pool-kill + reverify step, used by the
+benchmark runner when the source system was registered via asdf:load-asd
+into the current worker only and a worker reset would lose that binding."
+  (cond
+    ((not clean-verify-p)
+     (finalize state :passed :verify incremental-verify :action action))
+    (t
+     (let ((clean (clean-verify-task mcp-client config)))
+       (log-event logger :clean-verify (verify-event-payload -1 clean))
+       (cond
+         ((verify-result-success-p clean)
+          (finalize state :passed :verify clean :action action))
+         (t
+          (log-event logger :dirty-only
+                     `(("incremental_status"
+                        . ,(string-downcase
+                            (symbol-name
+                             (verify-result-status incremental-verify))))
+                       ("clean_status"
+                        . ,(string-downcase
+                            (symbol-name (verify-result-status clean))))))
+          (finalize state :dirty-only :verify clean :action action)))))))
 
 (defun append-message (messages role content)
   "Return MESSAGES with a freshly constructed MESSAGE appended."
@@ -490,7 +499,8 @@ the loop should continue, otherwise a terminal status keyword
                   (action-parse-error-message c)))
          nil nil nil)))))
 
-(defun run-agent (config provider mcp-client policy logger)
+(defun run-agent (config provider mcp-client policy logger
+                  &key (clean-verify-p t))
   "Execute the basic Phase 2 fix loop with a Phase 3 clean-verify safety net.
 
 CONFIG is a RUN-CONFIG. PROVIDER is an OPENAI-COMPATIBLE-PROVIDER (or any
@@ -500,7 +510,12 @@ LOGGER is an open RUN-LOGGER.
 
 Every :PASSED outcome (initial verify, auto-reverify after a patch, or
 LLM :finish :fixed) is reconfirmed via CLEAN-VERIFY-TASK on a fresh
-worker; failure of the clean reload downgrades the run to :DIRTY-ONLY."
+worker; failure of the clean reload downgrades the run to :DIRTY-ONLY.
+
+CLEAN-VERIFY-P NIL skips the clean-verify step. The benchmark runner
+sets this when it has registered a sandbox system via asdf:load-asd in
+the agent's current worker, since a worker reset would lose the
+registration."
   (let ((state (make-instance 'agent-state)))
     (call-tool mcp-client "fs-set-project-root"
                (alist-hash-table
@@ -519,7 +534,8 @@ worker; failure of the clean reload downgrades the run to :DIRTY-ONLY."
       (log-event logger :verify (verify-event-payload 0 initial))
       (when (verify-result-success-p initial)
         (return-from run-agent
-          (finalize-passed state mcp-client config logger initial nil)))
+          (finalize-passed state mcp-client config logger initial nil
+                           :clean-verify-p clean-verify-p)))
       (let ((messages (list (make-chat-message "system" (system-prompt policy))
                             (make-chat-message
                              "user" (initial-user-prompt config initial)))))
@@ -536,7 +552,8 @@ worker; failure of the clean reload downgrades the run to :DIRTY-ONLY."
                         (case outcome
                           (:passed
                            (finalize-passed state mcp-client config logger
-                                            verify action))
+                                            verify action
+                                            :clean-verify-p clean-verify-p))
                           (:give-up
                            (finalize state :give-up :action action)))))
                      (t (setf messages next-messages))))

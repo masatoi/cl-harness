@@ -21,6 +21,9 @@
   (:import-from #:cl-harness/src/agent
                 #:run-agent
                 #:format-final-report)
+  (:import-from #:cl-harness/src/bench
+                #:run-benchmark-suite
+                #:format-suite-report)
   (:export #:fix
            #:bench
            #:not-implemented-error))
@@ -91,9 +94,58 @@ Returns the populated AGENT-STATE."
              state)
         (close-run-logger logger)))))
 
-(defun bench (&key suite condition model base-url mcp-url)
-  "Entry point for the `cl-harness bench' command (PRD §8.1 REQ-CLI-002).
+(defun bench (&key suite
+                   (conditions '(:generic-mcp))
+                   mcp-url
+                   base-url api-key model
+                   (temperature 0.0) (max-tokens 2048)
+                   log-dir)
+  "Run the benchmark suite at SUITE across each condition.
 
-Phase 0 validates inputs and signals NOT-IMPLEMENTED-ERROR."
-  (declare (ignore suite condition model base-url mcp-url))
-  (error 'not-implemented-error :command "bench"))
+SUITE is the path to a directory containing per-task subdirectories, each
+with a task.json and a fixture/ tree (PRD §8.11 REQ-BENCH-001). CONDITIONS
+defaults to (:generic-mcp); pass (:file-only :generic-mcp :runtime-native)
+to compare modes (REQ-BENCH-002). LLM credentials and the cl-mcp HTTP URL
+are resolved the same way as FIX (kwarg overrides CL_HARNESS_LLM_*).
+
+Returns the flat list of BENCH-RESULTs and prints a one-paragraph aggregate
+report plus per-task detail to *STANDARD-OUTPUT*."
+  (unless suite
+    (error "bench: :suite (path to a directory of tasks) is required"))
+  (let* ((effective-base-url
+          (or base-url
+              (uiop:getenv "CL_HARNESS_LLM_BASE_URL")
+              (error "bench: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
+         (effective-api-key
+          (or api-key
+              (uiop:getenv "CL_HARNESS_LLM_API_KEY")
+              (error "bench: :api-key or CL_HARNESS_LLM_API_KEY is required")))
+         (effective-model
+          (or model
+              (uiop:getenv "CL_HARNESS_LLM_MODEL")
+              (error "bench: :model or CL_HARNESS_LLM_MODEL is required")))
+         (provider (make-openai-provider
+                    :base-url effective-base-url
+                    :api-key effective-api-key
+                    :model effective-model
+                    :temperature temperature
+                    :max-tokens max-tokens))
+         (client (make-mcp-client
+                  (or mcp-url
+                      (uiop:getenv "CL_HARNESS_MCP_URL")
+                      "http://127.0.0.1:3001/mcp")))
+         (effective-log-dir
+          (or log-dir
+              (merge-pathnames
+               (format nil "cl-harness-bench-~A/" (get-universal-time))
+               (uiop:temporary-directory)))))
+    (ensure-directories-exist effective-log-dir)
+    (initialize-mcp client
+                    :client-name "cl-harness-bench"
+                    :client-version "0.0.1")
+    (let ((results (run-benchmark-suite suite provider client
+                                        :conditions conditions
+                                        :log-dir effective-log-dir)))
+      (format t "~A" (format-suite-report results))
+      (format t "~%Logs: ~A~%" effective-log-dir)
+      results)))

@@ -1,0 +1,8 @@
+{
+  "id": "000-smoke",
+  "description": "Phase 4 smoke task: smoke:add returns difference instead of sum.",
+  "system": "smoke",
+  "test-system": "smoke/tests",
+  "issue": "The smoke/tests::add-returns-sum rove test is failing. Read the test and the source, then fix the source so the test passes.",
+  "fixture-dir": "fixture"
+}

@@ -23,7 +23,8 @@
                "cl-harness/tests/action-test"
                "cl-harness/tests/policy-test"
                "cl-harness/tests/verify-test"
-               "cl-harness/tests/agent-test")
+               "cl-harness/tests/agent-test"
+               "cl-harness/tests/bench-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages

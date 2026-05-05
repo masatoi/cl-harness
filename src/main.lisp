@@ -61,9 +61,22 @@
                 #:agent-state-turn
                 #:agent-state-final-verify
                 #:agent-state-patch-count
+                #:agent-state-patch-attempts
                 #:agent-state-token-total
                 #:run-agent
                 #:format-final-report)
+  (:import-from #:cl-harness/src/bench
+                #:bench-task
+                #:bench-task-id
+                #:bench-result
+                #:bench-result-status
+                #:bench-result-success-p
+                #:load-bench-task
+                #:discover-tasks
+                #:run-benchmark-task
+                #:run-benchmark-suite
+                #:aggregate-results
+                #:format-suite-report)
   (:export #:fix
            #:bench
            #:run-config
@@ -107,8 +120,20 @@
            #:agent-state-turn
            #:agent-state-final-verify
            #:agent-state-patch-count
+           #:agent-state-patch-attempts
            #:agent-state-token-total
            #:run-agent
-           #:format-final-report))
+           #:format-final-report
+           #:bench-task
+           #:bench-task-id
+           #:bench-result
+           #:bench-result-status
+           #:bench-result-success-p
+           #:load-bench-task
+           #:discover-tasks
+           #:run-benchmark-task
+           #:run-benchmark-suite
+           #:aggregate-results
+           #:format-suite-report))
 
 (in-package #:cl-harness/src/main)
