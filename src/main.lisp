@@ -88,6 +88,14 @@
                 #:plan-step-files-to-modify
                 #:plan-development
                 #:planner-error)
+  (:import-from #:cl-harness/src/orchestrator
+                #:develop-step-result
+                #:develop-step-result-status
+                #:develop-step-result-step-index
+                #:develop-step-result-test-name
+                #:develop-step-result-run-config
+                #:develop-step-result-run-agent-state
+                #:execute-plan)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -173,6 +181,13 @@
            #:plan-step-files-to-modify
            #:plan-development
            #:planner-error
+           #:develop-step-result
+           #:develop-step-result-status
+           #:develop-step-result-step-index
+           #:develop-step-result-test-name
+           #:develop-step-result-run-config
+           #:develop-step-result-run-agent-state
+           #:execute-plan
            #:bench-task
            #:bench-task-id
            #:bench-result

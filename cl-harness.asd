@@ -29,7 +29,8 @@
                "cl-harness/tests/verify-test"
                "cl-harness/tests/agent-test"
                "cl-harness/tests/bench-test"
-               "cl-harness/tests/planner-test")
+               "cl-harness/tests/planner-test"
+               "cl-harness/tests/orchestrator-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
