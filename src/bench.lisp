@@ -17,15 +17,11 @@
 
 (defpackage #:cl-harness/src/bench
   (:use #:cl)
-  (:import-from #:alexandria
-                #:alist-hash-table)
   (:import-from #:cl-harness/src/config
                 #:make-run-config)
   (:import-from #:cl-harness/src/log
                 #:open-run-logger
                 #:close-run-logger)
-  (:import-from #:cl-harness/src/mcp
-                #:call-tool)
   (:import-from #:cl-harness/src/policy
                 #:make-tool-policy)
   (:import-from #:cl-harness/src/agent
@@ -185,25 +181,6 @@ the copied files so ASDF re-compiles correctly."
                       :output :string :error-output :string)
     dst))
 
-(defun %scope-asdf-to-sandbox (mcp-client sandbox system-name test-system-name)
-  "Restrict the agent worker's ASDF source-registry to SANDBOX only via
-repl-eval, then clear the named systems so cl-mcp's `load-system :force t'
-re-discovers them from inside the sandbox.
-
-Without this, ASDF's recursive scan of ~/.roswell/local-projects/ keeps
-returning the original (un-patched) benchmark fixture even though the
-agent has been told to operate against the sandbox copy."
-  (call-tool
-   mcp-client "repl-eval"
-   (alist-hash-table
-    `(("code"
-       . ,(format nil
-                  "(progn (asdf:initialize-source-registry '(:source-registry (:tree ~S) :ignore-inherited-configuration)) (asdf:clear-system :~A) (asdf:clear-system :~A) :ok)"
-                  (namestring sandbox)
-                  system-name
-                  test-system-name)))
-    :test 'equal)))
-
 (defun run-benchmark-task (task provider mcp-client condition
                            &key (log-dir (uiop:temporary-directory)))
   "Run one BENCH-TASK against PROVIDER + MCP-CLIENT under CONDITION.
@@ -236,39 +213,29 @@ status so a single broken task does not abort the whole suite (PRD §8.11)."
     (handler-case
         (let ((logger (open-run-logger transcript)))
           (unwind-protect
-               (progn
-                 (call-tool mcp-client "pool-kill-worker"
-                            (alist-hash-table '(("reset" . t))
-                                              :test 'equal))
-                 (%scope-asdf-to-sandbox mcp-client sandbox
-                                         (bench-task-system task)
-                                         (bench-task-test-system task))
-                 (let* ((rescope (lambda (client)
-                                   (%scope-asdf-to-sandbox
-                                    client sandbox
-                                    (bench-task-system task)
-                                    (bench-task-test-system task))))
-                        (state (run-agent config provider mcp-client policy
-                                          logger
-                                          :clean-verify-p t
-                                          :before-clean-verify-fn rescope)))
-                   (make-instance 'bench-result
-                                  :task task
-                                  :condition condition
-                                  :status (agent-state-status state)
-                                  :limit-hit (agent-state-limit-hit state)
-                                  :turns (agent-state-turn state)
-                                  :patches (agent-state-patch-count state)
-                                  :patch-attempts (agent-state-patch-attempts state)
-                                  :tool-call-count (agent-state-tool-call-count state)
-                                  :read-file-count (agent-state-read-file-count state)
-                                  :repl-eval-count (agent-state-repl-eval-count state)
-                                  :tokens (agent-state-token-total state)
-                                  :elapsed-ms
-                                  (* 1000.0
-                                     (/ (- (get-internal-real-time) start-time)
-                                        internal-time-units-per-second))
-                                  :transcript-path transcript)))
+               ;; pool-kill-worker + ASDF source-registry scoping is handled
+               ;; inside run-agent via :ISOLATE-ASDF-P (default T), and the
+               ;; clean-verify rescope is composed automatically.
+               (let ((state (run-agent config provider mcp-client policy
+                                       logger
+                                       :clean-verify-p t)))
+                 (make-instance 'bench-result
+                                :task task
+                                :condition condition
+                                :status (agent-state-status state)
+                                :limit-hit (agent-state-limit-hit state)
+                                :turns (agent-state-turn state)
+                                :patches (agent-state-patch-count state)
+                                :patch-attempts (agent-state-patch-attempts state)
+                                :tool-call-count (agent-state-tool-call-count state)
+                                :read-file-count (agent-state-read-file-count state)
+                                :repl-eval-count (agent-state-repl-eval-count state)
+                                :tokens (agent-state-token-total state)
+                                :elapsed-ms
+                                (* 1000.0
+                                   (/ (- (get-internal-real-time) start-time)
+                                      internal-time-units-per-second))
+                                :transcript-path transcript))
             (close-run-logger logger)))
       (error (c)
         (make-instance 'bench-result

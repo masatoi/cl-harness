@@ -36,6 +36,12 @@
   nil
   "Bound by each test to a function (BODY) -> response-body-string.")
 
+(defvar *mcp-isolation-tap*
+  nil
+  "Optional fn (BODY) called when an isolation request is short-circuited
+by the transport. Lets a test observe pool-kill-worker / repl-eval init
+scoping bodies without forcing every test handler to special-case them.")
+
 (defun %escape-json-string (s)
   "Return S as a JSON-escaped quoted string (e.g. \"foo\" -> \"\\\"foo\\\"\")."
   (with-output-to-string (out) (yason:encode s out)))
@@ -45,6 +51,16 @@
   (format nil
           "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":~A},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}"
           (%escape-json-string content)))
+
+(defun %isolation-body-p (body)
+  "T when BODY is one of the harness-internal calls run-agent emits when
+ISOLATE-ASDF-P is true: the pool-kill-worker reset and the
+repl-eval that runs asdf:initialize-source-registry on the new worker.
+Tests bypass the per-test *mcp-handler* for these so existing handlers
+do not have to special-case them."
+  (or (search "\"pool-kill-worker\"" body)
+      (and (search "\"repl-eval\"" body)
+           (search "initialize-source-registry" body))))
 
 (defun %llm-transport ()
   (lambda (url headers body)
@@ -56,7 +72,16 @@
 (defun %mcp-transport ()
   (lambda (url headers body)
     (declare (ignore url headers))
-    (values (funcall *mcp-handler* body) 200 (make-hash-table :test 'equal))))
+    (cond
+      ((%isolation-body-p body)
+       (when *mcp-isolation-tap* (funcall *mcp-isolation-tap* body))
+       (values (%ok-tool-result (%jsonrpc-id body))
+               200
+               (make-hash-table :test 'equal)))
+      (t
+       (values (funcall *mcp-handler* body)
+               200
+               (make-hash-table :test 'equal))))))
 
 (defun %jsonrpc-id (body)
   (gethash "id" (yason:parse body)))
@@ -644,3 +669,100 @@
          (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
     (ok (eq :give-up (agent-state-status state)))
     (ok (= 2 (agent-state-turn state)))))
+
+(deftest run-agent-isolate-asdf-p-default-scopes-worker-before-verify
+  ;; Next Action #1 from docs/notes/2026-05-06-qwen-smoke.md: cl-harness:fix
+  ;; must guarantee a clean worker + ASDF source-registry scoped to the
+  ;; project-root BEFORE the initial verify-task fires, so a stale `smoke'
+  ;; (or any system name) loaded from a previous run cannot answer the
+  ;; verify and silently drive the agent off-target.
+  (let* ((ordered '())
+         (record (lambda (b) (push b ordered)))
+         (*mcp-isolation-tap* record)
+         (*mcp-handler*
+          (lambda (body)
+            (funcall record body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 4 :failed 0))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider
+                    :transport (lambda (u h b)
+                                 (declare (ignore u h b))
+                                 (error "LLM should not be called when initial verify passes"))))
+         (policy (make-tool-policy :generic-mcp))
+         (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
+    (ok (eq :passed (agent-state-status state)))
+    (let* ((calls (reverse ordered))
+           (kill-idx (position-if
+                      (lambda (b) (search "\"pool-kill-worker\"" b)) calls))
+           (scope-idx (position-if
+                       (lambda (b) (and (search "\"repl-eval\"" b)
+                                        (search "initialize-source-registry" b)))
+                       calls))
+           (root-idx (position-if
+                      (lambda (b) (search "\"fs-set-project-root\"" b)) calls))
+           (load-idx (position-if
+                      (lambda (b) (search "\"load-system\"" b)) calls)))
+      (ok kill-idx "harness invoked pool-kill-worker")
+      (ok scope-idx "harness invoked repl-eval with initialize-source-registry")
+      (ok root-idx "harness invoked fs-set-project-root")
+      (ok load-idx "harness invoked load-system")
+      (when (and kill-idx scope-idx root-idx load-idx)
+        (ok (< kill-idx scope-idx) "pool-kill precedes scope")
+        (ok (< scope-idx root-idx) "scope precedes fs-set-project-root")
+        (ok (< root-idx load-idx) "fs-set-project-root precedes load-system"))
+      (when scope-idx
+        (let ((scope-body (nth scope-idx calls)))
+          (ok (search "/tmp/proj" scope-body)
+              "scope repl-eval references project-root path")
+          (ok (search "demo" scope-body)
+              "scope repl-eval references the system name")
+          (ok (search "demo/tests" scope-body)
+              "scope repl-eval references the test-system name"))))))
+
+(deftest run-agent-isolate-asdf-p-nil-skips-scoping
+  ;; Opt-out path. With :isolate-asdf-p NIL the harness must not emit any
+  ;; initialize-source-registry repl-eval, and fs-set-project-root must
+  ;; precede every other recorded call.
+  (let* ((ordered '())
+         (saw-scope nil)
+         (*mcp-isolation-tap*
+          (lambda (body)
+            (when (and (search "\"repl-eval\"" body)
+                       (search "initialize-source-registry" body))
+              (setf saw-scope t))))
+         (*mcp-handler*
+          (lambda (body)
+            (push body ordered)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 4 :failed 0))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider
+                    :transport (lambda (u h b)
+                                 (declare (ignore u h b))
+                                 (error "LLM should not be called when initial verify passes"))))
+         (policy (make-tool-policy :generic-mcp))
+         (path (%temp-log-path)))
+    (unwind-protect
+         (let* ((logger (open-run-logger path))
+                (state (cl-harness/src/agent:run-agent
+                        (%make-config) provider mcp policy logger
+                        :isolate-asdf-p nil)))
+           (cl-harness/src/log:close-run-logger logger)
+           (ok (eq :passed (agent-state-status state)))
+           (ok (not saw-scope)
+               "harness must not scope ASDF when isolate-asdf-p is NIL")
+           (let ((first-non-isolation (first (last ordered))))
+             (ok (search "\"fs-set-project-root\"" first-non-isolation)
+                 "first non-isolation MCP call is fs-set-project-root")))
+      (when (probe-file path) (delete-file path)))))

@@ -70,7 +70,8 @@
                 #:verify-result-load
                 #:verify-result-success-p
                 #:verify-task
-                #:clean-verify-task)
+                #:clean-verify-task
+                #:scope-asdf-to-project)
   (:export #:agent-state
            #:agent-state-turn
            #:agent-state-status
@@ -781,7 +782,8 @@ the loop should continue, otherwise a terminal status keyword
 (defun run-agent (config provider mcp-client policy logger
                   &key (clean-verify-p t)
                        dry-run-p
-                       before-clean-verify-fn)
+                       before-clean-verify-fn
+                       (isolate-asdf-p t))
   "Execute the basic Phase 2 fix loop with a Phase 3 clean-verify safety net.
 
 CONFIG is a RUN-CONFIG. PROVIDER is an OPENAI-COMPATIBLE-PROVIDER (or any
@@ -805,14 +807,48 @@ ever touching the project. Auto-reverify after a stubbed patch is also
 skipped (no real change to verify). Useful for prompt iteration without
 burning MCP turnaround.
 
+ISOLATE-ASDF-P (default T) is the clean-room switch. When true, on entry
+RUN-AGENT (1) calls pool-kill-worker :reset t to discard any state left
+over from a previous run, (2) restricts the new worker's ASDF
+source-registry to the project-root via SCOPE-ASDF-TO-PROJECT, and (3)
+re-applies the same scope inside the clean-verify pool-kill (composing
+with any user-supplied BEFORE-CLEAN-VERIFY-FN). Required for
+`cl-harness:fix' to be honest when the worker has previously loaded a
+same-named system from a different directory; benchmark callers get the
+same guarantee for free.
+
 Limits enforcement (PRD §8.4 REQ-AGENT-003): all seven RUN-LIMITS
 slots are now checked at every turn boundary (max-turns / max-tool-calls
 / max-patches / max-read-files / max-repl-evals /
 max-wall-clock-seconds / max-action-parse-errors). On exceeding any of
 them STATE's STATUS becomes :LIMIT-EXHAUSTED and LIMIT-HIT names the
 offending slot."
-  (let ((state (make-instance 'agent-state)))
+  (let ((state (make-instance 'agent-state))
+        (effective-before-clean-verify-fn before-clean-verify-fn))
     (setf (agent-state-started-at state) (now))
+    (when isolate-asdf-p
+      ;; Clean-room the worker before the initial verify-task fires:
+      ;; (1) discard any leftover REPL/system state from a prior run,
+      ;; (2) restrict the worker's ASDF source-registry to PROJECT-ROOT.
+      ;; Without this `(asdf:find-system "<system>")' may resolve to a
+      ;; same-named .asd elsewhere in ~/.roswell/local-projects/ — a copy
+      ;; the agent's patches will never reach.
+      (call-tool mcp-client "pool-kill-worker"
+                 (alist-hash-table '(("reset" . t)) :test 'equal))
+      (scope-asdf-to-project mcp-client
+                             (run-config-project-root config)
+                             (run-config-system config)
+                             (run-config-test-system config))
+      ;; Clean-verify spawns a fresh worker that loses the scope above,
+      ;; so re-apply it (composing with any caller-supplied callback).
+      (let ((user-fn before-clean-verify-fn))
+        (setf effective-before-clean-verify-fn
+              (lambda (client)
+                (scope-asdf-to-project client
+                                       (run-config-project-root config)
+                                       (run-config-system config)
+                                       (run-config-test-system config))
+                (when user-fn (funcall user-fn client))))))
     (call-tool mcp-client "fs-set-project-root"
                (alist-hash-table
                 `(("path" . ,(princ-to-string
@@ -835,7 +871,7 @@ offending slot."
           (emit-run-end
            (finalize-passed state mcp-client config logger initial nil
                             :clean-verify-p clean-verify-p
-                            :before-clean-verify-fn before-clean-verify-fn)
+                            :before-clean-verify-fn effective-before-clean-verify-fn)
            logger)))
       (let ((messages (list (make-chat-message "system" (system-prompt policy))
                             (make-chat-message
@@ -855,7 +891,7 @@ offending slot."
                             (finalize-passed state mcp-client config logger
                                              verify action
                                              :clean-verify-p clean-verify-p
-                                             :before-clean-verify-fn before-clean-verify-fn))
+                                             :before-clean-verify-fn effective-before-clean-verify-fn))
                            (:give-up
                             (finalize state :give-up :action action)))
                          logger)))

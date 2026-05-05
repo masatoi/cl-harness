@@ -24,7 +24,8 @@
            #:verify-result-success-p
            #:parse-verify-result
            #:verify-task
-           #:clean-verify-task))
+           #:clean-verify-task
+           #:scope-asdf-to-project))
 
 (in-package #:cl-harness/src/verify)
 
@@ -95,6 +96,28 @@ masking the underlying failure."
                            :test 'equal))
                (test-result (call-tool client "run-tests" test-args)))
           (parse-verify-result load-result test-result)))))
+
+(defun scope-asdf-to-project (client project-root system-name test-system-name)
+  "Restrict the cl-mcp worker's ASDF source-registry to PROJECT-ROOT only,
+then forget any cached SYSTEM-NAME / TEST-SYSTEM-NAME so the next
+load-system :force t resolves them from inside PROJECT-ROOT.
+
+The default ASDF registry recursively scans ~/.roswell/local-projects/ and
+will happily return a same-named .asd from a previous benchmark sandbox or
+fixture copy, masking edits the agent has just made under PROJECT-ROOT.
+Both `cl-harness:fix' (via run-agent's :isolate-asdf-p) and
+`cl-harness:bench' (via the per-task setup and the clean-verify rescope
+callback) lean on this to keep the verification path honest."
+  (call-tool
+   client "repl-eval"
+   (alist-hash-table
+    `(("code"
+       . ,(format nil
+                  "(progn (asdf:initialize-source-registry '(:source-registry (:tree ~S) :ignore-inherited-configuration)) (asdf:clear-system :~A) (asdf:clear-system :~A) :ok)"
+                  (namestring project-root)
+                  system-name
+                  test-system-name)))
+    :test 'equal)))
 
 (defun clean-verify-task (client config &key before-load-fn)
   "Run verification on a freshly spawned cl-mcp worker (PRD §8.9
