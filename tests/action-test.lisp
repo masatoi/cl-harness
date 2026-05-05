@@ -38,6 +38,46 @@
     (ok (hash-table-p (agent-action-arguments a)))
     (ok (zerop (hash-table-count (agent-action-arguments a))))))
 
+(deftest parse-action-tool-call-tolerates-flat-args
+  ;; Qwen3.6 occasionally emits the call payload at the top level
+  ;; instead of nesting it under "arguments". Without tolerance every
+  ;; such call lands at cl-mcp with an empty argument hash and trips
+  ;; "path is required". Treat any envelope key other than
+  ;; type/tool/thought/arguments as an implicit argument.
+  (let ((a (parse-action
+            "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"path\":\"/tmp/foo\",\"collapsed\":true,\"name_pattern\":\"^add\"}")))
+    (ok (eq :tool-call (agent-action-type a)))
+    (ok (equal "lisp-read-file" (agent-action-tool a)))
+    (let ((args (agent-action-arguments a)))
+      (ok (hash-table-p args))
+      (ok (= 3 (hash-table-count args)))
+      (ok (equal "/tmp/foo" (gethash "path" args)))
+      (ok (eq t (gethash "collapsed" args)))
+      (ok (equal "^add" (gethash "name_pattern" args))))))
+
+(deftest parse-action-tool-call-flat-args-preserves-envelope-fields
+  ;; Envelope fields (type / tool / thought) must NOT leak into the
+  ;; argument hash even though they sit at the same JSON level.
+  (let ((a (parse-action
+            "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"thought\":\"reading the source\",\"path\":\"/x\"}")))
+    (let ((args (agent-action-arguments a)))
+      (ok (= 1 (hash-table-count args)))
+      (ok (equal "/x" (gethash "path" args)))
+      (ok (null (gethash "type" args)))
+      (ok (null (gethash "tool" args)))
+      (ok (null (gethash "thought" args))))
+    (ok (equal "reading the source" (agent-action-thought a)))))
+
+(deftest parse-action-tool-call-explicit-arguments-beats-flat
+  ;; If both shapes are present the explicit nested object wins; flat
+  ;; siblings are ignored. (No real model sends both, but the rule
+  ;; keeps the schema unambiguous.)
+  (let ((a (parse-action
+            "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"/from-nested\"},\"path\":\"/from-flat\"}")))
+    (let ((args (agent-action-arguments a)))
+      (ok (equal "/from-nested" (gethash "path" args)))
+      (ok (= 1 (hash-table-count args))))))
+
 (deftest parse-action-finish-fixed
   (let ((a (parse-action
             "{\"type\":\"finish\",\"status\":\"fixed\",\"summary\":\"green\"}")))

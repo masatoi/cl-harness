@@ -8,6 +8,12 @@
 ;;;;   {"type":"finish","status":"fixed"|"give_up","summary":"..."}
 ;;;; Markdown code fences (```...```) emitted by chat models are stripped
 ;;;; transparently before JSON decoding.
+;;;;
+;;;; Tool-call payloads also accept a flat layout (every key other than
+;;;; the envelope fields counted as an implicit argument) — Qwen3 MoE
+;;;; models occasionally emit that shape even at temperature 0; see
+;;;; docs/notes/2026-05-06-qwen-smoke.md. Explicit "arguments" wins
+;;;; when both forms are present.
 
 (defpackage #:cl-harness/src/action
   (:use #:cl)
@@ -69,6 +75,23 @@ is also dropped. TEXT without fences is returned unchanged."
               (subseq inner (1+ nl))
               inner)))))
 
+(defparameter +envelope-keys+
+  '("type" "tool" "thought" "arguments" "status" "summary")
+  "Top-level action-envelope keys that must NOT be treated as implicit
+arguments when the LLM emits a flat tool_call payload (no nested
+\"arguments\" object).")
+
+(defun %extract-flat-arguments (parsed)
+  "Return a fresh hash-table of every PARSED key not in +ENVELOPE-KEYS+.
+Used when the LLM emits the tool's parameters at the same JSON level
+as type/tool/thought instead of nesting them under \"arguments\"."
+  (let ((args (make-hash-table :test 'equal)))
+    (maphash (lambda (k v)
+               (unless (member k +envelope-keys+ :test #'equal)
+                 (setf (gethash k args) v)))
+             parsed)
+    args))
+
 (defun parse-action (text)
   "Parse TEXT (raw or fenced JSON) into an AGENT-ACTION.
 
@@ -99,7 +122,7 @@ declares an unknown TYPE, or is missing a required field for its variant."
            (make-instance 'agent-action
                           :type :tool-call
                           :tool tool
-                          :arguments (or args (make-hash-table :test 'equal))
+                          :arguments (or args (%extract-flat-arguments parsed))
                           :thought (and (stringp thought) thought)
                           :raw parsed)))
         ((equal type "finish")
