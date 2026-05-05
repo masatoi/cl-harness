@@ -31,7 +31,10 @@
   (:import-from #:cl-harness/src/log
                 #:log-event)
   (:import-from #:cl-harness/src/mcp
-                #:call-tool)
+                #:call-tool
+                #:mcp-error
+                #:mcp-error-code
+                #:mcp-error-message)
   (:import-from #:cl-harness/src/model
                 #:complete-chat
                 #:make-chat-message
@@ -68,6 +71,7 @@
            #:agent-state-patch-count
            #:run-agent
            #:format-final-report
+           #:summarize-tool-result
            #:+source-mutating-tools+))
 
 (in-package #:cl-harness/src/agent)
@@ -161,6 +165,31 @@ by cl-mcp's run-tests tool."
                (incf seen))
              failed-tests)))))
 
+(defun verify-detail-prose (verify-result)
+  "Return a string detailing failed_tests and/or load failure text from
+VERIFY-RESULT, or NIL when no such detail is available. Shared between
+the initial-user-prompt and post-patch verify-fail message so the LLM
+sees the same level of detail in both."
+  (let* ((tr (verify-result-test verify-result))
+         (failed (and tr (gethash "failed_tests" tr)))
+         (has-failed (and failed
+                          (or (and (vectorp failed) (plusp (length failed)))
+                              (and (listp failed) failed))))
+         (lr (and (eq :load-failed (verify-result-status verify-result))
+                  (verify-result-load verify-result)))
+         (content (and lr (gethash "content" lr)))
+         (load-text
+          (when (and content (or (vectorp content) (listp content))
+                     (plusp (length content)))
+            (let ((first (elt content 0)))
+              (and (hash-table-p first) (gethash "text" first))))))
+    (when (or has-failed load-text)
+      (with-output-to-string (s)
+        (when has-failed
+          (format s "Failing tests:~%~A" (format-failed-tests failed)))
+        (when load-text
+          (format s "Load failure detail:~%~A~%" load-text))))))
+
 (defun initial-user-prompt (config verify-result)
   "Return the first USER message that gives the LLM the project context
 and the initial verification snapshot."
@@ -170,27 +199,78 @@ and the initial verification snapshot."
     (format s "Test system: ~A~%" (run-config-test-system config))
     (format s "Issue: ~A~%~%" (run-config-issue config))
     (format s "Initial verification: ~A~%" (verify-summary verify-result))
-    (let* ((tr (verify-result-test verify-result))
-           (failed (and tr (gethash "failed_tests" tr))))
-      (when (and failed (or (and (vectorp failed) (plusp (length failed)))
-                            (and (listp failed) failed)))
-        (format s "~%Failing tests:~%~A"
-                (format-failed-tests failed))))
-    (when (eq :load-failed (verify-result-status verify-result))
-      (let* ((lr (verify-result-load verify-result))
-             (content (and lr (gethash "content" lr))))
-        (format s "~%Load failure detail:~%~A~%"
-                (or (when (and content (or (vectorp content) (listp content))
-                               (plusp (length content)))
-                      (let ((first (elt content 0)))
-                        (and (hash-table-p first)
-                             (gethash "text" first))))
-                    "(no detail)"))))))
+    (let ((detail (verify-detail-prose verify-result)))
+      (when detail
+        (format s "~%~A" detail)))))
 
-(defun tool-result-as-json (result)
-  "Encode an MCP tools/call RESULT hash-table as a JSON string for the LLM."
+(defun extract-content-text (result)
+  "Pull the first text content block out of an MCP tools/call RESULT.
+Returns the text or NIL when none is present."
+  (let ((content (and (hash-table-p result) (gethash "content" result))))
+    (when (and content (or (vectorp content) (listp content))
+               (plusp (length content)))
+      (let ((first (elt content 0)))
+        (and (hash-table-p first) (gethash "text" first))))))
+
+(defun summarize-run-tests (result)
+  "Compact summary of a run-tests tools/call RESULT, including up to a few
+failed_tests entries when present (PRD §10.3 SUMMARIZE-TOOL-RESULT)."
   (with-output-to-string (s)
-    (yason:encode (or result (make-hash-table :test 'equal)) s)))
+    (let ((passed (gethash "passed" result))
+          (failed (gethash "failed" result))
+          (failed-tests (gethash "failed_tests" result)))
+      (format s "passed: ~A, failed: ~A~%"
+              (or passed "?") (or failed "?"))
+      (when (and failed-tests
+                 (or (and (vectorp failed-tests) (plusp (length failed-tests)))
+                     (and (listp failed-tests) failed-tests)))
+        (format s "~A" (format-failed-tests failed-tests))))))
+
+(defun summarize-repl-eval (result)
+  "Compact summary of a repl-eval tools/call RESULT.
+Pulls the human-readable content text and the first error_context message
+when present, ignoring large stack-frame payloads by default."
+  (with-output-to-string (s)
+    (let ((text (extract-content-text result))
+          (err (gethash "error_context" result)))
+      (when (and text (plusp (length text)))
+        (format s "~A~%" text))
+      (when (hash-table-p err)
+        (format s "error: ~A: ~A~%"
+                (or (gethash "condition_type" err) "<unknown>")
+                (or (gethash "message" err) ""))))))
+
+(defun default-tool-result-summary (result)
+  "Fallback summary when no tool-specific summarizer is registered.
+Surfaces the isError flag plus the first content text block; falls back
+to a JSON dump only when no content text is present."
+  (with-output-to-string (s)
+    (when (and (hash-table-p result) (gethash "isError" result))
+      (format s "ERROR. "))
+    (let ((text (extract-content-text result)))
+      (cond
+        ((and text (plusp (length text)))
+         (format s "~A" text))
+        (t (yason:encode (or result (make-hash-table :test 'equal)) s))))))
+
+(defun summarize-tool-result (tool-name result)
+  "Return a compact human-readable summary of the MCP tools/call RESULT
+hash-table for TOOL-NAME (PRD §10.3 SUMMARIZE-TOOL-RESULT).
+
+Specialized summarizers exist for the high-volume tools (run-tests,
+repl-eval) and the read-only probes (code-find, code-describe,
+inspect-object, lisp-read-file). Unknown tools fall through to a
+generic content/isError dump."
+  (cond
+    ((null result) "(no result)")
+    ((equal tool-name "run-tests") (summarize-run-tests result))
+    ((equal tool-name "repl-eval") (summarize-repl-eval result))
+    ((member tool-name
+             '("code-find" "code-describe" "code-find-references"
+               "inspect-object" "lisp-read-file" "clgrep-search")
+             :test #'equal)
+     (or (extract-content-text result) "(empty)"))
+    (t (default-tool-result-summary result))))
 
 (defun verify-event-payload (turn verify-result)
   "Return an alist describing VERIFY-RESULT for the JSONL transcript."
@@ -272,16 +352,37 @@ the loop should continue, or a terminal status keyword."
                                 tool (policy-mode policy)))
         nil nil nil))
       (t
-       (let ((result (call-tool mcp-client tool
-                                (or (agent-action-arguments action)
-                                    (make-hash-table :test 'equal)))))
+       (let ((result
+              (handler-case
+                  (call-tool mcp-client tool
+                             (or (agent-action-arguments action)
+                                 (make-hash-table :test 'equal)))
+                (mcp-error (c)
+                  (log-event logger :tool-error
+                             `(("turn" . ,turn) ("tool" . ,tool)
+                               ("code" . ,(mcp-error-code c))
+                               ("message" . ,(mcp-error-message c))))
+                  ;; Synthesize an MCP-style error result so downstream
+                  ;; logic (summarizer, isError-aware logging) keeps working.
+                  (alist-hash-table
+                   `(("isError" . t)
+                     ("content"
+                      . ,(vector
+                          (alist-hash-table
+                           `(("type" . "text")
+                             ("text"
+                              . ,(format nil "MCP error ~A: ~A"
+                                         (mcp-error-code c)
+                                         (mcp-error-message c))))
+                           :test 'equal))))
+                   :test 'equal)))))
          (log-event logger :tool-result
                     `(("turn" . ,turn) ("tool" . ,tool)
                       ("is_error" . ,(and (gethash "isError" result) t))))
          (let ((next (append-message
                       messages "user"
                       (format nil "Tool ~A result:~%~A"
-                              tool (tool-result-as-json result)))))
+                              tool (summarize-tool-result tool result)))))
            (cond
              ((member tool +source-mutating-tools+ :test #'equal)
               (incf (agent-state-patch-count state))
@@ -289,11 +390,13 @@ the loop should continue, or a terminal status keyword."
                 (log-event logger :verify (verify-event-payload turn v))
                 (if (verify-result-success-p v)
                     (values next :passed v action)
-                    (values (append-message
-                             next "user"
-                             (format nil "Verify after patch: ~A"
-                                     (verify-summary v)))
-                            nil nil nil))))
+                    (let* ((detail (verify-detail-prose v))
+                           (msg (with-output-to-string (s)
+                                  (format s "Verify after patch: ~A~%"
+                                          (verify-summary v))
+                                  (when detail (format s "~A" detail)))))
+                      (values (append-message next "user" msg)
+                              nil nil nil)))))
              (t (values next nil nil nil)))))))))
 
 (defun step-turn (turn state config provider mcp-client policy logger messages)

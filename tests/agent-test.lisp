@@ -23,7 +23,8 @@
                 #:agent-state-status
                 #:agent-state-turn
                 #:agent-state-patch-count
-                #:run-agent))
+                #:run-agent
+                #:summarize-tool-result))
 
 (in-package #:cl-harness/tests/agent-test)
 
@@ -190,6 +191,145 @@
          (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
     (ok (eq :dirty-only (agent-state-status state)))
     (ok (= 1 (agent-state-patch-count state)))))
+
+(deftest run-agent-feeds-failed-tests-detail-on-reverify-failure
+  (let* ((run-tests-count 0)
+         (llm-bodies (list))
+         (*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"old_text\":\"a\",\"new_text\":\"b\"}}"
+                "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"giving up\"}"))
+         (llm-transport
+          (lambda (url headers body)
+            (declare (ignore url headers))
+            (push body llm-bodies)
+            (let ((content (or (pop *llm-responses*)
+                               "{\"type\":\"finish\",\"status\":\"give_up\"}")))
+              (values (%llm-body content) 200
+                      (make-hash-table :test 'equal)))))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (incf run-tests-count)
+                 (cond
+                   ((= run-tests-count 1)
+                    ;; Initial verify: just summary, no failed_tests.
+                    (%ok-tool-result id :passed 0 :failed 1))
+                   (t
+                    ;; Reverify after patch: include failed_tests array.
+                    (format nil
+                            "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{\"isError\":false,\"content\":[],\"passed\":0,\"failed\":1,\"failed_tests\":[{\"test_name\":\"sample-test\",\"description\":\"f should return 2\",\"reason\":\"got 3 instead\",\"form\":\"(= (f) 2)\"}]}}"
+                            id))))
+                ((search "\"lisp-patch-form\"" body) (%ok-tool-result id))
+                ((search "\"pool-kill-worker\"" body) (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider :transport llm-transport))
+         (policy (make-tool-policy :generic-mcp))
+         (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
+    (ok (eq :give-up (agent-state-status state)))
+    (let* ((second-call-body (second (reverse llm-bodies)))
+           (parsed (yason:parse second-call-body))
+           (messages (gethash "messages" parsed))
+           (msg-list (coerce messages 'list))
+           (last-user (find-if (lambda (m) (equal "user" (gethash "role" m)))
+                               (reverse msg-list)))
+           (content (and last-user (gethash "content" last-user))))
+      (ok (stringp content))
+      (ok (search "Verify after patch:" content))
+      (ok (search "Failing tests:" content))
+      (ok (search "sample-test" content))
+      (ok (search "got 3 instead" content)))))
+
+(deftest summarize-tool-result-run-tests-includes-failed-tests
+  (let* ((failed (vector
+                  (alexandria:alist-hash-table
+                   '(("test_name" . "t1")
+                     ("description" . "x should be 2")
+                     ("reason" . "got 3")
+                     ("form" . "(= (f) 2)"))
+                   :test 'equal)))
+         (result (alexandria:alist-hash-table
+                  `(("isError" . nil)
+                    ("passed" . 0)
+                    ("failed" . 1)
+                    ("failed_tests" . ,failed))
+                  :test 'equal))
+         (s (summarize-tool-result "run-tests" result)))
+    (ok (search "passed: 0" s))
+    (ok (search "failed: 1" s))
+    (ok (search "t1" s))
+    (ok (search "got 3" s))))
+
+(deftest summarize-tool-result-repl-eval-extracts-content-and-error
+  (let* ((content (vector (alexandria:alist-hash-table
+                           '(("type" . "text") ("text" . "=> 42"))
+                           :test 'equal)))
+         (err (alexandria:alist-hash-table
+               '(("condition_type" . "TYPE-ERROR")
+                 ("message" . "expected number got string"))
+               :test 'equal))
+         (result (alexandria:alist-hash-table
+                  `(("isError" . nil)
+                    ("content" . ,content)
+                    ("error_context" . ,err))
+                  :test 'equal))
+         (s (summarize-tool-result "repl-eval" result)))
+    (ok (search "=> 42" s))
+    (ok (search "TYPE-ERROR" s))
+    (ok (search "expected number got string" s))))
+
+(deftest summarize-tool-result-probe-tools-extract-content-text
+  (let* ((content (vector (alexandria:alist-hash-table
+                           '(("type" . "text")
+                             ("text" . "(defun foo (x) ...)"))
+                           :test 'equal)))
+         (result (alexandria:alist-hash-table
+                  `(("isError" . nil) ("content" . ,content))
+                  :test 'equal)))
+    (dolist (tool '("code-find" "code-describe" "code-find-references"
+                    "inspect-object" "lisp-read-file" "clgrep-search"))
+      (let ((s (summarize-tool-result tool result)))
+        (ok (search "(defun foo (x) ...)" s))))))
+
+(deftest summarize-tool-result-default-marks-error-flag
+  (let* ((content (vector (alexandria:alist-hash-table
+                           '(("type" . "text") ("text" . "boom"))
+                           :test 'equal)))
+         (result (alexandria:alist-hash-table
+                  `(("isError" . t) ("content" . ,content))
+                  :test 'equal))
+         (s (summarize-tool-result "lisp-patch-form" result)))
+    (ok (search "ERROR" s))
+    (ok (search "boom" s))))
+
+(deftest run-agent-survives-mcp-error-and-feeds-it-back
+  (let* ((*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"name_pattern\":\"add\"}}"
+                "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"out of ideas\"}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-read-file\"" body)
+                 (format nil
+                         "{\"jsonrpc\":\"2.0\",\"id\":~A,\"error\":{\"code\":-32602,\"message\":\"path is required\"}}"
+                         id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
+    (testing "agent does not crash on a JSON-RPC error response"
+      (ok (eq :give-up (cl-harness/src/agent:agent-state-status state)))
+      (ok (= 2 (cl-harness/src/agent:agent-state-turn state))))))
 
 (deftest run-agent-records-give-up-when-llm-finishes
   (let* ((*llm-responses*
