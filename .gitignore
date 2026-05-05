@@ -24,3 +24,5 @@ claudedocs/
 
 # AI agent working documents (designs, plans, reports)
 docs/plans/
+
+.envrc.local
