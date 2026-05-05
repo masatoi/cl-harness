@@ -331,6 +331,39 @@
       (ok (eq :give-up (cl-harness/src/agent:agent-state-status state)))
       (ok (= 2 (cl-harness/src/agent:agent-state-turn state))))))
 
+(deftest run-agent-skips-auto-reverify-on-failed-patch
+  (let* ((run-tests-count 0)
+         (*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"old_text\":\"a\",\"new_text\":\"b\"}}"
+                "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"giving up\"}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (incf run-tests-count)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-patch-form\"" body)
+                 ;; Patch came back with isError=true — source was NOT modified.
+                 (format nil
+                         "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"form not found\"}]}}"
+                         id))
+                ((search "\"pool-kill-worker\"" body) (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
+    (testing "patch attempt is counted, but successful applies stay zero"
+      (ok (= 1 (cl-harness/src/agent:agent-state-patch-attempts state)))
+      (ok (zerop (cl-harness/src/agent:agent-state-patch-count state))))
+    (testing "run-tests is invoked only for the initial verify, not auto-reverify"
+      (ok (= 1 run-tests-count)))
+    (testing "agent terminates cleanly after the LLM gives up"
+      (ok (eq :give-up (cl-harness/src/agent:agent-state-status state))))))
+
 (deftest run-agent-records-give-up-when-llm-finishes
   (let* ((*llm-responses*
           (list "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"stuck\"}"))

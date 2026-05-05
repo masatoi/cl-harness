@@ -69,6 +69,7 @@
            #:agent-state-final-action
            #:agent-state-token-total
            #:agent-state-patch-count
+           #:agent-state-patch-attempts
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -86,10 +87,55 @@
    (final-verify :initform nil :accessor agent-state-final-verify)
    (final-action :initform nil :accessor agent-state-final-action)
    (token-total :initform 0 :accessor agent-state-token-total)
-   (patch-count :initform 0 :accessor agent-state-patch-count))
+   (patch-count :initform 0 :accessor agent-state-patch-count
+                :documentation "Number of source-mutating tool calls that
+returned isError=false (i.e. patches actually applied).")
+   (patch-attempts :initform 0 :accessor agent-state-patch-attempts
+                   :documentation "Number of source-mutating tool calls,
+including failures, so the metric distinguishes \"tried\" from \"applied\"."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
 
 ;; --- Stub ---------------------------------------------------------------
+
+(defun tool-schema-hints (policy)
+  "Return tool argument hints for the high-pain tools POLICY permits.
+
+The first real-LLM smoke run (transcript 2026-05-05) burned 12 turns
+on argument-shape guessing for lisp-patch-form / lisp-edit-form. These
+hints surface the required keys and the FORM_TYPE-vs-English-word trap
+inline in the system prompt so the LLM can compose correct calls on
+turn 1."
+  (with-output-to-string (s)
+    (when (or (allowed-tool-p policy "lisp-patch-form")
+              (allowed-tool-p policy "lisp-edit-form"))
+      (format s "~%Tool argument schemas (required ⊕ optional keys):~%"))
+    (when (allowed-tool-p policy "lisp-patch-form")
+      (format s "  - lisp-patch-form: file_path, form_type, form_name, old_text, new_text.~%")
+      (format s "      form_type uses Lisp form names like \"defun\", \"defmacro\",~%")
+      (format s "      \"defmethod\", \"defclass\" — NOT generic English words like \"function\".~%")
+      (format s "      For defmethod, include specializers in form_name,~%")
+      (format s "      e.g. \"my-method ((obj my-class))\". old_text must match the form exactly once.~%"))
+    (when (allowed-tool-p policy "lisp-edit-form")
+      (format s "  - lisp-edit-form: file_path, form_type, form_name, operation ⊕ content.~%")
+      (format s "      operation ∈ {\"replace\", \"insert_before\", \"insert_after\", \"delete\"}.~%")
+      (format s "      For replace and insert_*, content is required and must contain exactly~%")
+      (format s "      ONE top-level form (e.g. the full \"(defun ...)\" wrapper).~%"))
+    (when (allowed-tool-p policy "lisp-read-file")
+      (format s "  - lisp-read-file: path ⊕ collapsed (default true), name_pattern, content_pattern.~%")
+      (format s "      Prefer collapsed=true with name_pattern=\"^my-fn$\" for targeted reads.~%"))
+    (when (allowed-tool-p policy "lisp-check-parens")
+      (format s "  - lisp-check-parens: path or code (mutually exclusive).~%"))
+    (when (or (allowed-tool-p policy "fs-read-file")
+              (allowed-tool-p policy "fs-list-directory"))
+      (format s "  - fs-read-file / fs-list-directory: path (absolute, inside project root).~%"))
+    (when (or (allowed-tool-p policy "load-system")
+              (allowed-tool-p policy "run-tests"))
+      (format s "  - load-system / run-tests: system (ASDF system name string,~%")
+      (format s "      e.g. \"my-project\" or \"my-project/tests\").~%"))
+    (when (allowed-tool-p policy "repl-eval")
+      (format s "  - repl-eval: code (string of one or more forms) ⊕ package, timeout_seconds.~%"))
+    (when (allowed-tool-p policy "clgrep-search")
+      (format s "  - clgrep-search: pattern ⊕ path, form_types, include_form, limit.~%"))))
 
 (defun system-prompt (policy)
   "Return the per-mode system prompt naming the JSON action schema, the
@@ -127,7 +173,8 @@ tests by editing source files via cl-mcp tools.~%~%")
        (format s "  Use only the tools listed below; emit a finish action when done.~%~%")))
     (format s "Allowed tools (call them by exact name):~%")
     (dolist (tool (policy-allowed-tools policy))
-      (format s "  - ~A~%" tool))))
+      (format s "  - ~A~%" tool))
+    (format s "~A" (tool-schema-hints policy))))
 
 (defun verify-summary (verify-result)
   "Return a short human-readable summary of VERIFY-RESULT."
@@ -385,18 +432,26 @@ the loop should continue, or a terminal status keyword."
                               tool (summarize-tool-result tool result)))))
            (cond
              ((member tool +source-mutating-tools+ :test #'equal)
-              (incf (agent-state-patch-count state))
-              (let ((v (verify-task mcp-client config)))
-                (log-event logger :verify (verify-event-payload turn v))
-                (if (verify-result-success-p v)
-                    (values next :passed v action)
-                    (let* ((detail (verify-detail-prose v))
-                           (msg (with-output-to-string (s)
-                                  (format s "Verify after patch: ~A~%"
-                                          (verify-summary v))
-                                  (when detail (format s "~A" detail)))))
-                      (values (append-message next "user" msg)
-                              nil nil nil)))))
+              (incf (agent-state-patch-attempts state))
+              (cond
+                ;; Patch attempt that the MCP server rejected (e.g. wrong
+                ;; arg shape, form not found) — don't auto-reverify, the
+                ;; source was not modified.
+                ((gethash "isError" result)
+                 (values next nil nil nil))
+                (t
+                 (incf (agent-state-patch-count state))
+                 (let ((v (verify-task mcp-client config)))
+                   (log-event logger :verify (verify-event-payload turn v))
+                   (if (verify-result-success-p v)
+                       (values next :passed v action)
+                       (let* ((detail (verify-detail-prose v))
+                              (msg (with-output-to-string (s)
+                                     (format s "Verify after patch: ~A~%"
+                                             (verify-summary v))
+                                     (when detail (format s "~A" detail)))))
+                         (values (append-message next "user" msg)
+                                 nil nil nil)))))))
              (t (values next nil nil nil)))))))))
 
 (defun step-turn (turn state config provider mcp-client policy logger messages)
@@ -497,7 +552,9 @@ transcript path. Used by the CLI to print a closing report."
     (format s "== cl-harness fix report ==~%")
     (format s "Status:           ~S~%" (agent-state-status state))
     (format s "Turns:            ~D~%" (agent-state-turn state))
-    (format s "Patches applied:  ~D~%" (agent-state-patch-count state))
+    (format s "Patches applied:  ~D (attempted ~D)~%"
+            (agent-state-patch-count state)
+            (agent-state-patch-attempts state))
     (format s "Chat tokens:      ~D~%" (agent-state-token-total state))
     (let ((v (agent-state-final-verify state)))
       (if v
