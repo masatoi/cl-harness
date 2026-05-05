@@ -40,11 +40,16 @@
 
 (defparameter *default-stdio-command*
   '("ros" "run" "-s" "cl-mcp"
-    "-e" "(cl-mcp/src/run:run :transport :stdio)"
-    "--quiet")
+    "-e" "(cl-mcp:run :transport :stdio)")
   "Default argv list for spawning cl-mcp in stdio mode via Roswell.
-Override with :COMMAND on MAKE-STDIO-MCP-TRANSPORT when cl-mcp is
-installed differently or you have a binary on $PATH.")
+
+Uses the public facade `cl-mcp:run' (re-exported from
+`cl-mcp/src/run:run' via the cl-mcp/main package's :nicknames) to match
+the form Codex/Claude-style stdio MCP configs use, so the same launch
+recipe works across clients. Override with :COMMAND on
+MAKE-STDIO-MCP-TRANSPORT when cl-mcp is installed differently, when a
+prebuilt binary is on $PATH, or when stray banner output from `ros run'
+needs `--quiet' tacked on for a particular environment.")
 
 (define-condition stdio-mcp-error (error)
   ((message :initarg :message :reader stdio-mcp-error-message))
