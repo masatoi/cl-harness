@@ -78,8 +78,10 @@
 (in-package #:cl-harness/src/agent)
 
 (defparameter +source-mutating-tools+
-  '("lisp-patch-form" "lisp-edit-form")
-  "Tools whose successful invocation should trigger an automatic verify.")
+  '("lisp-patch-form" "lisp-edit-form" "fs-write-file")
+  "Tools whose successful invocation should trigger an automatic verify.
+fs-write-file is included so the file-only baseline condition still
+auto-verifies after each file rewrite, matching the lisp-* paths.")
 
 (defclass agent-state ()
   ((turn :initform 0 :accessor agent-state-turn)
@@ -107,7 +109,8 @@ inline in the system prompt so the LLM can compose correct calls on
 turn 1."
   (with-output-to-string (s)
     (when (or (allowed-tool-p policy "lisp-patch-form")
-              (allowed-tool-p policy "lisp-edit-form"))
+              (allowed-tool-p policy "lisp-edit-form")
+              (allowed-tool-p policy "fs-write-file"))
       (format s "~%Tool argument schemas (required ⊕ optional keys):~%"))
     (when (allowed-tool-p policy "lisp-patch-form")
       (format s "  - lisp-patch-form: file_path, form_type, form_name, old_text, new_text.~%")
@@ -128,6 +131,10 @@ turn 1."
     (when (or (allowed-tool-p policy "fs-read-file")
               (allowed-tool-p policy "fs-list-directory"))
       (format s "  - fs-read-file / fs-list-directory: path (absolute, inside project root).~%"))
+    (when (allowed-tool-p policy "fs-write-file")
+      (format s "  - fs-write-file: path (relative to project root) ⊕ content.~%")
+      (format s "      OVERWRITES the file. Read the file first, then write the COMPLETE updated~%")
+      (format s "      contents — fs-write-file is not a patching tool.~%"))
     (when (or (allowed-tool-p policy "load-system")
               (allowed-tool-p policy "run-tests"))
       (format s "  - load-system / run-tests: system (ASDF system name string,~%")
@@ -167,6 +174,16 @@ tests by editing source files via cl-mcp tools.~%~%")
        (format s "     lisp-edit-form (whole-form replace/insert).~%")
        (format s "  3. VERIFY: source mutations auto-trigger load-system + run-tests; the~%")
        (format s "     verify summary is appended to the next user turn.~%")
+       (format s "  4. FINISH: emit {\"type\":\"finish\",\"status\":\"fixed\"} only when~%")
+       (format s "     run-tests reports zero failures.~%~%"))
+      (:file-only
+       (format s "  1. READ: use fs-list-directory and fs-read-file to find and inspect~%")
+       (format s "     the failing source.~%")
+       (format s "  2. WRITE: rewrite the entire file with fs-write-file. There is no~%")
+       (format s "     scoped patcher in this mode; you must produce the complete~%")
+       (format s "     updated file content yourself.~%")
+       (format s "  3. VERIFY: source mutations auto-trigger load-system + run-tests;~%")
+       (format s "     the verify summary is appended to the next user turn.~%")
        (format s "  4. FINISH: emit {\"type\":\"finish\",\"status\":\"fixed\"} only when~%")
        (format s "     run-tests reports zero failures.~%~%"))
       (t

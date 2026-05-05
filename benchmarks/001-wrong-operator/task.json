@@ -1,0 +1,8 @@
+{
+  "id": "001-wrong-operator",
+  "description": "wrong-op:max-of returns the smaller argument instead of the larger.",
+  "system": "wrong-op",
+  "test-system": "wrong-op/tests",
+  "issue": "The wrong-op/tests::max-of-returns-larger rove test is failing. Read the test and the source, then fix the source so the test passes.",
+  "fixture-dir": "fixture"
+}

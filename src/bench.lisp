@@ -60,7 +60,8 @@
            #:run-benchmark-task
            #:run-benchmark-suite
            #:aggregate-results
-           #:format-suite-report))
+           #:format-suite-report
+           #:format-suite-report-markdown))
 
 (in-package #:cl-harness/src/bench)
 
@@ -174,13 +175,14 @@ agent has been told to operate against the sandbox copy."
                            &key (log-dir (uiop:temporary-directory)))
   "Run one BENCH-TASK against PROVIDER + MCP-CLIENT under CONDITION.
 
-Copies the task's fixture to a fresh sandbox tmpdir, registers the
-sandbox <system>.asd with the agent's worker (so ASDF reads the patched
-copy rather than the registry-discovered original), invokes RUN-AGENT
-with clean-verify disabled (a worker reset would lose the registration),
-and captures the outcome into a BENCH-RESULT. Errors during the run are
-caught and returned as a :ERROR status so a single broken task does not
-abort the whole suite (PRD §8.11)."
+Copies the task's fixture to a fresh sandbox tmpdir, kills the agent's
+cl-mcp worker so left-over package bindings from a previous task cannot
+mask the broken state, registers the sandbox <system>.asd with the new
+worker (so ASDF reads the patched copy rather than the registry-discovered
+original), invokes RUN-AGENT with clean-verify disabled (a worker reset
+mid-run would lose the registration), and captures the outcome into a
+BENCH-RESULT. Errors during the run are caught and returned as a :ERROR
+status so a single broken task does not abort the whole suite (PRD §8.11)."
   (let* ((sandbox (%sandbox-fixture (bench-task-fixture-path task)
                                     (format nil "cl-harness-bench-~A"
                                             (bench-task-id task))))
@@ -202,6 +204,9 @@ abort the whole suite (PRD §8.11)."
         (let ((logger (open-run-logger transcript)))
           (unwind-protect
                (progn
+                 (call-tool mcp-client "pool-kill-worker"
+                            (alist-hash-table '(("reset" . t))
+                                              :test 'equal))
                  (%scope-asdf-to-sandbox mcp-client sandbox
                                          (bench-task-system task)
                                          (bench-task-test-system task))
@@ -304,3 +309,56 @@ clock). Fed to *STANDARD-OUTPUT* by the bench CLI."
               (coerce (gethash "mean-patches" agg) 'float))
       (format s "Mean wall clock:       ~,0F ms~%"
               (coerce (gethash "mean-elapsed-ms" agg) 'float)))))
+
+(defun format-suite-report-markdown (results &key (heading "Benchmark Results"))
+  "Render RESULTS as a Markdown report suitable for docs/benchmarks/.
+
+Produces a heading, a per-task table grouped by condition, and a
+summary footer with pass-rate / mean turns / mean tokens / mean wall
+clock per condition. Used by the suite runner to persist
+machine-readable results next to the JSONL transcripts."
+  (with-output-to-string (s)
+    (format s "# ~A~%~%" heading)
+    (format s "Generated: ~A~%~%" (local-time:now))
+    (let ((conditions (remove-duplicates
+                       (mapcar #'bench-result-condition results)
+                       :test #'eq))
+          (tasks (remove-duplicates
+                  (mapcar (lambda (r) (bench-task-id (bench-result-task r)))
+                          results)
+                  :test #'equal)))
+      (format s "## Per-task results~%~%")
+      (format s "| Task | Condition | Status | Turns | Patches (applied/attempted) | Tokens | Wall (ms) |~%")
+      (format s "| ---- | --------- | ------ | -----:| --------------------------:| ------:| ---------:|~%")
+      (dolist (task-id tasks)
+        (dolist (run-condition conditions)
+          (let ((r (find-if (lambda (r)
+                              (and (equal task-id (bench-task-id (bench-result-task r)))
+                                   (eq run-condition (bench-result-condition r))))
+                            results)))
+            (when r
+              (format s "| ~A | ~A | `~A` | ~A | ~A/~A | ~A | ~D |~%"
+                      task-id
+                      (string-downcase (symbol-name run-condition))
+                      (string-downcase (symbol-name (bench-result-status r)))
+                      (bench-result-turns r)
+                      (bench-result-patches r)
+                      (bench-result-patch-attempts r)
+                      (bench-result-tokens r)
+                      (round (bench-result-elapsed-ms r)))))))
+      (format s "~%## Per-condition aggregate~%~%")
+      (format s "| Condition | Total | Passed | Pass-rate | Mean turns | Mean tokens | Mean ms |~%")
+      (format s "| --------- | -----:| ------:| ---------:| ----------:| -----------:| -------:|~%")
+      (dolist (run-condition conditions)
+        (let* ((subset (remove-if-not
+                        (lambda (r) (eq run-condition (bench-result-condition r)))
+                        results))
+               (agg (aggregate-results subset)))
+          (format s "| `~A` | ~A | ~A | ~,1F% | ~,1F | ~,0F | ~,0F |~%"
+                  (string-downcase (symbol-name run-condition))
+                  (gethash "total" agg)
+                  (gethash "passed" agg)
+                  (* 100 (coerce (gethash "pass-rate" agg) 'float))
+                  (coerce (gethash "mean-turns" agg) 'float)
+                  (coerce (gethash "mean-tokens" agg) 'float)
+                  (coerce (gethash "mean-elapsed-ms" agg) 'float)))))))

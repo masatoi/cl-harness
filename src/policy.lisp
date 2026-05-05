@@ -18,9 +18,17 @@
 
 (in-package #:cl-harness/src/policy)
 
-(defparameter +file-only-tools+ '()
-  "FILE-ONLY mode disallows every cl-mcp tool by design (PRD §8.5
-REQ-POLICY-001).")
+(defparameter +file-only-tools+
+  '("fs-list-directory"
+    "fs-read-file"
+    "fs-write-file"
+    "load-system"
+    "run-tests")
+  "FILE-ONLY mode (PRD §8.5 REQ-POLICY-001) is the benchmark baseline:
+the agent edits source files via plain fs-write-file, with no Lisp-aware
+patching tools. Verification still uses cl-mcp's load-system + run-tests
+so all conditions share the same verify path; only the *editing* surface
+differs. Matches the typical \"file-system + shell\" agent baseline.")
 
 (defparameter +generic-mcp-tools+
   '("fs-set-project-root"

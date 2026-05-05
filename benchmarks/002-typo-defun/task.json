@@ -1,0 +1,8 @@
+{
+  "id": "002-typo-defun",
+  "description": "typo-defun:greet is undefined because defun was misspelled gret.",
+  "system": "typo-defun",
+  "test-system": "typo-defun/tests",
+  "issue": "The typo-defun/tests::greet-says-hi rove test fails because typo-defun:greet is undefined. Inspect the source and fix the typo so the exported function exists.",
+  "fixture-dir": "fixture"
+}

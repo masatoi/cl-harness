@@ -1,0 +1,8 @@
+{
+  "id": "003-missing-import",
+  "description": "tests/main-test.lisp imports a misspelled symbol from missing-import.",
+  "system": "missing-import",
+  "test-system": "missing-import/tests",
+  "issue": "Loading the test system fails because tests/main-test.lisp imports a symbol that is not exported. Inspect the import line and fix the typo so the package loads and the test passes.",
+  "fixture-dir": "fixture"
+}

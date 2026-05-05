@@ -76,7 +76,8 @@
                 #:run-benchmark-task
                 #:run-benchmark-suite
                 #:aggregate-results
-                #:format-suite-report)
+                #:format-suite-report
+                #:format-suite-report-markdown)
   (:export #:fix
            #:bench
            #:run-config
@@ -134,6 +135,7 @@
            #:run-benchmark-task
            #:run-benchmark-suite
            #:aggregate-results
-           #:format-suite-report))
+           #:format-suite-report
+           #:format-suite-report-markdown))
 
 (in-package #:cl-harness/src/main)

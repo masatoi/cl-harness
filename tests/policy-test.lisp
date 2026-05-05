@@ -28,11 +28,21 @@
     (ok (handler-case (progn (make-tool-policy :nonsense) nil)
           (error () t)))))
 
-(deftest file-only-disallows-mcp-tools
+(deftest file-only-allows-fs-baseline-only
   (let ((p (make-tool-policy :file-only)))
-    (ok (not (allowed-tool-p p "load-system")))
-    (ok (not (allowed-tool-p p "lisp-patch-form")))
-    (ok (null (policy-allowed-tools p)))))
+    (testing "fs / load / test tools are allowed"
+      (ok (allowed-tool-p p "fs-list-directory"))
+      (ok (allowed-tool-p p "fs-read-file"))
+      (ok (allowed-tool-p p "fs-write-file"))
+      (ok (allowed-tool-p p "load-system"))
+      (ok (allowed-tool-p p "run-tests")))
+    (testing "Lisp-aware editing tools are NOT allowed"
+      (ok (not (allowed-tool-p p "lisp-patch-form")))
+      (ok (not (allowed-tool-p p "lisp-edit-form")))
+      (ok (not (allowed-tool-p p "lisp-read-file"))))
+    (testing "runtime probes are NOT allowed"
+      (ok (not (allowed-tool-p p "repl-eval")))
+      (ok (not (allowed-tool-p p "code-find"))))))
 
 (deftest generic-mcp-allows-basic-fix-loop-tools
   (let ((p (make-tool-policy :generic-mcp)))
