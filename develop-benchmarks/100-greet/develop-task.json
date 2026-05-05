@@ -1,0 +1,8 @@
+{
+  "id": "100-greet",
+  "goal": "Add a `greet` function in package `greet` that takes one string argument NAME and returns the string \"Hello, NAME!\". Export it from the package so callers can use `greet:greet`.",
+  "system": "greet",
+  "test-system": "greet/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}

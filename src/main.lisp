@@ -20,7 +20,8 @@
                 #:with-run-logger)
   (:import-from #:cl-harness/src/cli
                 #:fix
-                #:bench)
+                #:bench
+                #:develop)
   (:import-from #:cl-harness/src/cli-main
                 #:main)
   (:import-from #:cl-harness/src/mcp
@@ -101,8 +102,7 @@
                 #:develop-result-step-results
                 #:develop-result-replan-count
                 #:develop-result-limit-hit
-                #:execute-plan
-                #:develop)
+                #:execute-plan)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -123,6 +123,7 @@
                 #:format-suite-report-markdown)
   (:export #:fix
            #:bench
+           #:develop
            #:main
            #:run-config
            #:make-run-config
@@ -201,7 +202,6 @@
            #:develop-result-replan-count
            #:develop-result-limit-hit
            #:execute-plan
-           #:develop
            #:bench-task
            #:bench-task-id
            #:bench-result

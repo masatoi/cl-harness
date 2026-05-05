@@ -25,8 +25,14 @@
   (:import-from #:cl-harness/src/bench
                 #:run-benchmark-suite
                 #:format-suite-report)
+  (:import-from #:cl-harness/src/orchestrator
+                #:develop-result-status
+                #:develop-result-replan-count
+                #:develop-result-step-results
+                #:develop-result-limit-hit)
   (:export #:fix
            #:bench
+           #:develop
            #:not-implemented-error))
 
 (in-package #:cl-harness/src/cli)
@@ -179,4 +185,100 @@ report plus per-task detail to *STANDARD-OUTPUT*."
            (format t "~A" (format-suite-report results))
            (format t "~%Logs: ~A~%" effective-log-dir)
            results)
+      (close-mcp-client client))))
+
+(defun %symbol-down (s)
+  (cond
+    ((null s) "")
+    ((stringp s) s)
+    ((symbolp s) (string-downcase (symbol-name s)))
+    (t (format nil "~A" s))))
+
+(defun format-develop-report (result &key log-path)
+  "Render a one-paragraph human-readable summary of a DEVELOP-RESULT,
+mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
+  (with-output-to-string (s)
+    (format s "~&== cl-harness develop report ==~%")
+    (format s "Status:           :~A"
+            (string-upcase (%symbol-down (develop-result-status result))))
+    (when (develop-result-limit-hit result)
+      (format s " (limit: :~A)"
+              (string-upcase (%symbol-down (develop-result-limit-hit result)))))
+    (format s "~%")
+    (format s "Replans:          ~D~%" (develop-result-replan-count result))
+    (format s "Step results:     ~D~%"
+            (length (develop-result-step-results result)))
+    (when log-path (format s "Develop log:      ~A~%" log-path))))
+
+(defun develop (&key goal project-root system test-system test-file
+                     (condition :generic-mcp)
+                     mcp-url mcp-stdio mcp-command
+                     base-url api-key model
+                     (temperature 0.0) (max-tokens 4096)
+                     reasoning-effort extra-body
+                     (max-replans 3)
+                     log-path)
+  "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
+green test suite.
+
+Mirrors the kwarg style of CL-HARNESS:FIX so a shell-CLI invocation
+flows the same env-var and override chain (CL_HARNESS_LLM_*,
+CL_HARNESS_MCP_*, ...). The provider and cl-mcp client are built here
+and torn down on exit; orchestrator-level DEVELOP is called with them
+already wired up.
+
+GOAL is the natural-language statement the planner decomposes (one
+paragraph; do not include code). TEST-FILE is the rove file the
+planner-authored deftest forms get appended to; the file must already
+exist with a defpackage that imports rove and the project's main
+package.
+
+Returns the populated DEVELOP-RESULT. Caller is responsible for
+inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
+  (check-type goal string)
+  (let* ((effective-base-url
+          (or base-url
+              (uiop:getenv "CL_HARNESS_LLM_BASE_URL")
+              (error "develop: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
+         (effective-api-key
+          (or api-key
+              (uiop:getenv "CL_HARNESS_LLM_API_KEY")
+              (error "develop: :api-key or CL_HARNESS_LLM_API_KEY is required")))
+         (effective-model
+          (or model
+              (uiop:getenv "CL_HARNESS_LLM_MODEL")
+              (error "develop: :model or CL_HARNESS_LLM_MODEL is required")))
+         (provider (make-openai-provider
+                    :base-url effective-base-url
+                    :api-key effective-api-key
+                    :model effective-model
+                    :temperature temperature
+                    :max-tokens max-tokens
+                    :reasoning-effort reasoning-effort
+                    :extra-body extra-body))
+         (client (resolve-and-build-mcp-client
+                  :mcp-url mcp-url
+                  :mcp-stdio mcp-stdio
+                  :mcp-command mcp-command
+                  :client-name "cl-harness-develop"
+                  :client-version "0.2.0"))
+         (path (or log-path
+                   (merge-pathnames
+                    (format nil "cl-harness-develop-~A.jsonl"
+                            (get-universal-time))
+                    (uiop:temporary-directory)))))
+    (unwind-protect
+         (let ((result (cl-harness/src/orchestrator:develop
+                        goal
+                        :project-root project-root
+                        :system system
+                        :test-system test-system
+                        :test-file test-file
+                        :provider provider
+                        :mcp-client client
+                        :condition condition
+                        :max-replans max-replans
+                        :log-path path)))
+           (format t "~A" (format-develop-report result :log-path path))
+           result)
       (close-mcp-client client))))

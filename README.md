@@ -195,31 +195,83 @@ Each (task × condition) gets its own sandbox tmpdir copy of the
 fixture, its own JSONL transcript, and an entry in the aggregated
 markdown report.
 
+### Develop a feature from a goal — `cl-harness develop`
+
+`fix` and `bench` need a failing test pointed at them; `develop`
+goes one level higher. It takes a free-form goal, asks an LLM
+(the *planner*) to decompose it into a sequence of focused
+sub-goals (each with its own author-generated rove test), then
+drives each sub-goal through the existing fix loop with a
+replan-on-failure policy.
+
+```bash
+cl-harness develop \
+  --goal "Add a greet function under package demo that returns Hello, NAME!" \
+  --project-root /path/to/your/asdf/project \
+  --system demo \
+  --test-system demo/tests \
+  --test-file /path/to/your/asdf/project/tests/main-test.lisp \
+  --max-replans 3
+```
+
+```lisp
+(cl-harness:develop
+ :goal "Add a greet function under package demo that returns Hello, NAME!"
+ :project-root "/path/to/your/asdf/project"
+ :system "demo"
+ :test-system "demo/tests"
+ :test-file "/path/to/your/asdf/project/tests/main-test.lisp"
+ :max-replans 3)
+```
+
+`--test-file` (or `:test-file`) is the rove file the planner-authored
+deftest forms get appended to; it must already exist with a
+defpackage that imports rove and the project's main package.
+Greenfield-shaped starter fixtures live under `develop-benchmarks/`
+(see that directory's README).
+
+Terminal status:
+- `:passed` — all sub-goals' tests green
+- `:limit-exhausted` (`limit-hit :max-replans`) — replan budget spent
+- `:stuck` (`limit-hit :no-progress`) — replanner returned the same
+  failing test twice in a row
+
+Develop-level JSONL transcript at `--log-path` records
+`develop-start / plan / step-start / step-end / develop-end`; each
+step's per-run-agent JSONL is referenced via `transcript_path` so a
+single develop-level file is enough to drill down to any sub-goal's
+detail. See `docs/notes/2026-05-06-planner-orchestrator.md` for the
+design.
+
 ## Architecture
 
 ```
 cl-harness/
 ├── src/
-│   ├── action.lisp       LLM JSON action parser (tool_call / finish)
-│   ├── agent.lisp        turn-based loop, system prompt, finalize
-│   ├── bench.lisp        benchmark runner (task, suite, trials, report)
-│   ├── cli.lisp          fix / bench entry points
-│   ├── cli-main.lisp     clingon shell command for the binary build
-│   ├── config.lisp       run-config + run-limits
-│   ├── log.lisp          JSONL transcript writer
-│   ├── main.lisp         facade re-exports under nickname `cl-harness`
-│   ├── mcp.lisp          JSON-RPC 2.0 client + transport abstraction
-│   ├── mcp-stdio.lisp    stdio transport: spawns its own cl-mcp
-│   ├── mcp-resolve.lisp  picks HTTP vs stdio from kwargs / env
-│   ├── model.lisp        OpenAI-compatible chat client
-│   ├── policy.lisp       tool allow-list per condition
-│   └── verify.lisp       incremental + clean verification
-├── tests/                rove unit tests, mostly stub-driven (no LLM)
-├── benchmarks/           deliberately broken mini ASDF projects
+│   ├── action.lisp        LLM JSON action parser (tool_call / finish)
+│   ├── agent.lisp         turn-based loop, system prompt, finalize
+│   ├── bench.lisp         benchmark runner (task, suite, trials, report)
+│   ├── cli.lisp           fix / bench / develop programmatic entry points
+│   ├── cli-main.lisp      clingon shell command for the binary build
+│   ├── config.lisp        run-config + run-limits
+│   ├── log.lisp           JSONL transcript writer
+│   ├── main.lisp          facade re-exports under nickname `cl-harness`
+│   ├── mcp.lisp           JSON-RPC 2.0 client + transport abstraction
+│   ├── mcp-stdio.lisp     stdio transport: spawns its own cl-mcp
+│   ├── mcp-resolve.lisp   picks HTTP vs stdio from kwargs / env
+│   ├── model.lisp         OpenAI-compatible chat client
+│   ├── orchestrator.lisp  develop loop: plan-execute-replan-stuck-detect
+│   ├── planner.lisp       LLM-driven plan-step decomposer
+│   ├── policy.lisp        tool allow-list per condition
+│   └── verify.lisp        incremental + clean verification
+├── tests/                 rove unit tests, mostly stub-driven (no LLM)
+├── benchmarks/            12 deliberately broken mini ASDF projects (fix/bench)
+├── develop-benchmarks/    greenfield fixtures (empty source + spec) for develop
+├── prompts/               system prompts (planner + REPL-driven dev)
 └── docs/
     ├── cl-harness-prd.md
-    ├── notes/            stdio-transport / qwen-smoke / v0.2 notes
-    └── benchmarks/       per-run results
+    ├── notes/             stdio-transport / qwen-smoke / planner notes
+    └── benchmarks/        per-run results
 ```
 
 Conditions (PRD §8.5) gate which cl-mcp tools the LLM can invoke:

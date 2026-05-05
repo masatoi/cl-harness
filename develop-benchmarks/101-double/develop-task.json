@@ -1,0 +1,8 @@
+{
+  "id": "101-double",
+  "goal": "Add a `double` function in package `double` that takes one numeric argument N and returns 2*N. Export it from the package so callers can use `double:double`.",
+  "system": "double",
+  "test-system": "double/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}
