@@ -111,8 +111,26 @@ about which source files the planner expects this step to touch."))
 
 ;; --- prompt construction -------------------------------------------------
 
-(defun %build-user-prompt (goal &key project-root system test-system)
-  "Assemble the user-side message for the planner LLM call."
+(defun %format-prior-plan (prior-plan)
+  "Pretty-print PRIOR-PLAN (a list of PLAN-STEP) as a one-line-per-step
+summary suitable for inclusion in a replan prompt."
+  (with-output-to-string (s)
+    (format s "Previous plan:~%")
+    (loop for step in prior-plan
+          for i from 0
+          do (format s "  ~D. ~A (test: ~A)~%"
+                     i
+                     (plan-step-issue step)
+                     (plan-step-test-name step)))))
+
+(defun %build-user-prompt (goal &key project-root system test-system
+                                     prior-plan failure-context)
+  "Assemble the user-side message for the planner LLM call.
+
+PRIOR-PLAN, when supplied, is rendered as a `Previous plan:` block
+above the goal. FAILURE-CONTEXT, when supplied, is rendered as a
+`Failure:` paragraph. Together they're how P3's replan path tells the
+planner what was tried and why it didn't work."
   (with-output-to-string (s)
     (format s "Goal: ~A~%~%" goal)
     (when project-root
@@ -121,6 +139,13 @@ about which source files the planner expects this step to touch."))
       (format s "System name: ~A~%" system))
     (when test-system
       (format s "Test system: ~A~%" test-system))
+    (when prior-plan
+      (format s "~%~A" (%format-prior-plan prior-plan)))
+    (when failure-context
+      (format s "~%Failure: ~A~%" failure-context)
+      (format s "Produce a REVISED plan that takes the failure into account.~%")
+      (format s "Do not repeat earlier steps that already passed; pick up~%")
+      (format s "from where the prior plan got stuck.~%"))
     (format s "~%Return the plan as a JSON object per the schema above.")))
 
 ;; --- response parsing ----------------------------------------------------
@@ -232,6 +257,8 @@ schema."
 
 (defun plan-development (goal &key project-root system test-system
                                    provider
+                                   prior-plan
+                                   failure-context
                                    (system-prompt
                                     +default-planner-system-prompt+))
   "Decompose a high-level GOAL into an ordered list of PLAN-STEP
@@ -242,6 +269,11 @@ PROJECT-ROOT, SYSTEM, and TEST-SYSTEM, when supplied, are appended to
 the user-side prompt as orientation. They do not narrow the plan
 mechanically — the planner is allowed to ignore them — but they
 constrain what the LLM treats as the ambient project shape.
+
+PRIOR-PLAN and FAILURE-CONTEXT, when supplied together, drive the
+P3 replan path: the planner sees what was tried and why it failed,
+and is asked to produce a revised plan that picks up from the
+failure point. Pass NIL for both on the first planning round.
 
 SYSTEM-PROMPT defaults to +DEFAULT-PLANNER-SYSTEM-PROMPT+; override
 when iterating on prompt design without rebuilding the system.
@@ -255,7 +287,9 @@ PLANNER-ERROR when the response cannot be parsed."
                           (%build-user-prompt goal
                                               :project-root project-root
                                               :system system
-                                              :test-system test-system))))
+                                              :test-system test-system
+                                              :prior-plan prior-plan
+                                              :failure-context failure-context))))
          (response (complete-chat provider messages))
          (content (chat-response-content response)))
     (unless (and (stringp content) (plusp (length content)))

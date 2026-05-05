@@ -23,10 +23,16 @@
   (:import-from #:cl-harness/src/orchestrator
                 #:develop-step-result-status
                 #:develop-step-result-step-index
+                #:develop-result
+                #:develop-result-status
+                #:develop-result-step-results
+                #:develop-result-replan-count
+                #:develop-result-limit-hit
                 #:validate-test-source
                 #:materialize-test-source
                 #:plan-step->run-config
-                #:execute-plan))
+                #:execute-plan
+                #:develop))
 
 (in-package #:cl-harness/tests/orchestrator-test)
 
@@ -298,3 +304,161 @@ gethash and stop on non-:passed."
                "run-fn must not be called when plan validation fails"))
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
+
+;; --- develop (P3) -------------------------------------------------------
+
+(defun %canned-planner (plans)
+  "Return a planner-fn that hands out PLANS in order. Each plan is a
+list of PLAN-STEP. Calls past the end of the list reuse the last
+plan (so a stuck loop test can keep getting the same response)."
+  (let ((remaining plans))
+    (lambda (goal &key project-root system test-system provider
+                       prior-plan failure-context system-prompt)
+      (declare (ignore goal project-root system test-system provider
+                       prior-plan failure-context system-prompt))
+      (cond
+        ((null remaining)
+         (error "canned-planner exhausted"))
+        ((null (cdr remaining))
+         (car remaining))
+        (t (pop remaining))))))
+
+(deftest develop-passes-on-first-attempt-when-plan-passes
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-p3-pass"))
+         (plan-1 (list (%make-step :index 0 :test-name "alpha")))
+         (planner-fn (%canned-planner (list plan-1)))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result (develop "ship feature X"
+                                  :project-root (namestring project-root)
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :test-file test-file
+                                  :log-path log-path
+                                  :planner-fn planner-fn
+                                  :run-fn runner)))
+             (ok (typep result 'develop-result))
+             (ok (eq :passed (develop-result-status result)))
+             (ok (zerop (develop-result-replan-count result)))
+             (ok (null (develop-result-limit-hit result)))
+             (ok (= 1 (length (develop-result-step-results result))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest develop-replans-once-and-recovers
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-p3-replan"))
+         (plan-1 (list (%make-step :index 0 :test-name "alpha"
+                                   :test-source "(deftest alpha (ok t))")))
+         (plan-2 (list (%make-step :index 0 :test-name "beta"
+                                   :test-source "(deftest beta (ok t))")))
+         (planner-fn (%canned-planner (list plan-1 plan-2)))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :give-up :passed) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result (develop "do the thing"
+                                  :project-root (namestring project-root)
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :test-file test-file
+                                  :log-path log-path
+                                  :planner-fn planner-fn
+                                  :run-fn runner)))
+             (ok (eq :passed (develop-result-status result)))
+             (ok (= 1 (develop-result-replan-count result))
+                 "replanned exactly once before passing")
+             (ok (= 2 (length (develop-result-step-results result)))
+                 "step results from both rounds are kept")))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest develop-limit-exhausted-when-replans-budget-runs-out
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-p3-limit"))
+         ;; Three different plans, each emitting a step that fails. We
+         ;; ride out max-replans=2 → 1 initial round + 2 replans = 3
+         ;; rounds, every one fails, then exhaust the budget.
+         (plan-1 (list (%make-step :index 0 :test-name "alpha")))
+         (plan-2 (list (%make-step :index 0 :test-name "beta")))
+         (plan-3 (list (%make-step :index 0 :test-name "gamma")))
+         (planner-fn (%canned-planner (list plan-1 plan-2 plan-3)))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :give-up :give-up :give-up) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result (develop "stubborn goal"
+                                  :project-root (namestring project-root)
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :test-file test-file
+                                  :log-path log-path
+                                  :max-replans 2
+                                  :planner-fn planner-fn
+                                  :run-fn runner)))
+             (ok (eq :limit-exhausted (develop-result-status result)))
+             (ok (eq :max-replans (develop-result-limit-hit result)))
+             (ok (= 2 (develop-result-replan-count result)))
+             (ok (= 3 (length (develop-result-step-results result)))
+                 "three rounds × one step each = three step results")))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest develop-stuck-when-replan-repeats-failing-step
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-p3-stuck"))
+         ;; Initial plan and replan both produce the SAME first step
+         ;; (same test_name). Stuck detection should fire after the
+         ;; first replan, before consuming a second runner call on the
+         ;; identical plan.
+         (plan-shared (list (%make-step :index 0 :test-name "alpha")))
+         (planner-fn (%canned-planner (list plan-shared plan-shared)))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :give-up :give-up) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result (develop "fragile goal"
+                                  :project-root (namestring project-root)
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :test-file test-file
+                                  :log-path log-path
+                                  :max-replans 5
+                                  :planner-fn planner-fn
+                                  :run-fn runner)))
+             (ok (eq :stuck (develop-result-status result)))
+             (ok (eq :no-progress (develop-result-limit-hit result)))
+             (ok (= 1 (develop-result-replan-count result))
+                 "only one replan was attempted; the second-round repeat got caught")
+             (ok (= 1 (length (develop-result-step-results result)))
+                 "stuck detection fires before the runner is invoked on the identical plan")))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+

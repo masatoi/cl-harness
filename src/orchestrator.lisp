@@ -38,6 +38,7 @@
                 #:plan-step-test-name
                 #:plan-step-test-source
                 #:plan-step-files-to-modify
+                #:plan-development
                 #:planner-error)
   (:import-from #:cl-harness/src/agent
                 #:run-agent)
@@ -47,10 +48,17 @@
            #:develop-step-result-run-config
            #:develop-step-result-run-agent-state
            #:develop-step-result-test-name
+           #:develop-result
+           #:develop-result-status
+           #:develop-result-final-plan
+           #:develop-result-step-results
+           #:develop-result-replan-count
+           #:develop-result-limit-hit
            #:validate-test-source
            #:materialize-test-source
            #:plan-step->run-config
-           #:execute-plan))
+           #:execute-plan
+           #:develop))
 
 (in-package #:cl-harness/src/orchestrator)
 
@@ -314,3 +322,146 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                :test 'equal))
              reversed))
       (%close-develop-logger logger))))
+
+;; --- develop (P3): plan + execute + replan loop -------------------------
+
+(defclass develop-result ()
+  ((status :initarg :status :reader develop-result-status)
+   (final-plan :initarg :final-plan :reader develop-result-final-plan)
+   (step-results :initarg :step-results
+                 :reader develop-result-step-results)
+   (replan-count :initarg :replan-count
+                 :initform 0
+                 :reader develop-result-replan-count)
+   (limit-hit :initarg :limit-hit
+              :initform nil
+              :reader develop-result-limit-hit))
+  (:documentation
+   "Outcome of a DEVELOP run.
+STATUS is :PASSED on a fully-passing plan, :STUCK when the
+replanner returned the same failing step a second time, and either
+:LIMIT-EXHAUSTED or the underlying step's terminal status when an
+intermediate plan failed without recovery. STEP-RESULTS is the flat
+list of every step run across every replan round, in execution
+order. FINAL-PLAN is the plan currently active at the moment the
+run terminated."))
+
+(defun %first-test-name (plan)
+  "Return the test_name of PLAN's first PLAN-STEP, or NIL when PLAN is
+empty. Used for stuck detection."
+  (and (consp plan) (plan-step-test-name (car plan))))
+
+(defun %failure-context (failed-step-result)
+  "Build the human-readable Failure: paragraph fed back to the planner
+on a replan round. Includes the test_name and status of the failed
+step so the planner sees both the symptom and what was being
+attempted."
+  (format nil
+          "step ~A (test_name=~A) terminated with status ~A; the executor could not get the test to pass within its turn / patch budget."
+          (develop-step-result-step-index failed-step-result)
+          (develop-step-result-test-name failed-step-result)
+          (%symbol-status (develop-step-result-status failed-step-result))))
+
+(defun develop (goal
+                &key project-root system test-system test-file
+                     provider mcp-client
+                     (condition :generic-mcp)
+                     log-path
+                     (max-replans 3)
+                     (planner-fn #'plan-development)
+                     (run-fn #'run-agent))
+  "Plan, execute, and replan-on-failure end-to-end.
+
+Workflow:
+  1. Call PLANNER-FN(GOAL, ...) to obtain the initial plan.
+  2. EXECUTE-PLAN the result; record outcomes.
+  3. If the last step :PASSED → success.
+  4. Otherwise, if MAX-REPLANS is exhausted → :LIMIT-EXHAUSTED.
+  5. Otherwise, call PLANNER-FN with PRIOR-PLAN and FAILURE-CONTEXT
+     populated to ask for a revised plan.
+  6. If the revised plan's first step has the same TEST-NAME as the
+     failed step → :STUCK (no progress).
+  7. Otherwise, EXECUTE-PLAN the revised plan and loop.
+
+Returns a DEVELOP-RESULT capturing the final status, the final
+plan, every step result across every round, the replan count, and
+which budget (if any) tripped.
+
+The orchestrator does not own PROVIDER or MCP-CLIENT; callers build
+them per cl-harness:fix conventions and pass them through. PLANNER-FN
+and RUN-FN are injection points for tests; defaults are
+PLAN-DEVELOPMENT and RUN-AGENT respectively.
+
+LOG-PATH, when supplied, is the develop-level JSONL path. EXECUTE-PLAN
+appends per-round events; DEVELOP wraps them with replan-trigger
+events so a single transcript shows the full multi-round history.
+(EXECUTE-PLAN's own develop-start / develop-end events are emitted
+once per round; readers should disambiguate by replan-index, which
+is added to the payload here.)"
+  (check-type goal string)
+  (check-type max-replans (integer 0))
+  (let ((plan (funcall planner-fn goal
+                       :project-root project-root
+                       :system system
+                       :test-system test-system
+                       :provider provider))
+        (results '())
+        (replans 0)
+        (last-failure-test-name nil)
+        (status :unknown)
+        (limit-hit nil))
+    (loop
+      (let* ((round-results (execute-plan
+                             plan
+                             :project-root project-root
+                             :system system
+                             :test-system test-system
+                             :test-file test-file
+                             :condition condition
+                             :provider provider
+                             :mcp-client mcp-client
+                             :log-path log-path
+                             :run-fn run-fn))
+             (last-result (car (last round-results))))
+        (setf results (append results round-results))
+        (cond
+          ((null last-result)
+           (setf status :empty)
+           (return))
+          ((eq :passed (develop-step-result-status last-result))
+           (setf status :passed)
+           (return))
+          ((>= replans max-replans)
+           (setf status :limit-exhausted
+                 limit-hit :max-replans)
+           (return))
+          (t
+           ;; Detect stuck: same failing test_name as the prior round.
+           (let ((this-failure (develop-step-result-test-name last-result)))
+             (when (and last-failure-test-name
+                        (equal last-failure-test-name this-failure))
+               (setf status :stuck
+                     limit-hit :no-progress)
+               (return))
+             (setf last-failure-test-name this-failure))
+           ;; Replan.
+           (incf replans)
+           (let ((new-plan (funcall planner-fn goal
+                                    :project-root project-root
+                                    :system system
+                                    :test-system test-system
+                                    :provider provider
+                                    :prior-plan plan
+                                    :failure-context (%failure-context last-result))))
+             (when (equal (%first-test-name new-plan)
+                          last-failure-test-name)
+               (setf status :stuck
+                     limit-hit :no-progress)
+               (return))
+             (setf plan new-plan))))))
+    (make-instance 'develop-result
+                   :status status
+                   :final-plan plan
+                   :step-results results
+                   :replan-count replans
+                   :limit-hit limit-hit)))

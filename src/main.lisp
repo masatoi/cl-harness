@@ -95,7 +95,14 @@
                 #:develop-step-result-test-name
                 #:develop-step-result-run-config
                 #:develop-step-result-run-agent-state
-                #:execute-plan)
+                #:develop-result
+                #:develop-result-status
+                #:develop-result-final-plan
+                #:develop-result-step-results
+                #:develop-result-replan-count
+                #:develop-result-limit-hit
+                #:execute-plan
+                #:develop)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -187,7 +194,14 @@
            #:develop-step-result-test-name
            #:develop-step-result-run-config
            #:develop-step-result-run-agent-state
+           #:develop-result
+           #:develop-result-status
+           #:develop-result-final-plan
+           #:develop-result-step-results
+           #:develop-result-replan-count
+           #:develop-result-limit-hit
            #:execute-plan
+           #:develop
            #:bench-task
            #:bench-task-id
            #:bench-result
