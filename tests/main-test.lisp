@@ -15,7 +15,6 @@
                 #:run-limits
                 #:run-limits-max-patches)
   (:import-from #:cl-harness/src/cli
-                #:fix
                 #:bench
                 #:not-implemented-error)
   (:import-from #:cl-harness/src/log
@@ -47,16 +46,7 @@
       (ok (= 3 (run-limits-max-patches (run-config-limits c)))))))
 
 (deftest cli-stubs-signal-not-implemented
-  (testing "fix signals not-implemented-error after building config"
-    (ok (handler-case
-            (progn
-              (fix :project-root "/tmp/proj"
-                   :system "demo"
-                   :test-system "demo/tests"
-                   :issue "stub")
-              nil)
-          (not-implemented-error () t))))
-  (testing "bench signals not-implemented-error"
+  (testing "bench still signals not-implemented-error in Phase 2"
     (ok (handler-case
             (progn (bench) nil)
           (not-implemented-error () t)))))

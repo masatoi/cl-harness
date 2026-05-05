@@ -39,6 +39,27 @@
                 #:chat-response-total-tokens
                 #:complete-chat
                 #:model-error)
+  (:import-from #:cl-harness/src/action
+                #:agent-action
+                #:agent-action-type
+                #:parse-action
+                #:action-parse-error)
+  (:import-from #:cl-harness/src/policy
+                #:tool-policy
+                #:make-tool-policy
+                #:policy-mode
+                #:allowed-tool-p)
+  (:import-from #:cl-harness/src/verify
+                #:verify-result
+                #:verify-result-status
+                #:verify-result-success-p
+                #:verify-task)
+  (:import-from #:cl-harness/src/agent
+                #:agent-state
+                #:agent-state-status
+                #:agent-state-turn
+                #:agent-state-patch-count
+                #:run-agent)
   (:export #:fix
            #:bench
            #:run-config
@@ -63,6 +84,23 @@
            #:chat-response-content
            #:chat-response-total-tokens
            #:complete-chat
-           #:model-error))
+           #:model-error
+           #:agent-action
+           #:agent-action-type
+           #:parse-action
+           #:action-parse-error
+           #:tool-policy
+           #:make-tool-policy
+           #:policy-mode
+           #:allowed-tool-p
+           #:verify-result
+           #:verify-result-status
+           #:verify-result-success-p
+           #:verify-task
+           #:agent-state
+           #:agent-state-status
+           #:agent-state-turn
+           #:agent-state-patch-count
+           #:run-agent))
 
 (in-package #:cl-harness/src/main)

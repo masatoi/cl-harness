@@ -19,7 +19,11 @@
                "cl-harness"
                "cl-harness/tests/main-test"
                "cl-harness/tests/mcp-test"
-               "cl-harness/tests/model-test")
+               "cl-harness/tests/model-test"
+               "cl-harness/tests/action-test"
+               "cl-harness/tests/policy-test"
+               "cl-harness/tests/verify-test"
+               "cl-harness/tests/agent-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
