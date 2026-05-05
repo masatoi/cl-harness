@@ -53,13 +53,17 @@
                 #:verify-result
                 #:verify-result-status
                 #:verify-result-success-p
-                #:verify-task)
+                #:verify-task
+                #:clean-verify-task)
   (:import-from #:cl-harness/src/agent
                 #:agent-state
                 #:agent-state-status
                 #:agent-state-turn
+                #:agent-state-final-verify
                 #:agent-state-patch-count
-                #:run-agent)
+                #:agent-state-token-total
+                #:run-agent
+                #:format-final-report)
   (:export #:fix
            #:bench
            #:run-config
@@ -97,10 +101,14 @@
            #:verify-result-status
            #:verify-result-success-p
            #:verify-task
+           #:clean-verify-task
            #:agent-state
            #:agent-state-status
            #:agent-state-turn
+           #:agent-state-final-verify
            #:agent-state-patch-count
-           #:run-agent))
+           #:agent-state-token-total
+           #:run-agent
+           #:format-final-report))
 
 (in-package #:cl-harness/src/main)

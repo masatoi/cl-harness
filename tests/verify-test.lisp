@@ -21,7 +21,8 @@
                 #:verify-result-success-p
                 #:verify-result-test
                 #:parse-verify-result
-                #:verify-task))
+                #:verify-task
+                #:clean-verify-task))
 
 (in-package #:cl-harness/tests/verify-test)
 
@@ -84,6 +85,10 @@
       (%hash '(("mcp-session-id" . "test-session")))))
     ((search "\"notifications/initialized\"" body)
      (values "" 202 (make-hash-table :test 'equal)))
+    ((search "\"pool-kill-worker\"" body)
+     (values
+      "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"killed\"}],\"isError\":false}}"
+      200 (make-hash-table :test 'equal)))
     (t (error "unexpected request body: ~A" body))))
 
 (deftest verify-task-runs-load-then-tests-on-mcp
@@ -141,3 +146,35 @@
     (ok (not (verify-result-success-p r)))
     (ok (null (car seen-test-call)))
     (ok (null (verify-result-test r)))))
+
+(deftest clean-verify-task-resets-worker-before-load
+  (let* ((capture (cons nil nil))
+         (transport (lambda (url headers body)
+                      (declare (ignore url headers))
+                      (push body (car capture))
+                      (%canned-mcp-responder body :passed 5 :failed 0)))
+         (client (make-mcp-client "http://example.test/mcp" :transport transport))
+         (config (make-run-config :project-root "/p"
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :issue "x"))
+         (r (clean-verify-task client config)))
+    (testing "result has the same shape as VERIFY-TASK"
+      (ok (typep r 'verify-result))
+      (ok (eq :passed (verify-result-status r))))
+    (testing "pool-kill-worker is invoked before load-system"
+      (let* ((bodies (reverse (car capture)))
+             (kill-pos (position-if
+                        (lambda (b) (search "\"pool-kill-worker\"" b))
+                        bodies))
+             (load-pos (position-if
+                        (lambda (b) (search "\"load-system\"" b))
+                        bodies)))
+        (ok (and kill-pos load-pos (< kill-pos load-pos)))))
+    (testing "pool-kill-worker carries reset=true"
+      (let* ((bodies (reverse (car capture)))
+             (kill-body (find-if (lambda (b) (search "\"pool-kill-worker\"" b))
+                                 bodies))
+             (params (gethash "params" (yason:parse kill-body)))
+             (args (gethash "arguments" params)))
+        (ok (eq t (gethash "reset" args)))))))

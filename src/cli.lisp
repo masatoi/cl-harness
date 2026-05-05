@@ -19,7 +19,8 @@
   (:import-from #:cl-harness/src/policy
                 #:make-tool-policy)
   (:import-from #:cl-harness/src/agent
-                #:run-agent)
+                #:run-agent
+                #:format-final-report)
   (:export #:fix
            #:bench
            #:not-implemented-error))
@@ -85,7 +86,9 @@ Returns the populated AGENT-STATE."
                     :client-version "0.0.1")
     (let ((logger (open-run-logger path)))
       (unwind-protect
-           (run-agent config provider client policy logger)
+           (let ((state (run-agent config provider client policy logger)))
+             (format t "~A" (format-final-report state :log-path path))
+             state)
         (close-run-logger logger)))))
 
 (defun bench (&key suite condition model base-url mcp-url)

@@ -23,7 +23,8 @@
            #:verify-result-test
            #:verify-result-success-p
            #:parse-verify-result
-           #:verify-task))
+           #:verify-task
+           #:clean-verify-task))
 
 (in-package #:cl-harness/src/verify)
 
@@ -94,3 +95,14 @@ masking the underlying failure."
                            :test 'equal))
                (test-result (call-tool client "run-tests" test-args)))
           (parse-verify-result load-result test-result)))))
+
+(defun clean-verify-task (client config)
+  "Run verification on a freshly spawned cl-mcp worker (PRD §8.9
+REQ-VERIFY-002).
+
+Calls pool-kill-worker (reset=true) before delegating to VERIFY-TASK so
+the verification image carries no left-over REPL state from the agent's
+probing turns. Returns a VERIFY-RESULT."
+  (call-tool client "pool-kill-worker"
+             (alist-hash-table '(("reset" . t)) :test 'equal))
+  (verify-task client config))

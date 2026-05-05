@@ -111,6 +111,8 @@
                  (%ok-tool-result id))
                 ((search "\"run-tests\"" body)
                  (%ok-tool-result id :passed 4 :failed 0))
+                ((search "\"pool-kill-worker\"" body)
+                 (%ok-tool-result id))
                 (t (error "unexpected MCP body: ~A" body))))))
          (mcp (%make-mcp-client-with-handler))
          (provider (%make-stub-provider
@@ -142,6 +144,8 @@
                      (%ok-tool-result id :passed 4 :failed 0)))
                 ((search "\"lisp-patch-form\"" body)
                  (%ok-tool-result id))
+                ((search "\"pool-kill-worker\"" body)
+                 (%ok-tool-result id))
                 (t (error "unexpected MCP body: ~A" body))))))
          (mcp (%make-mcp-client-with-handler))
          (provider (%make-stub-provider))
@@ -150,6 +154,42 @@
     (ok (eq :passed (agent-state-status state)))
     (ok (= 1 (agent-state-patch-count state)))
     (ok (= 1 (agent-state-turn state)))))
+
+(deftest run-agent-downgrades-to-dirty-only-when-clean-verify-fails
+  (let* ((run-tests-count 0)
+         (*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"old_text\":\"a\",\"new_text\":\"b\"}}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body)
+                 (%ok-tool-result id))
+                ((search "\"load-system\"" body)
+                 (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (incf run-tests-count)
+                 (cond
+                   ;; 1: initial verify fails so we enter the loop.
+                   ((= run-tests-count 1)
+                    (%ok-tool-result id :passed 0 :failed 1))
+                   ;; 2: incremental reverify after patch passes.
+                   ((= run-tests-count 2)
+                    (%ok-tool-result id :passed 4 :failed 0))
+                   ;; 3: clean reverify on a fresh worker fails — patch
+                   ;; relied on volatile REPL state.
+                   (t (%ok-tool-result id :passed 0 :failed 1))))
+                ((search "\"lisp-patch-form\"" body)
+                 (%ok-tool-result id))
+                ((search "\"pool-kill-worker\"" body)
+                 (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :runtime-native))
+         (state (%run-agent-with-temp-logger (%make-config) provider mcp policy)))
+    (ok (eq :dirty-only (agent-state-status state)))
+    (ok (= 1 (agent-state-patch-count state)))))
 
 (deftest run-agent-records-give-up-when-llm-finishes
   (let* ((*llm-responses*
