@@ -10,6 +10,7 @@
                "yason"
                "local-time"
                "dexador"
+               "bordeaux-threads"
                "clingon"
                "cl-harness/src/main")
   :in-order-to ((test-op (test-op "cl-harness/tests"))))
@@ -20,6 +21,7 @@
                "cl-harness"
                "cl-harness/tests/main-test"
                "cl-harness/tests/mcp-test"
+               "cl-harness/tests/mcp-stdio-test"
                "cl-harness/tests/model-test"
                "cl-harness/tests/action-test"
                "cl-harness/tests/policy-test"

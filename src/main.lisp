@@ -31,7 +31,13 @@
                 #:mcp-error
                 #:initialize-mcp
                 #:list-tools
-                #:call-tool)
+                #:call-tool
+                #:close-mcp-client)
+  (:import-from #:cl-harness/src/mcp-stdio
+                #:make-stdio-mcp-client
+                #:make-stdio-mcp-transport
+                #:stdio-mcp-transport
+                #:stdio-mcp-error)
   (:import-from #:cl-harness/src/model
                 #:openai-compatible-provider
                 #:make-openai-provider
@@ -109,6 +115,11 @@
            #:initialize-mcp
            #:list-tools
            #:call-tool
+           #:close-mcp-client
+           #:make-stdio-mcp-client
+           #:make-stdio-mcp-transport
+           #:stdio-mcp-transport
+           #:stdio-mcp-error
            #:openai-compatible-provider
            #:make-openai-provider
            #:provider-default-reasoning-effort
