@@ -54,6 +54,8 @@ NIL or empty string defaults to (:generic-mcp)."
                  :issue (clingon:getopt cmd :issue)
                  :condition (parse-condition (clingon:getopt cmd :condition))
                  :mcp-url (clingon:getopt cmd :mcp-url)
+                 :mcp-stdio (clingon:getopt cmd :mcp-stdio)
+                 :mcp-command (clingon:getopt cmd :mcp-command)
                  :base-url (clingon:getopt cmd :base-url)
                  :api-key (clingon:getopt cmd :api-key)
                  :model (clingon:getopt cmd :model)
@@ -71,6 +73,8 @@ NIL or empty string defaults to (:generic-mcp)."
                    :conditions (parse-conditions
                                 (clingon:getopt cmd :conditions))
                    :mcp-url (clingon:getopt cmd :mcp-url)
+                   :mcp-stdio (clingon:getopt cmd :mcp-stdio)
+                   :mcp-command (clingon:getopt cmd :mcp-command)
                    :base-url (clingon:getopt cmd :base-url)
                    :api-key (clingon:getopt cmd :api-key)
                    :model (clingon:getopt cmd :model)
@@ -102,6 +106,12 @@ NIL or empty string defaults to (:generic-mcp)."
    (clingon:make-option :string :long-name "mcp-url"
                         :description "cl-mcp HTTP URL (default $CL_HARNESS_MCP_URL or http://127.0.0.1:3001/mcp)"
                         :key :mcp-url)
+   (clingon:make-option :flag :long-name "mcp-stdio"
+                        :description "spawn cl-mcp via the built-in stdio command (each fix gets its own subprocess)"
+                        :key :mcp-stdio)
+   (clingon:make-option :string :long-name "mcp-command"
+                        :description "explicit shell-style command to spawn cl-mcp on stdio (e.g. \"ros run -s cl-mcp -e (cl-mcp:run :transport :stdio)\")"
+                        :key :mcp-command)
    (clingon:make-option :string :long-name "base-url"
                         :description "LLM endpoint (default $CL_HARNESS_LLM_BASE_URL)"
                         :key :base-url)
@@ -145,6 +155,12 @@ NIL or empty string defaults to (:generic-mcp)."
    (clingon:make-option :string :long-name "mcp-url"
                         :description "cl-mcp HTTP URL (default $CL_HARNESS_MCP_URL)"
                         :key :mcp-url)
+   (clingon:make-option :flag :long-name "mcp-stdio"
+                        :description "spawn cl-mcp via the built-in stdio command (one subprocess per bench run)"
+                        :key :mcp-stdio)
+   (clingon:make-option :string :long-name "mcp-command"
+                        :description "explicit shell-style command to spawn cl-mcp on stdio"
+                        :key :mcp-command)
    (clingon:make-option :string :long-name "base-url"
                         :description "LLM endpoint (default $CL_HARNESS_LLM_BASE_URL)"
                         :key :base-url)

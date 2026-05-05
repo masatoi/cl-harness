@@ -22,6 +22,7 @@
                "cl-harness/tests/main-test"
                "cl-harness/tests/mcp-test"
                "cl-harness/tests/mcp-stdio-test"
+               "cl-harness/tests/mcp-resolve-test"
                "cl-harness/tests/model-test"
                "cl-harness/tests/action-test"
                "cl-harness/tests/policy-test"
