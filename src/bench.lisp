@@ -58,6 +58,7 @@
            #:load-bench-task
            #:discover-tasks
            #:run-benchmark-task
+           #:run-benchmark-task-trials
            #:run-benchmark-suite
            #:aggregate-results
            #:format-suite-report
@@ -239,6 +240,18 @@ status so a single broken task does not abort the whole suite (PRD §8.11)."
                              internal-time-units-per-second))
                        :transcript-path transcript
                        :error (princ-to-string c))))))
+
+(defun run-benchmark-task-trials (task provider mcp-client condition trials
+                                  &key (log-dir (uiop:temporary-directory)))
+  "Run RUN-BENCHMARK-TASK TRIALS times and return the list of BENCH-RESULTs.
+
+Each trial gets its own sandbox tmpdir and transcript path because
+RUN-BENCHMARK-TASK is the unit of isolation. Used to estimate variance
+across repeated runs of the same (task, condition) pair."
+  (check-type trials (integer 1))
+  (loop repeat trials
+        collect (run-benchmark-task task provider mcp-client condition
+                                    :log-dir log-dir)))
 
 (defun aggregate-results (results)
   "Return a hash-table summarising RESULTS:

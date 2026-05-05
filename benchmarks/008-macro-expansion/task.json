@@ -1,0 +1,8 @@
+{
+  "id": "008-macro-expansion",
+  "description": "with-counter macro returns the initial value instead of the (possibly mutated) counter binding.",
+  "system": "macro-bug",
+  "test-system": "macro-bug/tests",
+  "issue": "The macro-bug/tests::counter-returns-final-value rove test fails because the with-counter macro returns the initial value rather than the bound counter. Inspect the macro expansion and fix it so the test passes.",
+  "fixture-dir": "fixture"
+}

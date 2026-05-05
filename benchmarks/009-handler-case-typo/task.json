@@ -1,0 +1,8 @@
+{
+  "id": "009-handler-case-typo",
+  "description": "handler-case binds a TYPE-ERROR clause but the body signals a custom condition; the wrong handler lets the actual error escape.",
+  "system": "handler-bug",
+  "test-system": "handler-bug/tests",
+  "issue": "The handler-bug/tests::safe-op-handles-my-error rove test fails because handler-case is dispatching on the wrong condition type. Fix the handler so it catches the condition the body actually signals.",
+  "fixture-dir": "fixture"
+}

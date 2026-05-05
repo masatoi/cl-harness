@@ -74,6 +74,7 @@
                 #:load-bench-task
                 #:discover-tasks
                 #:run-benchmark-task
+                #:run-benchmark-task-trials
                 #:run-benchmark-suite
                 #:aggregate-results
                 #:format-suite-report
@@ -133,6 +134,7 @@
            #:load-bench-task
            #:discover-tasks
            #:run-benchmark-task
+           #:run-benchmark-task-trials
            #:run-benchmark-suite
            #:aggregate-results
            #:format-suite-report
