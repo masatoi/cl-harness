@@ -14,7 +14,6 @@
 (defpackage #:cl-harness/src/context-view
   (:use #:cl)
   (:import-from #:cl-harness/src/state
-                #:develop-state
                 #:develop-state-goal
                 #:develop-state-project-inventory
                 #:develop-state-current-plan
@@ -38,8 +37,7 @@
                 #:patch-record-path
                 #:patch-record-via-tool
                 #:patch-record-form-type
-                #:patch-record-form-name
-                #:patch-record-verify-status)
+                #:patch-record-form-name)
   (:import-from #:cl-harness/src/failure-ledger
                 #:failure-ledger-active
                 #:failure-record-test-name
@@ -288,7 +286,7 @@ later phases that need it."
         (dolist (f failures)
           (format s "- ~A: ~A~A~%"
                   (or (failure-record-test-name f) "(unnamed)")
-                  (or (failure-record-description f) "(no description)")
+                  (failure-record-description f)
                   (if (failure-record-reason f)
                       (format nil " (~A)" (failure-record-reason f))
                       "")))))))

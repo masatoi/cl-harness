@@ -11,9 +11,6 @@
   (:use #:cl #:rove)
   (:import-from #:cl-harness/src/state
                 #:make-develop-state
-                #:develop-state-source-facts
-                #:develop-state-patch-records
-                #:develop-state-failure-ledger
                 #:develop-state-current-step-index
                 #:develop-state-record-source-fact
                 #:develop-state-record-patch-record
@@ -77,7 +74,7 @@
 (deftest make-context-view-implementation-filters-by-step
   ;; Only ledger entries with related-step-index = current-step-index
   ;; should appear in the relevant-* slots.
-  (let* ((s (%state)))
+  (let ((s (%state)))
     (develop-state-record-source-fact
      s (make-source-fact :path "/tmp/a.lisp" :via-tool "lisp-read-file"
                          :related-step-index 0))
@@ -95,7 +92,7 @@
       (ok (= 1 (length (context-view-relevant-patch-records v)))))))
 
 (deftest make-context-view-implementation-includes-active-failures
-  (let* ((s (%state)))
+  (let ((s (%state)))
     (develop-state-record-failure
      s (make-failure-record :kind :test-failed
                             :description "greet-test fails"
@@ -186,7 +183,7 @@
     (ok (stringp (context-view->string v :exploration)))))
 
 (deftest exploration-formatter-summarises-relevant-source-facts
-  (let* ((s (%state)))
+  (let ((s (%state)))
     (cl-harness/src/state:develop-state-record-source-fact
      s (cl-harness/src/source-fact:make-source-fact
         :path "/tmp/cv-test/src/greet.lisp"
@@ -201,7 +198,7 @@
   ;; Locks in the readable form-type / form-name rendering — without
   ;; the space separator, "defun" + "greet" would smash into
   ;; "defungreet" in the LLM-facing output.
-  (let* ((s (%state)))
+  (let ((s (%state)))
     (cl-harness/src/state:develop-state-record-source-fact
      s (cl-harness/src/source-fact:make-source-fact
         :path "/tmp/cv-test/src/greet.lisp"
@@ -223,7 +220,7 @@
                 (context-view->string v :implementation)))))
 
 (deftest implementation-formatter-summarises-relevant-patches
-  (let* ((s (%state)))
+  (let ((s (%state)))
     (cl-harness/src/state:develop-state-record-patch-record
      s (cl-harness/src/patch-record:make-patch-record
         :path "/tmp/cv-test/src/greet.lisp"
@@ -239,7 +236,7 @@
       (ok (search "lisp-edit-form" out)))))
 
 (deftest implementation-formatter-includes-active-failures
-  (let* ((s (%state)))
+  (let ((s (%state)))
     (cl-harness/src/state:develop-state-record-failure
      s (cl-harness/src/failure-ledger:make-failure-record
         :kind :test-failed

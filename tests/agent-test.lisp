@@ -41,10 +41,7 @@
                 #:plan-step
                 #:investigation-target)
   (:import-from #:cl-harness/src/explore
-                #:run-explore-agent
-                #:explore-result
-                #:explore-result-status
-                #:explore-result-memo))
+                #:run-explore-agent))
 
 (in-package #:cl-harness/tests/agent-test)
 
