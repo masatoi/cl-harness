@@ -39,7 +39,8 @@
                "cl-harness/tests/develop-bench-test"
                "cl-harness/tests/state-test"
                "cl-harness/tests/source-fact-test"
-               "cl-harness/tests/patch-record-test")
+               "cl-harness/tests/patch-record-test"
+               "cl-harness/tests/failure-ledger-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
