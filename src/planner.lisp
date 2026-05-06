@@ -41,7 +41,8 @@
            #:plan-development
            #:planner-error
            #:planner-error-message
-           #:+default-planner-system-prompt+))
+           #:+default-planner-system-prompt+
+           #:+supported-development-modes+))
 
 (in-package #:cl-harness/src/planner)
 
@@ -178,6 +179,17 @@ orchestrator.")
 (Phase P3, v0.4) uses this to decide whether to run an explore
 sub-step before the implement sub-step.")
 
+(defparameter +supported-development-modes+
+  '(:top-down :bottom-up :mixed)
+  "Allowed values for the :MODE kwarg to PLAN-DEVELOPMENT and
+ORCHESTRATOR:DEVELOP (v0.4 Phase 6).
+:TOP-DOWN  — implement-first; the orchestrator coerces every step's
+            needs-exploration to :NONE before execution.
+:BOTTOM-UP — explore-first; the orchestrator promotes :NONE / NIL
+            steps to :LIGHTWEIGHT so each step gets at least a quick
+            REPL look at the existing surface before implementing.
+:MIXED    — let the planner decide per step (the v0.4.0 default).")
+
 (defclass plan-step ()
   ((index :initarg :index :reader plan-step-index)
    (issue :initarg :issue :reader plan-step-issue)
@@ -197,7 +209,7 @@ sub-step before the implement sub-step.")
    (risks :initarg :risks :initform nil
           :reader plan-step-risks)
    (needs-exploration :initarg :needs-exploration :initform :none
-                      :reader plan-step-needs-exploration)
+                      :accessor plan-step-needs-exploration)
    ;; Written by the orchestrator (P3 / P4) — not by the planner.
    ;; Initialised here to NIL so callers can read the slot
    ;; uniformly.
@@ -237,9 +249,25 @@ summary suitable for inclusion in a replan prompt."
                      (plan-step-issue step)
                      (plan-step-test-name step)))))
 
+(defun %mode-instruction (mode)
+  "One-line nudge the user-prompt prepends so the LLM aligns its
+needs_exploration choices with the harness's intended mode (v0.4
+Phase 6). NIL or :MIXED return NIL — no nudge, planner decides
+freely. The orchestrator still mechanically enforces the mode after
+the plan returns; this just helps the LLM produce a plan whose
+shape already matches."
+  (case mode
+    (:top-down
+     "Mode: top-down. Prefer implement-first. Set needs_exploration to \"none\" on every step unless the goal is genuinely under-specified.")
+    (:bottom-up
+     "Mode: bottom-up. Prefer explore-first. Set needs_exploration to \"lightweight\" or \"deep\" on every step so the executor has a chance to read the existing surface before implementing.")
+    ((:mixed nil) nil)
+    (t nil)))
+
 (defun %build-user-prompt (goal &key project-root system test-system
                                      prior-plan failure-context
-                                     project-inventory)
+                                     project-inventory
+                                     mode)
   "Assemble the user-side message for the planner LLM call.
 
 PROJECT-INVENTORY (v0.4 Phase 2), when supplied, is prepended as a
@@ -250,11 +278,18 @@ structures.
 PRIOR-PLAN, when supplied, is rendered as a `Previous plan:` block
 above the goal. FAILURE-CONTEXT, when supplied, is rendered as a
 `Failure:` paragraph. Together they're how P3's replan path tells the
-planner what was tried and why it didn't work."
+planner what was tried and why it didn't work.
+
+MODE (v0.4 Phase 6) is the development style the orchestrator will
+enforce after the plan returns; rendering it here lets the LLM
+produce a plan whose needs_exploration values already match."
   (with-output-to-string (s)
     (when (and project-inventory (plusp (length project-inventory)))
       (format s "~A~%~%" project-inventory))
     (format s "Goal: ~A~%~%" goal)
+    (let ((nudge (%mode-instruction mode)))
+      (when nudge
+        (format s "~A~%~%" nudge)))
     (when project-root
       (format s "Project root: ~A~%" project-root))
     (when system
@@ -493,6 +528,7 @@ schema."
                                    prior-plan
                                    failure-context
                                    project-inventory
+                                   (mode :mixed)
                                    (system-prompt
                                     +default-planner-system-prompt+))
   "Decompose a high-level GOAL into an ordered list of PLAN-STEP
@@ -521,6 +557,11 @@ when iterating on prompt design without rebuilding the system.
 Returns a list of PLAN-STEP instances in plan order. Signals
 PLANNER-ERROR when the response cannot be parsed."
   (check-type goal string)
+  (unless (member mode +supported-development-modes+)
+    (error 'planner-error
+           :message (format nil "unsupported :mode ~S; expected one of ~S"
+                            mode +supported-development-modes+)
+           :raw mode))
   (let* ((messages (list (make-chat-message "system" system-prompt)
                          (make-chat-message
                           "user"
@@ -530,7 +571,8 @@ PLANNER-ERROR when the response cannot be parsed."
                                               :test-system test-system
                                               :prior-plan prior-plan
                                               :failure-context failure-context
-                                              :project-inventory project-inventory))))
+                                              :project-inventory project-inventory
+                                              :mode mode))))
          (response (complete-chat provider messages))
          (content (chat-response-content response)))
     (unless (and (stringp content) (plusp (length content)))

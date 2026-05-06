@@ -34,6 +34,16 @@
     (t (error "unknown condition: ~A (expected file-only / generic-mcp / runtime-native)"
               s))))
 
+(defun parse-mode (s)
+  "Map a CLI string to a develop MODE keyword. Accepts top-down /
+bottom-up / mixed (case-insensitive). Errors otherwise."
+  (let ((d (string-downcase (or s "mixed"))))
+    (cond
+      ((string= d "top-down") :top-down)
+      ((string= d "bottom-up") :bottom-up)
+      ((string= d "mixed") :mixed)
+      (t (error "unknown mode ~S; expected top-down|bottom-up|mixed" s)))))
+
 (defun parse-conditions (s)
   "Split a comma-separated CLI string into a list of condition keywords.
 NIL or empty string defaults to (:generic-mcp)."
@@ -220,6 +230,7 @@ NIL or empty string defaults to (:generic-mcp)."
                   :max-tokens (clingon:getopt cmd :max-tokens)
                   :reasoning-effort (clingon:getopt cmd :reasoning-effort)
                   :max-replans (clingon:getopt cmd :max-replans)
+                  :mode (parse-mode (clingon:getopt cmd :mode))
                   :log-path (clingon:getopt cmd :log-path)))
          (status (develop-result-status result)))
     (uiop:quit (develop-status-to-exit-code status))))
@@ -274,6 +285,9 @@ NIL or empty string defaults to (:generic-mcp)."
    (clingon:make-option :integer :long-name "max-replans"
                         :description "maximum replan rounds before :limit-exhausted (default 3)"
                         :initial-value 3 :key :max-replans)
+   (clingon:make-option :string :long-name "mode"
+                        :description "development mode (top-down|bottom-up|mixed) — implement-first, explore-first, or planner-driven (default mixed)"
+                        :initial-value "mixed" :key :mode)
    (clingon:make-option :string :long-name "log-path"
                         :description "develop-level JSONL transcript path (default tmpdir)"
                         :key :log-path)))

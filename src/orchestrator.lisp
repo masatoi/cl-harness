@@ -40,7 +40,8 @@
                 #:plan-step-files-to-modify
                 #:plan-step-needs-exploration
                 #:plan-development
-                #:planner-error)
+                #:planner-error
+                #:+supported-development-modes+)
   (:import-from #:cl-harness/src/explore
                 #:run-explore-agent
                 #:explore-result
@@ -77,7 +78,8 @@
            #:materialize-test-source
            #:plan-step->run-config
            #:execute-plan
-           #:develop))
+           #:develop
+           #:+supported-development-modes+))
 
 (in-package #:cl-harness/src/orchestrator)
 
@@ -477,6 +479,30 @@ RESULT's step-results, preserving step order. v0.4 Phase 4."
   (loop for sr in (develop-result-step-results result)
         append (develop-step-result-abstraction-decisions sr)))
 
+(defun %apply-mode-to-plan (plan mode)
+  "Mutate PLAN in place to enforce the development MODE (v0.4 Phase 6).
+:TOP-DOWN  → every step's needs-exploration becomes :NONE (skip the
+             explore sub-agent regardless of what the planner asked for).
+:BOTTOM-UP → :NONE / NIL get promoted to :LIGHTWEIGHT so each step
+             gets at least a quick read-only look at the existing
+             surface before implementing.
+:MIXED     → leave the planner's choice untouched.
+The mutation is the orchestrator's mechanical enforcement layer.
+The planner already sees a Mode: ... line in its user prompt
+(plan-development), so a well-behaved LLM produces a plan matching
+the mode and this layer is a no-op; misaligned plans get corrected."
+  (dolist (step plan)
+    (let ((current (plan-step-needs-exploration step)))
+      (case mode
+        (:top-down
+         (setf (plan-step-needs-exploration step) :none))
+        (:bottom-up
+         (when (or (null current) (eq current :none))
+           (setf (plan-step-needs-exploration step) :lightweight)))
+        ;; :mixed (and the default) — leave alone.
+        (t nil))))
+  plan)
+
 (defun %first-test-name (plan)
   "Return the test_name of PLAN's first PLAN-STEP, or NIL when PLAN is
 empty. Used for stuck detection."
@@ -499,6 +525,7 @@ attempted."
                      (condition :generic-mcp)
                      run-limits
                      project-inventory
+                     (mode :mixed)
                      log-path
                      (max-replans 3)
                      (planner-fn #'plan-development)
@@ -531,15 +558,28 @@ appends per-round events; DEVELOP wraps them with replan-trigger
 events so a single transcript shows the full multi-round history.
 (EXECUTE-PLAN's own develop-start / develop-end events are emitted
 once per round; readers should disambiguate by replan-index, which
-is added to the payload here.)"
+is added to the payload here.)
+
+MODE (v0.4 Phase 6) selects the development style:
+:TOP-DOWN  — implement-first; every plan-step's needs-exploration is
+             coerced to :NONE before execution.
+:BOTTOM-UP — explore-first; :NONE / NIL needs-exploration is promoted
+             to :LIGHTWEIGHT.
+:MIXED     — let the planner decide per step (default)."
   (check-type goal string)
   (check-type max-replans (integer 0))
-  (let ((plan (funcall planner-fn goal
-                       :project-root project-root
-                       :system system
-                       :test-system test-system
-                       :provider provider
-                       :project-inventory project-inventory))
+  (unless (member mode +supported-development-modes+)
+    (error "develop: unsupported :mode ~S; expected one of ~S"
+           mode +supported-development-modes+))
+  (let ((plan (%apply-mode-to-plan
+               (funcall planner-fn goal
+                        :project-root project-root
+                        :system system
+                        :test-system test-system
+                        :provider provider
+                        :project-inventory project-inventory
+                        :mode mode)
+               mode))
         (results '())
         (replans 0)
         (last-failure-test-name nil)
@@ -583,14 +623,17 @@ is added to the payload here.)"
              (setf last-failure-test-name this-failure))
            ;; Replan.
            (incf replans)
-           (let ((new-plan (funcall planner-fn goal
-                                    :project-root project-root
-                                    :system system
-                                    :test-system test-system
-                                    :provider provider
-                                    :project-inventory project-inventory
-                                    :prior-plan plan
-                                    :failure-context (%failure-context last-result))))
+           (let ((new-plan (%apply-mode-to-plan
+                            (funcall planner-fn goal
+                                     :project-root project-root
+                                     :system system
+                                     :test-system test-system
+                                     :provider provider
+                                     :project-inventory project-inventory
+                                     :mode mode
+                                     :prior-plan plan
+                                     :failure-context (%failure-context last-result))
+                            mode)))
              (when (equal (%first-test-name new-plan)
                           last-failure-test-name)
                (setf status :stuck

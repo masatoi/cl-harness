@@ -127,7 +127,8 @@
                 #:investigation-target-name
                 #:investigation-target-intent
                 #:plan-development
-                #:planner-error)
+                #:planner-error
+                #:+supported-development-modes+)
   (:import-from #:cl-harness/src/orchestrator
                 #:develop-step-result
                 #:develop-step-result-status
@@ -265,6 +266,7 @@
            #:investigation-target-intent
            #:plan-development
            #:planner-error
+           #:+supported-development-modes+
            #:develop-step-result
            #:develop-step-result-status
            #:develop-step-result-step-index

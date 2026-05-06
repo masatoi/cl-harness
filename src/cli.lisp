@@ -313,6 +313,8 @@ trivial runs."
                      project-inventory
                      (gather-inventory-p t)
                      (inventory-byte-budget 5000)
+                     ;; v0.4 Phase 6: mode selector.
+                     (mode :mixed)
                      log-path)
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
@@ -328,6 +330,12 @@ paragraph; do not include code). TEST-FILE is the rove file the
 planner-authored deftest forms get appended to; the file must already
 exist with a defpackage that imports rove and the project's main
 package.
+
+MODE (v0.4 Phase 6) is :TOP-DOWN, :BOTTOM-UP, or :MIXED (default).
+:TOP-DOWN forces every plan-step's needs-exploration to :NONE
+(implement-first), :BOTTOM-UP promotes :NONE / NIL needs to
+:LIGHTWEIGHT (explore-first), :MIXED leaves the planner's choice
+intact.
 
 Returns the populated DEVELOP-RESULT. Caller is responsible for
 inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
@@ -410,6 +418,7 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                             :condition condition
                             :run-limits effective-limits
                             :project-inventory effective-inventory
+                            :mode mode
                             :max-replans max-replans
                             :log-path path)))
                (format t "~A" (format-develop-report result :log-path path))

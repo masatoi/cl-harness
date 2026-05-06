@@ -332,10 +332,10 @@ plan (so a stuck loop test can keep getting the same response)."
   (let ((remaining plans))
     (lambda (goal &key project-root system test-system provider
                        prior-plan failure-context system-prompt
-                       project-inventory)
+                       project-inventory mode)
       (declare (ignore goal project-root system test-system provider
                        prior-plan failure-context system-prompt
-                       project-inventory))
+                       project-inventory mode))
       (cond
         ((null remaining)
          (error "canned-planner exhausted"))
