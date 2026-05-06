@@ -960,33 +960,33 @@ order. Helper for tests that assert against the on-disk transcript."
   ;; emits one lisp-read-file action followed by finish. Verify exactly
   ;; one source-fact lands in the ledger with the expected file path
   ;; and via-tool.
-  (let* ((ds (make-develop-state
-              :goal "g"
-              :project-root "/tmp/cl-harness-b7-test/"
-              :system "demo"
-              :test-system "demo/tests"))
-         (*llm-responses*
-          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"src/foo.lisp\",\"name_pattern\":\"^bar$\"},\"thought\":\"read foo\"}"
-                "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"done\"}"))
-         (*mcp-handler*
-          (lambda (body)
-            (let ((id (%jsonrpc-id body)))
-              (cond
-                ((search "\"fs-set-project-root\"" body)
-                 (%ok-tool-result id))
-                ((search "\"load-system\"" body)
-                 (%ok-tool-result id))
-                ((search "\"run-tests\"" body)
-                 (%ok-tool-result id :passed 0 :failed 1))
-                ((search "\"lisp-read-file\"" body)
-                 (%ok-tool-result id))
-                ((search "\"pool-kill-worker\"" body)
-                 (%ok-tool-result id))
-                (t (error "unexpected MCP body: ~A" body))))))
-         (mcp (%make-mcp-client-with-handler))
-         (provider (%make-stub-provider))
-         (policy (make-tool-policy :generic-mcp))
-         (path (%temp-log-path)))
+  (let ((ds (make-develop-state
+             :goal "g"
+             :project-root "/tmp/cl-harness-b7-test/"
+             :system "demo"
+             :test-system "demo/tests"))
+        (*llm-responses*
+         (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"src/foo.lisp\",\"name_pattern\":\"^bar$\"},\"thought\":\"read foo\"}"
+               "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"done\"}"))
+        (*mcp-handler*
+         (lambda (body)
+           (let ((id (%jsonrpc-id body)))
+             (cond
+               ((search "\"fs-set-project-root\"" body)
+                (%ok-tool-result id))
+               ((search "\"load-system\"" body)
+                (%ok-tool-result id))
+               ((search "\"run-tests\"" body)
+                (%ok-tool-result id :passed 0 :failed 1))
+               ((search "\"lisp-read-file\"" body)
+                (%ok-tool-result id))
+               ((search "\"pool-kill-worker\"" body)
+                (%ok-tool-result id))
+               (t (error "unexpected MCP body: ~A" body))))))
+        (mcp (%make-mcp-client-with-handler))
+        (provider (%make-stub-provider))
+        (policy (make-tool-policy :generic-mcp))
+        (path (%temp-log-path)))
     (unwind-protect
          (let ((logger (open-run-logger path)))
            (run-agent (%make-config) provider mcp policy logger

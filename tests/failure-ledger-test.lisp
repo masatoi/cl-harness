@@ -20,7 +20,6 @@
                 #:failure-record-resolved-at
                 #:failure-record-resolved-by-patch
                 #:failure-record-verify-source
-                #:failure-ledger
                 #:make-failure-ledger
                 #:failure-ledger-active
                 #:failure-ledger-resolved
@@ -122,8 +121,8 @@
   ;; Second call on an already-resolved record must not duplicate
   ;; the resolved-list entry, must not overwrite resolved-at, and
   ;; must not overwrite resolved-by-patch.
-  (let* ((l (make-failure-ledger))
-         (f (%fr :test-name "double-resolve")))
+  (let ((l (make-failure-ledger))
+        (f (%fr :test-name "double-resolve")))
     (record-failure l f)
     (mark-resolved-by l f :patch :first-patch)
     (let ((first-resolved-at (failure-record-resolved-at f)))
@@ -155,9 +154,9 @@
                      ("source" . ,source-h))
                    :test 'equal))
          (tr (alist-hash-table
-              `(("passed" . 0)
-                ("failed" . 1)
-                ("failed_tests" . #(,entry-h)))
+              (list (cons "passed" 0)
+                    (cons "failed" 1)
+                    (cons "failed_tests" (vector entry-h)))
               :test 'equal)))
     (let ((records (parse-failure-records-from-test-result
                     tr :verify-source :incremental
@@ -182,7 +181,7 @@
                      ("description" . "y"))
                    :test 'equal))
          (tr (alist-hash-table
-              `(("failed_tests" . #(,entry-h)))
+              (list (cons "failed_tests" (vector entry-h)))
               :test 'equal)))
     (let ((records (parse-failure-records-from-test-result
                     tr :verify-source :incremental)))
@@ -200,7 +199,7 @@
                    '(("form" . "(ok t)"))
                    :test 'equal))
          (tr (alist-hash-table
-              `(("failed_tests" . #(,entry-h)))
+              (list (cons "failed_tests" (vector entry-h)))
               :test 'equal)))
     (let ((records (parse-failure-records-from-test-result
                     tr :verify-source :incremental)))
