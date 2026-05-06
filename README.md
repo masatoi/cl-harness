@@ -12,48 +12,51 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-**v0.2.0** (`62f62f5`). Builds on the v0.1.0 MVP with a credibility
-pass (Tier 1), usability pass (Tier 2), methodology pass (Tier 3),
-and an architecture cleanup that decouples the harness from any
-shared cl-mcp instance:
+**v0.3.0** (`2f4c6eb`). Builds on v0.2.0's credibility / usability /
+methodology hardening with a planner+orchestrator stack on top of
+the executor, plus three Tier 4 design-hardening refactors:
 
-- All seven `run-limits` slots are enforced uniformly; a `:run-end`
-  JSONL event carries the full per-run metric set.
-- Patch diffs (`:patch` events) include the unified diff inline.
-- Shell CLI via clingon (`asdf:make :cl-harness/binary`); exit codes
-  0 / 1 / 2 mirror the agent's terminal status.
-- `--dry-run` exercises the LLM end-to-end without invoking any MCP
-  tool; useful for prompt iteration.
-- `:max-action-parse-errors` budget aborts a run when the model is
-  stuck producing un-parseable JSON.
-- Bench mode does a true clean reverify (`pool-kill-worker` + fresh
-  load) before reporting `:passed`, on a per-task isolated sandbox.
-- `cl-harness:fix` clean-rooms the cl-mcp worker on entry by
-  default, so a same-named system loaded from a prior session can no
-  longer answer the initial verify against a different sandbox.
-- `parse-action` tolerates flat-arg tool calls (Qwen3 MoE
-  occasionally drops the `arguments` nesting even at temp 0).
-- `tool-result` JSONL events carry `error_text` when the call
-  failed — post-mortems no longer require a re-run with extra
-  logging.
-- **MCP transport: stdio by default**. Each `fix` / `bench` spawns
-  its own `cl-mcp` subprocess via the standard MCP stdio launch
-  command and tears it down on exit, so the harness no longer
-  competes with Claude Code / Codex / etc. for shared HTTP workers.
-  HTTP remains a one-flag opt-in via `--mcp-url` /
-  `$CL_HARNESS_MCP_URL`.
-- 90 unit tests pass on a clean worker; 12 benchmark fixtures.
+- **`cl-harness:develop`** — new entry point. Takes a free-form goal
+  and a project root, asks an LLM to decompose into focused sub-goals
+  (planner authors a rove test per sub-goal), and drives each through
+  the existing fix loop with replan-on-failure. Terminal statuses:
+  `:passed` / `:limit-exhausted` (`limit-hit :max-replans`) /
+  `:stuck` (`limit-hit :no-progress`, set when the replanner returns
+  the same failing test twice in a row).
+- **Develop-level JSONL transcript** at `--log-path` carries
+  `develop-start / plan / step-start / step-end / develop-end`.
+  Per-step run-agent transcripts are referenced via `transcript_path`
+  so a single develop file is enough to drill into any sub-goal.
+- **Greenfield benchmark fixtures** under `develop-benchmarks/`
+  (100-greet, 101-double) — empty-source + spec-test starter
+  material. No runner yet; `develop-bench` is a v0.4 wish-list item.
+- **Tier 4 C-2:** `summarize-tool-result` is now a defgeneric with
+  per-tool eql-keyword methods; third-party tools register custom
+  summarizers via `defmethod` without modifying agent.lisp.
+- **Tier 4 C-1:** policy.lisp drops the three hand-curated tool
+  lists in favour of a single rule table with `prefix*` glob
+  matching. Future cl-mcp tools shipped under an existing family
+  (e.g. `lisp-format-form`) auto-flow into the right policy without
+  a cl-harness release. `make-tool-policy :available-tools` lets
+  callers feed the live `tools/list` output for an exact intersection.
+- **Tier 4 C-3:** new `compact-history` helper for chat-history
+  size management. Keeps head + tail verbatim, replaces the middle
+  with a digest message that records the elided count and approximate
+  token cost. Auto-trigger inside the agent loop is a v0.4 task; the
+  data-structure transformation is in place now.
 
-Single-trial pass-rate over the 10-task suite under `:generic-mcp`
-on `llama-3.3-70b-versatile` (Groq): **10 / 10**. Variance is large
-enough across runs that this number should not be quoted as a stable
-performance metric — see
-`docs/benchmarks/results-2026-05-05-2.md`.
+All v0.2.0 invariants (clean-room ASDF scoping, clean-verify on
+`:passed`, error_text in JSONL on tool failures, the seven run-limits
+slots, stdio MCP transport by default) carry over unchanged.
 
-Local Qwen3.6-35B-A3B (SGLang) smoke under the new stdio default
-landed `:PASSED` in 7 turns / 9.4 s / 8 307 tokens
-(`docs/notes/2026-05-06-qwen-smoke.md`); a full sweep against this
-endpoint is queued.
+125 unit tests pass on a clean worker; 12 fix/bench fixtures + 2
+greenfield develop fixtures.
+
+Single-trial pass-rate over the 12-task suite under `:generic-mcp`:
+**11/12 (91.7%)** on Qwen3.6-35B-A3B (SGLang); **10/12 (83.3%)** on
+`llama-3.3-70b-versatile` (Groq). See
+`docs/benchmarks/results-2026-05-06-qwen.md` for the post-anomaly-fix
+v2 run; the four-cell ±20% variance still applies.
 
 ## Quick start
 

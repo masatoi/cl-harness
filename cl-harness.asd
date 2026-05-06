@@ -5,7 +5,7 @@
   :description "Runtime-native coding agent harness for Common Lisp."
   :author "cl-harness contributors"
   :license "MIT"
-  :version "0.2.0"
+  :version "0.3.0"
   :depends-on ("alexandria"
                "yason"
                "local-time"
