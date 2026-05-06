@@ -713,3 +713,19 @@ clean runtimeで検証されたこと
 ```
 
 この3つを明確に分けることで、REPL駆動・ボトムアップ開発をAIエージェントに安全に扱わせることができる。
+
+---
+
+## 14. 実装状況
+
+| Phase | 内容 | 状態 | 関連 plan |
+|---|---|---|---|
+| A | 中央 `develop-state` クラスの導入と `develop` の thread 化 | landed (2026-05-06) | `docs/plans/2026-05-06-phase-a-develop-state.md` |
+| B | `source-fact` / `patch-record` / `failure-ledger` / `runtime-vocabulary` slot 追加 | not started | TBD |
+| C | `make-context-view` による phase/subtask ごとの圧縮 view 生成 | not started | TBD |
+| D | tool 結果圧縮、REPL transcript の finding 化 | not started | TBD |
+| E | staleness 管理、構造化 reporting | not started | TBD |
+
+Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
+§3.9 (Verification) の保持先として機能する土台で、§3.3 / §3.4 / §3.5 / §3.6 /
+§3.8 / §4 / §5 / §6 / §8 / §9 / §10 は後続 phase で実装する。
