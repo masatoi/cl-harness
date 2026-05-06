@@ -10,6 +10,10 @@
 
 (defpackage #:cl-harness/src/state
   (:use #:cl)
+  (:import-from #:cl-harness/src/failure-ledger
+                #:failure-ledger
+                #:make-failure-ledger
+                #:record-failure)
   (:export #:develop-state
            #:make-develop-state
            #:develop-state-goal
@@ -27,7 +31,13 @@
            #:develop-state-status
            #:develop-state-limit-hit
            #:develop-state-integration-issues
-           #:develop-state-record-step-result))
+           #:develop-state-record-step-result
+           #:develop-state-source-facts
+           #:develop-state-record-source-fact
+           #:develop-state-patch-records
+           #:develop-state-record-patch-record
+           #:develop-state-failure-ledger
+           #:develop-state-record-failure))
 
 (in-package #:cl-harness/src/state)
 
@@ -96,7 +106,20 @@ the final DEVELOP-RESULT status when the loop exits.")
    (integration-issues :initform nil
                        :accessor develop-state-integration-issues
                        :documentation "INTEGRATION-ISSUE list found
-by the post-success static check, or NIL when none ran."))
+by the post-success static check, or NIL when none ran.")
+   (source-facts :initform nil :accessor %source-facts
+                 :documentation "Reverse-chronological list of
+SOURCE-FACT instances. Internal; public reader is
+DEVELOP-STATE-SOURCE-FACTS.")
+   (patch-records :initform nil :accessor %patch-records
+                  :documentation "Reverse-chronological list of
+PATCH-RECORD instances. Internal; public reader is
+DEVELOP-STATE-PATCH-RECORDS.")
+   (failure-ledger :reader develop-state-failure-ledger
+                   :documentation "FAILURE-LEDGER owned by this
+state. Auto-initialised in INITIALIZE-INSTANCE :AFTER below; no
+:initform because we don't want to share one ledger across
+instances."))
   (:documentation
    "Central state for one DEVELOP invocation. Aggregates the goal,
 project context, current plan, step outcomes across replan rounds,
@@ -151,3 +174,38 @@ see execution order. Returns STATE."
 (oldest first). Mirrors DEVELOP-RESULT-STEP-RESULTS so the two
 are interchangeable for downstream readers."
   (reverse (%step-results state)))
+
+(defmethod initialize-instance :after ((s develop-state) &key)
+  "Allocate a fresh FAILURE-LEDGER for each new DEVELOP-STATE.
+Using :AFTER instead of an :initform so each instance gets its
+own ledger (an :initform expression evaluated at class-init time
+would share one ledger between every instance)."
+  (setf (slot-value s 'failure-ledger) (make-failure-ledger)))
+
+(defun develop-state-record-source-fact (state fact)
+  "Push FACT onto STATE's source-facts list. Returns STATE."
+  (push fact (%source-facts state))
+  state)
+
+(defun develop-state-source-facts (state)
+  "Return STATE's recorded source-facts in observation order
+(oldest first)."
+  (reverse (%source-facts state)))
+
+(defun develop-state-record-patch-record (state record)
+  "Push RECORD onto STATE's patch-records list. Returns STATE."
+  (push record (%patch-records state))
+  state)
+
+(defun develop-state-patch-records (state)
+  "Return STATE's recorded patch-records in observation order
+(oldest first)."
+  (reverse (%patch-records state)))
+
+(defun develop-state-record-failure (state failure-record)
+  "Append FAILURE-RECORD to STATE's failure-ledger active list.
+Thin wrapper around RECORD-FAILURE on the ledger; provided so
+callers don't need to know the ledger lives inside develop-state.
+Returns STATE."
+  (record-failure (develop-state-failure-ledger state) failure-record)
+  state)

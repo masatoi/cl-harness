@@ -9,6 +9,8 @@
 
 (defpackage #:cl-harness/tests/state-test
   (:use #:cl #:rove)
+  (:import-from #:cl-harness/src/failure-ledger
+                #:failure-ledger-active)
   (:import-from #:cl-harness/src/state
                 #:develop-state
                 #:make-develop-state
@@ -27,7 +29,13 @@
                 #:develop-state-status
                 #:develop-state-limit-hit
                 #:develop-state-integration-issues
-                #:develop-state-record-step-result))
+                #:develop-state-record-step-result
+                #:develop-state-source-facts
+                #:develop-state-record-source-fact
+                #:develop-state-patch-records
+                #:develop-state-record-patch-record
+                #:develop-state-failure-ledger
+                #:develop-state-record-failure))
 
 (in-package #:cl-harness/tests/state-test)
 
@@ -102,3 +110,49 @@
     (ok (eq :passed (develop-state-status s)))
     (ok (eq :max-replans (develop-state-limit-hit s)))
     (ok (equal '(:issue) (develop-state-integration-issues s)))))
+
+(deftest develop-state-source-facts-default-empty
+  (let ((s (%make)))
+    (ok (null (develop-state-source-facts s)))))
+
+(deftest develop-state-record-source-fact-preserves-order
+  (let ((s (%make)))
+    (develop-state-record-source-fact s :first-fact)
+    (develop-state-record-source-fact s :second-fact)
+    (develop-state-record-source-fact s :third-fact)
+    (ok (equal '(:first-fact :second-fact :third-fact)
+               (develop-state-source-facts s)))))
+
+(deftest develop-state-patch-records-default-empty
+  (let ((s (%make)))
+    (ok (null (develop-state-patch-records s)))))
+
+(deftest develop-state-record-patch-record-preserves-order
+  (let ((s (%make)))
+    (develop-state-record-patch-record s :first-patch)
+    (develop-state-record-patch-record s :second-patch)
+    (ok (equal '(:first-patch :second-patch)
+               (develop-state-patch-records s)))))
+
+(deftest develop-state-failure-ledger-is-auto-initialized
+  ;; Unlike source-facts and patch-records (lists),
+  ;; failure-ledger is an object that develop-state owns from
+  ;; construction. We expect a non-NIL ledger right out of the box.
+  (let ((s (%make)))
+    (ok (not (null (develop-state-failure-ledger s))))))
+
+(deftest develop-state-failure-ledger-is-per-instance
+  ;; Each develop-state must get its own ledger; an :initform
+  ;; expression evaluated at class-init time would share one
+  ;; ledger between every instance. Verify two states have
+  ;; non-eq ledgers.
+  (let ((s1 (%make))
+        (s2 (%make)))
+    (ok (not (eq (develop-state-failure-ledger s1)
+                 (develop-state-failure-ledger s2))))))
+
+(deftest develop-state-record-failure-routes-to-ledger
+  (let* ((s (%make))
+         (l (develop-state-failure-ledger s)))
+    (develop-state-record-failure s :a-failure-record)
+    (ok (equal '(:a-failure-record) (failure-ledger-active l)))))
