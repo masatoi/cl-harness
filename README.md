@@ -12,51 +12,81 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-**v0.3.0** (`2f4c6eb`). Builds on v0.2.0's credibility / usability /
-methodology hardening with a planner+orchestrator stack on top of
-the executor, plus three Tier 4 design-hardening refactors:
+**v0.4.0**. Lifts cl-harness from "TDD-Green helper" to a
+runtime-native development harness: enriched plan-step schema,
+project inventory injection, a read-only explore phase, an
+abstraction-decision ledger, a static integration check, a
+top-down/bottom-up/mixed mode selector, and a 7-task greenfield
+benchmark suite. Builds on the v0.3.0 planner+orchestrator stack
+without breaking any existing `fix` / `bench` invariants.
 
-- **`cl-harness:develop`** — new entry point. Takes a free-form goal
-  and a project root, asks an LLM to decompose into focused sub-goals
-  (planner authors a rove test per sub-goal), and drives each through
-  the existing fix loop with replan-on-failure. Terminal statuses:
-  `:passed` / `:limit-exhausted` (`limit-hit :max-replans`) /
-  `:stuck` (`limit-hit :no-progress`, set when the replanner returns
-  the same failing test twice in a row).
-- **Develop-level JSONL transcript** at `--log-path` carries
-  `develop-start / plan / step-start / step-end / develop-end`.
-  Per-step run-agent transcripts are referenced via `transcript_path`
-  so a single develop file is enough to drill into any sub-goal.
-- **Greenfield benchmark fixtures** under `develop-benchmarks/`
-  (100-greet, 101-double) — empty-source + spec-test starter
-  material. No runner yet; `develop-bench` is a v0.4 wish-list item.
-- **Tier 4 C-2:** `summarize-tool-result` is now a defgeneric with
-  per-tool eql-keyword methods; third-party tools register custom
-  summarizers via `defmethod` without modifying agent.lisp.
-- **Tier 4 C-1:** policy.lisp drops the three hand-curated tool
-  lists in favour of a single rule table with `prefix*` glob
-  matching. Future cl-mcp tools shipped under an existing family
-  (e.g. `lisp-format-form`) auto-flow into the right policy without
-  a cl-harness release. `make-tool-policy :available-tools` lets
-  callers feed the live `tools/list` output for an exact intersection.
-- **Tier 4 C-3:** new `compact-history` helper for chat-history
-  size management. Keeps head + tail verbatim, replaces the middle
-  with a digest message that records the elided count and approximate
-  token cost. Auto-trigger inside the agent loop is a v0.4 task; the
-  data-structure transformation is in place now.
+What's new since v0.3.0:
 
-All v0.2.0 invariants (clean-room ASDF scoping, clean-verify on
-`:passed`, error_text in JSONL on tool failures, the seven run-limits
-slots, stdio MCP transport by default) carry over unchanged.
+- **Enriched plan-step schema** (Phase 1) — plan-step now carries
+  `purpose`, `acceptance-criteria`, `investigation-targets`
+  (`{kind, name, intent}`), `risks`, and `needs-exploration`
+  (`:none` / `:lightweight` / `:deep`). All slots are optional so
+  v0.3 planner responses keep parsing.
+- **Project inventory injection** (Phase 2) — before each
+  `plan-development` call, the harness gathers a 5KB read-only
+  snapshot of `.asd` / `src/*.lisp` / `tests/*.lisp` heads and
+  prepends it to the planner's user prompt so the LLM builds on
+  existing vocabulary instead of inventing parallel structures.
+- **Explore phase** (Phase 3) — when a plan-step's
+  `needs-exploration` is `:lightweight` or `:deep`, an explore
+  sub-agent runs first under a new `:explore` tool policy
+  (read-only: `repl-eval`, `code-find`, `code-describe`,
+  `inspect-object`, `lisp-read-file`; all write tools denied). Its
+  one-paragraph memo is prepended to the implement step's issue.
+- **Abstraction ledger** (Phase 4) — explore memos are parsed for
+  `ADOPTED:` / `REJECTED:` / `DEFERRED:` markers (em-dash, en-dash,
+  colon, hyphen separators all accepted) and aggregated on
+  `develop-result-abstraction-ledger`. The new
+  `format-develop-report-markdown` renders adopted / rejected /
+  deferred sections, exploration notes, and per-step status.
+- **Integration check** (Phase 5) — after every step reaches
+  `:passed`, a static cross-package consistency check parses every
+  `.lisp` under `project-root`, builds a defpackage graph, and
+  flags `:unknown-package` and `:unexported-symbol` issues that
+  per-step verify alone cannot detect. Out-of-project deps
+  (`alexandria`, `rove`, ...) are skipped via a same-prefix
+  heuristic.
+- **Mode selector** (Phase 6) — `:mode` kwarg on
+  `cl-harness:develop` (and `--mode` on the shell CLI):
+  `:top-down` forces every step's needs-exploration to `:none`,
+  `:bottom-up` promotes `:none` / `nil` to `:lightweight`,
+  `:mixed` (default) leaves the planner's choice alone. The
+  planner also sees a `Mode: ...` line in its user prompt so the
+  LLM aligns its plan up-front; the orchestrator enforces the mode
+  mechanically as the second line of defence.
+- **Greenfield benchmark suite** (Phase 7) — `develop-benchmarks/`
+  grows from 2 to 7 fixtures (`102-counter-class`, `103-fizz-buzz`,
+  `104-cache-simple`, `105-validate-email`, `106-format-currency`).
+  New `develop-bench` loader (`load-develop-task`,
+  `discover-develop-tasks`, `prepare-develop-task-sandbox`) lets
+  multi-model bench scripts copy fixtures to clean tmpdirs without
+  polluting the in-repo seed.
+- **Greenfield executor prompt补强** (Phase 0, shipped in v0.3.1) —
+  `lisp-edit-form` `form_name` examples for `defpackage` /
+  `in-package` / `defun` / `defmethod`, and an explicit fallback
+  to `fs-write-file` after two consecutive `form_name` failures.
+  Required for greenfield work to converge on Qwen3-class models.
 
-125 unit tests pass on a clean worker; 12 fix/bench fixtures + 2
-greenfield develop fixtures.
+All v0.3.0 entry points (`cl-harness:fix`, `cl-harness:bench`,
+`cl-harness:develop`, the shell binary) keep their kwarg / flag
+shapes; v0.4.0 additions are opt-in.
 
-Single-trial pass-rate over the 12-task suite under `:generic-mcp`:
-**11/12 (91.7%)** on Qwen3.6-35B-A3B (SGLang); **10/12 (83.3%)** on
+184 unit tests pass on a clean worker; 12 fix/bench fixtures + 7
+greenfield develop fixtures. mallet clean.
+
+Single-trial pass-rate over the 12-task `fix` suite under
+`:generic-mcp` (carried from v0.3): **11/12 (91.7%)** on
+Qwen3.6-35B-A3B (SGLang); **10/12 (83.3%)** on
 `llama-3.3-70b-versatile` (Groq). See
 `docs/benchmarks/results-2026-05-06-qwen.md` for the post-anomaly-fix
-v2 run; the four-cell ±20% variance still applies.
+v2 run; the four-cell ±20% variance still applies. Multi-model
+numbers for the new 7-task `develop` suite get filled into
+`docs/benchmarks/results-2026-05-06-develop.md` as runs land.
 
 ## Quick start
 
@@ -214,6 +244,7 @@ cl-harness develop \
   --system demo \
   --test-system demo/tests \
   --test-file /path/to/your/asdf/project/tests/main-test.lisp \
+  --mode mixed \
   --max-replans 3
 ```
 
@@ -224,6 +255,7 @@ cl-harness develop \
  :system "demo"
  :test-system "demo/tests"
  :test-file "/path/to/your/asdf/project/tests/main-test.lisp"
+ :mode :mixed
  :max-replans 3)
 ```
 
@@ -233,6 +265,15 @@ defpackage that imports rove and the project's main package.
 Greenfield-shaped starter fixtures live under `develop-benchmarks/`
 (see that directory's README).
 
+`--mode` (or `:mode`) selects the development style (v0.4):
+
+- `mixed` (default) — let the planner decide per step.
+- `top-down` — implement-first; every step's needs-exploration is
+  forced to `:none`, no explore sub-agent runs.
+- `bottom-up` — explore-first; `:none` / nil needs-exploration is
+  promoted to `:lightweight` so each step gets a quick read-only
+  REPL look at the existing surface before implementing.
+
 Terminal status:
 - `:passed` — all sub-goals' tests green
 - `:limit-exhausted` (`limit-hit :max-replans`) — replan budget spent
@@ -240,40 +281,52 @@ Terminal status:
   failing test twice in a row
 
 Develop-level JSONL transcript at `--log-path` records
-`develop-start / plan / step-start / step-end / develop-end`; each
-step's per-run-agent JSONL is referenced via `transcript_path` so a
-single develop-level file is enough to drill down to any sub-goal's
-detail. See `docs/notes/2026-05-06-planner-orchestrator.md` for the
-design.
+`develop-start / plan / step-start / step-end / abstraction-decision /
+integration-check / develop-end`; each step's per-run-agent JSONL is
+referenced via `transcript_path` so a single develop-level file is
+enough to drill down to any sub-goal's detail. The structured
+markdown report is available via `cl-harness:format-develop-report-markdown`
+and includes adopted / rejected / deferred abstractions
+(`:abstraction-decision` events), exploration notes, per-step
+status, and the integration-check section. See
+`docs/notes/2026-05-06-planner-orchestrator.md` and
+`docs/notes/2026-05-06-v0.4-development-harness.md` for the design.
 
 ## Architecture
 
 ```
 cl-harness/
 ├── src/
+│   ├── abstraction.lisp   v0.4 P4: ADOPTED:/REJECTED:/DEFERRED: ledger
 │   ├── action.lisp        LLM JSON action parser (tool_call / finish)
 │   ├── agent.lisp         turn-based loop, system prompt, finalize
-│   ├── bench.lisp         benchmark runner (task, suite, trials, report)
+│   ├── bench.lisp         fix benchmark runner (task, suite, trials, report)
 │   ├── cli.lisp           fix / bench / develop programmatic entry points
 │   ├── cli-main.lisp      clingon shell command for the binary build
+│   ├── compact.lisp       chat-history compaction helper (v0.3 Tier 4 C-3)
 │   ├── config.lisp        run-config + run-limits
+│   ├── develop-bench.lisp v0.4 P7: greenfield benchmark loader / sandbox
+│   ├── explore.lisp       v0.4 P3: read-only sub-agent + memo synthesis
+│   ├── integration.lisp   v0.4 P5: static cross-package consistency check
+│   ├── inventory.lisp     v0.4 P2: project vocabulary snapshot for planner
 │   ├── log.lisp           JSONL transcript writer
 │   ├── main.lisp          facade re-exports under nickname `cl-harness`
 │   ├── mcp.lisp           JSON-RPC 2.0 client + transport abstraction
 │   ├── mcp-stdio.lisp     stdio transport: spawns its own cl-mcp
 │   ├── mcp-resolve.lisp   picks HTTP vs stdio from kwargs / env
 │   ├── model.lisp         OpenAI-compatible chat client
-│   ├── orchestrator.lisp  develop loop: plan-execute-replan-stuck-detect
-│   ├── planner.lisp       LLM-driven plan-step decomposer
-│   ├── policy.lisp        tool allow-list per condition
+│   ├── orchestrator.lisp  develop loop: plan / explore / execute /
+│   │                        replan / mode-selector / integration check
+│   ├── planner.lisp       LLM-driven plan-step decomposer + mode nudge
+│   ├── policy.lisp        tool allow-list per condition (incl. :explore)
 │   └── verify.lisp        incremental + clean verification
 ├── tests/                 rove unit tests, mostly stub-driven (no LLM)
 ├── benchmarks/            12 deliberately broken mini ASDF projects (fix/bench)
-├── develop-benchmarks/    greenfield fixtures (empty source + spec) for develop
+├── develop-benchmarks/    7 greenfield fixtures for cl-harness:develop
 ├── prompts/               system prompts (planner + REPL-driven dev)
 └── docs/
     ├── cl-harness-prd.md
-    ├── notes/             stdio-transport / qwen-smoke / planner notes
+    ├── notes/             stdio / qwen / planner / v0.4-harness notes
     └── benchmarks/        per-run results
 ```
 
