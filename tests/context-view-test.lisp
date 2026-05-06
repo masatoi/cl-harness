@@ -196,3 +196,21 @@
                                    :step (%step :index 0)))
            (out (context-view->string v :exploration)))
       (ok (search "greet.lisp" out)))))
+
+(deftest exploration-formatter-source-fact-with-form-target-renders-readable
+  ;; Locks in the readable form-type / form-name rendering — without
+  ;; the space separator, "defun" + "greet" would smash into
+  ;; "defungreet" in the LLM-facing output.
+  (let* ((s (%state)))
+    (cl-harness/src/state:develop-state-record-source-fact
+     s (cl-harness/src/source-fact:make-source-fact
+        :path "/tmp/cv-test/src/greet.lisp"
+        :via-tool "lisp-read-file"
+        :form-type "defun"
+        :form-name "greet"
+        :related-step-index 0))
+    (let* ((v (make-context-view s :phase :exploration
+                                   :step (%step :index 0)))
+           (out (context-view->string v :exploration)))
+      (ok (search "defun greet" out))
+      (ok (not (search "defungreet" out))))))

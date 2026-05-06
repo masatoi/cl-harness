@@ -225,7 +225,7 @@ targets (if any), and a one-line summary of relevant source-facts
          (format s "## Current step~%(no current step)~%"))
         (t
          (format s "## Current step~%~A~%"
-                 (or (plan-step-issue step) ""))
+                 (plan-step-issue step))
          (let ((targets (plan-step-investigation-targets step)))
            (when targets
              (format s "~%## Investigation targets~%")
@@ -242,7 +242,7 @@ targets (if any), and a one-line summary of relevant source-facts
           (format s "- ~A~A~%"
                   (namestring (source-fact-path fact))
                   (if (source-fact-form-name fact)
-                      (format nil " :: ~A~A"
+                      (format nil " :: ~A ~A"
                               (or (source-fact-form-type fact) "")
                               (source-fact-form-name fact))
                       "")))))))
