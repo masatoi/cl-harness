@@ -86,6 +86,7 @@
            #:agent-state-started-at
            #:agent-state-limit-hit
            #:agent-state-parse-error-streak
+           #:agent-state-develop-state
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -197,8 +198,23 @@ silently consume the whole turn budget.")
    (limit-hit :initform nil :accessor agent-state-limit-hit
               :documentation "When STATUS is :LIMIT-EXHAUSTED, names the
 LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
-:MAX-PATCHES / :MAX-READ-FILES / :MAX-REPL-EVALS / :MAX-WALL-CLOCK)."))
+:MAX-PATCHES / :MAX-READ-FILES / :MAX-REPL-EVALS / :MAX-WALL-CLOCK).")
+   (develop-state :initarg :develop-state
+                  :reader agent-state-develop-state
+                  :initform nil
+                  :documentation "When this agent loop is being driven
+from inside a DEVELOP run, the back-reference to the caller's
+DEVELOP-STATE so RUN-AGENT can record source-facts, patch-records, and
+failures into the develop-level ledgers. NIL when run-agent is invoked
+standalone (cl-harness:fix path)."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
+
+(defun %make-agent-state-for-tests (&rest initargs &key &allow-other-keys)
+  "Test-only helper: constructs an AGENT-STATE with sensible defaults
+for slots whose presence is not what the test cares about. Forwards
+INITARGS to MAKE-INSTANCE so tests can override any field. Not
+exported; intended for use only by cl-harness/tests/*-test."
+  (apply #'make-instance 'agent-state initargs))
 
 (defun check-limits (state limits)
   "Compare STATE's counters against LIMITS and return the keyword for

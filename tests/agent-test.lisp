@@ -23,8 +23,10 @@
                 #:agent-state-status
                 #:agent-state-turn
                 #:agent-state-patch-count
+                #:agent-state-develop-state
                 #:run-agent
-                #:summarize-tool-result))
+                #:summarize-tool-result)
+  (:import-from #:cl-harness/src/state #:make-develop-state))
 
 (in-package #:cl-harness/tests/agent-test)
 
@@ -882,3 +884,15 @@ order. Helper for tests that assert against the on-disk transcript."
                  (ok (not present-p)
                      "error_text key is absent on successful calls")))))
       (when (probe-file path) (delete-file path)))))
+
+(deftest agent-state-develop-state-defaults-to-nil
+  (let ((s (cl-harness/src/agent::%make-agent-state-for-tests)))
+    (ok (null (agent-state-develop-state s)))))
+
+(deftest agent-state-develop-state-accepts-back-ref
+  (let* ((ds (make-develop-state
+              :goal "g" :project-root "/tmp/"
+              :system "s" :test-system "s/tests"))
+         (s (cl-harness/src/agent::%make-agent-state-for-tests
+             :develop-state ds)))
+    (ok (eq ds (agent-state-develop-state s)))))
