@@ -568,3 +568,105 @@ plan (so a stuck loop test can keep getting the same response)."
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 
+(deftest execute-plan-records-failures-and-resolves-on-pass
+  ;; Phase B Task 8: %execute-step must parse each verify-result's
+  ;; failed_tests via PARSE-FAILURE-RECORDS-FROM-TEST-RESULT and
+  ;; record them on develop-state's failure-ledger. When a later
+  ;; step's verify shows a previously-active failure absent, that
+  ;; failure is moved to :RESOLVED via MARK-RESOLVED-BY.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-b8-ledger"))
+         (steps (list (%make-step :index 0 :test-name "step-one"
+                                  :test-source "(deftest step-one (ok t))"
+                                  :issue "First.")
+                      (%make-step :index 1 :test-name "step-two"
+                                  :test-source "(deftest step-two (ok t))"
+                                  :issue "Second.")))
+         (ds (cl-harness/src/state:make-develop-state
+              :goal "g"
+              :project-root (namestring project-root)
+              :system "demo"
+              :test-system "demo/tests"))
+         ;; Step counter so the stub can return different verify-results.
+         (counter (cons 0 nil))
+         (failing-test-result
+          (alist-hash-table
+           `(("passed" . 0)
+             ("failed" . 1)
+             ("failed_tests"
+              . ,(vector
+                  (alist-hash-table
+                   `(("test_name" . "step-one")
+                     ("description" . "step-one assertion failed")
+                     ("form" . "(ok nil)")
+                     ("reason" . "expected truthy")
+                     ("source"
+                      . ,(alist-hash-table
+                          `(("file" . "/tmp/demo/src/feature.lisp")
+                            ("line" . 12))
+                          :test 'equal)))
+                   :test 'equal))))
+           :test 'equal))
+         (passing-test-result
+          (alist-hash-table
+           `(("passed" . 1)
+             ("failed" . 0))
+           :test 'equal))
+         (failing-verify
+          (make-instance 'cl-harness/src/verify:verify-result
+                         :status :test-failed
+                         :passed 0 :failed 1
+                         :test-result failing-test-result))
+         (passing-verify
+          (make-instance 'cl-harness/src/verify:verify-result
+                         :status :passed
+                         :passed 1 :failed 0
+                         :test-result passing-test-result))
+         (runner
+          (lambda (config provider mcp-client policy logger
+                   &key clean-verify-p dry-run-p before-clean-verify-fn
+                        isolate-asdf-p develop-state
+                   &allow-other-keys)
+            (declare (ignore config provider mcp-client policy logger
+                             clean-verify-p dry-run-p
+                             before-clean-verify-fn isolate-asdf-p
+                             develop-state))
+            (let* ((idx (car counter))
+                   (state (cl-harness/src/agent::%make-agent-state-for-tests))
+                   (vr (if (zerop idx) failing-verify passing-verify)))
+              (incf (car counter))
+              (setf (cl-harness/src/agent:agent-state-status state) :passed)
+              (setf (cl-harness/src/agent:agent-state-final-verify state) vr)
+              state))))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (execute-plan steps
+                         :project-root (namestring project-root)
+                         :system "demo"
+                         :test-system "demo/tests"
+                         :test-file test-file
+                         :log-path log-path
+                         :run-fn runner
+                         :develop-state ds)
+           (let* ((ledger (cl-harness/src/state:develop-state-failure-ledger ds))
+                  (active (cl-harness/src/failure-ledger:failure-ledger-active
+                           ledger))
+                  (resolved (cl-harness/src/failure-ledger:failure-ledger-resolved
+                             ledger)))
+             (ok (zerop (length active))
+                 "step-one's failure resolved after step-two's clean verify")
+             (ok (= 1 (length resolved))
+                 "exactly one failure record was moved to :resolved")
+             (when (= 1 (length resolved))
+               (let ((rec (first resolved)))
+                 (ok (equal "step-one"
+                            (cl-harness/src/failure-ledger:failure-record-test-name
+                             rec))
+                     "resolved record names step-one")))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
