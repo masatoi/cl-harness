@@ -29,7 +29,10 @@
                 #:develop-result-status
                 #:develop-result-replan-count
                 #:develop-result-step-results
-                #:develop-result-limit-hit)
+                #:develop-result-limit-hit
+                #:develop-result-integration-issues)
+  (:import-from #:cl-harness/src/integration
+                #:format-integration-issues-markdown)
   (:import-from #:cl-harness/src/inventory
                 #:gather-project-inventory)
   (:export #:fix
@@ -223,6 +226,12 @@ mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
                        :key #'cl-harness/src/abstraction:abstraction-decision-kind)
                 (count :deferred ledger
                        :key #'cl-harness/src/abstraction:abstraction-decision-kind))))
+    (when (eq :passed (develop-result-status result))
+      (let ((issues (develop-result-integration-issues result)))
+        (format s "Integration:      ~A~%"
+                (if issues
+                    (format nil "~D issue(s)" (length issues))
+                    "clean"))))
     (when log-path (format s "Develop log:      ~A~%" log-path))))
 
 (defun format-develop-report-markdown (result &key goal log-path)
@@ -253,6 +262,11 @@ trivial runs."
          s "~A"
          (cl-harness/src/abstraction:format-abstraction-ledger-markdown
           ledger :header-level 2))))
+    (when (eq :passed (develop-result-status result))
+      (format s "~A"
+              (format-integration-issues-markdown
+               (develop-result-integration-issues result)
+               :header-level 2)))
     (let ((with-explore
            (remove-if-not
             (lambda (sr)

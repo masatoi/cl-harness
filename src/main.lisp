@@ -33,6 +33,22 @@
                 #:make-abstraction-decision
                 #:parse-abstraction-decisions
                 #:format-abstraction-ledger-markdown)
+  (:import-from #:cl-harness/src/integration
+                #:package-info
+                #:package-info-name
+                #:package-info-nicknames
+                #:package-info-exports
+                #:package-info-imports
+                #:package-info-uses
+                #:package-info-file
+                #:integration-issue
+                #:integration-issue-kind
+                #:integration-issue-file
+                #:integration-issue-package
+                #:integration-issue-description
+                #:gather-package-graph
+                #:find-integration-issues
+                #:format-integration-issues-markdown)
   (:import-from #:cl-harness/src/cli-main
                 #:main)
   (:import-from #:cl-harness/src/mcp
@@ -128,6 +144,7 @@
                 #:develop-result-replan-count
                 #:develop-result-limit-hit
                 #:develop-result-abstraction-ledger
+                #:develop-result-integration-issues
                 #:execute-plan)
   (:import-from #:cl-harness/src/explore
                 #:explore-result
@@ -263,7 +280,23 @@
            #:develop-result-replan-count
            #:develop-result-limit-hit
            #:develop-result-abstraction-ledger
+           #:develop-result-integration-issues
            #:execute-plan
+           #:package-info
+           #:package-info-name
+           #:package-info-nicknames
+           #:package-info-exports
+           #:package-info-imports
+           #:package-info-uses
+           #:package-info-file
+           #:integration-issue
+           #:integration-issue-kind
+           #:integration-issue-file
+           #:integration-issue-package
+           #:integration-issue-description
+           #:gather-package-graph
+           #:find-integration-issues
+           #:format-integration-issues-markdown
            #:explore-result
            #:explore-result-status
            #:explore-result-memo

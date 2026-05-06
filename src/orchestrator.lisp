@@ -47,6 +47,13 @@
                 #:explore-result-memo)
   (:import-from #:cl-harness/src/abstraction
                 #:parse-abstraction-decisions)
+  (:import-from #:cl-harness/src/integration
+                #:gather-package-graph
+                #:find-integration-issues
+                #:integration-issue-kind
+                #:integration-issue-package
+                #:integration-issue-file
+                #:integration-issue-description)
   (:import-from #:cl-harness/src/agent
                 #:run-agent)
   (:export #:develop-step-result
@@ -65,6 +72,7 @@
            #:develop-result-replan-count
            #:develop-result-limit-hit
            #:develop-result-abstraction-ledger
+           #:develop-result-integration-issues
            #:validate-test-source
            #:materialize-test-source
            #:plan-step->run-config
@@ -446,7 +454,10 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                  :reader develop-result-replan-count)
    (limit-hit :initarg :limit-hit
               :initform nil
-              :reader develop-result-limit-hit))
+              :reader develop-result-limit-hit)
+   (integration-issues :initarg :integration-issues
+                       :initform nil
+                       :reader develop-result-integration-issues))
   (:documentation
    "Outcome of a DEVELOP run.
 STATUS is :PASSED on a fully-passing plan, :STUCK when the
@@ -455,7 +466,10 @@ replanner returned the same failing step a second time, and either
 intermediate plan failed without recovery. STEP-RESULTS is the flat
 list of every step run across every replan round, in execution
 order. FINAL-PLAN is the plan currently active at the moment the
-run terminated."))
+run terminated. INTEGRATION-ISSUES (v0.4 Phase 5) is the list of
+INTEGRATION-ISSUE structures the static check found after all
+steps :PASSED; NIL when no run reached :PASSED or the project is
+clean."))
 
 (defun develop-result-abstraction-ledger (result)
   "Return the flat list of every ABSTRACTION-DECISION captured across
@@ -583,9 +597,44 @@ is added to the payload here.)"
                      limit-hit :no-progress)
                (return))
              (setf plan new-plan))))))
-    (make-instance 'develop-result
-                   :status status
-                   :final-plan plan
-                   :step-results results
-                   :replan-count replans
-                   :limit-hit limit-hit)))
+    (let ((integration-issues
+           (when (and (eq status :passed) project-root)
+             (handler-case
+                 (let ((issues
+                        (find-integration-issues
+                         (gather-package-graph project-root))))
+                   (when log-path
+                     (let ((logger (open-run-logger log-path)))
+                       (unwind-protect
+                            (log-event
+                             logger :integration-check
+                             (alist-hash-table
+                              `(("issue_count" . ,(length issues))
+                                ("issues"
+                                 . ,(map 'vector
+                                         (lambda (i)
+                                           (alist-hash-table
+                                            `(("kind"
+                                               . ,(string-downcase
+                                                   (symbol-name
+                                                    (integration-issue-kind i))))
+                                              ("package"
+                                               . ,(integration-issue-package i))
+                                              ("file"
+                                               . ,(let ((f (integration-issue-file i)))
+                                                    (if f (namestring f) "")))
+                                              ("description"
+                                               . ,(integration-issue-description i)))
+                                            :test 'equal))
+                                         issues)))
+                              :test 'equal))
+                         (close-run-logger logger))))
+                   issues)
+               (error () nil)))))
+      (make-instance 'develop-result
+                     :status status
+                     :final-plan plan
+                     :step-results results
+                     :replan-count replans
+                     :limit-hit limit-hit
+                     :integration-issues integration-issues))))
