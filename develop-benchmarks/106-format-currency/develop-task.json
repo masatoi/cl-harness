@@ -1,0 +1,8 @@
+{
+  "id": "106-format-currency",
+  "goal": "Add a `format-currency` function in package `money` that takes one non-negative integer AMOUNT (representing cents — so 123456 means $1,234.56) and returns a string of the form \"$1,234.56\": a leading dollar sign, the dollar portion grouped with commas every three digits, a literal '.', and exactly two digits of cents. Zero returns \"$0.00\". Export `format-currency`.",
+  "system": "money",
+  "test-system": "money/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}

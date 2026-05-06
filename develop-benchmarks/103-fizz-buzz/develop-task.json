@@ -1,0 +1,8 @@
+{
+  "id": "103-fizz-buzz",
+  "goal": "Add a `fizz-buzz` function in package `fizz-buzz` that takes one positive integer N and returns a list of N strings: position I (1-based) is \"FizzBuzz\" when I is divisible by both 3 and 5, \"Fizz\" when divisible by 3 only, \"Buzz\" when divisible by 5 only, and the decimal representation of I otherwise. Export `fizz-buzz`.",
+  "system": "fizz-buzz",
+  "test-system": "fizz-buzz/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}

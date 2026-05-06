@@ -1,0 +1,8 @@
+{
+  "id": "105-validate-email",
+  "goal": "Add a `validate-email` predicate in package `email-validator` that takes one string and returns T when the string looks like a plausible email address, NIL otherwise. The check is intentionally lightweight: there must be exactly one '@' separating a non-empty local part from a domain that contains at least one '.', neither part may be empty, and the string must contain no whitespace. Export `validate-email`.",
+  "system": "email-validator",
+  "test-system": "email-validator/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}

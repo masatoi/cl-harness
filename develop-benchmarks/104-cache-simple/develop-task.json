@@ -1,0 +1,8 @@
+{
+  "id": "104-cache-simple",
+  "goal": "Add a `simple-cache` defclass in package `cache` storing key-value pairs, with two generic functions: `cache-put` (cache key value) → value, and `cache-get` (cache key &optional default) → stored value or default (default defaulting to NIL). Provide a constructor `make-cache` taking no arguments. Keys are compared with EQUAL (so strings work as keys). Export `simple-cache`, `make-cache`, `cache-put`, and `cache-get`.",
+  "system": "cache",
+  "test-system": "cache/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}

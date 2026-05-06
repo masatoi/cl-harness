@@ -159,6 +159,20 @@
                 #:compact-history)
   (:import-from #:cl-harness/src/inventory
                 #:gather-project-inventory)
+  (:import-from #:cl-harness/src/develop-bench
+                #:develop-task
+                #:develop-task-id
+                #:develop-task-goal
+                #:develop-task-system
+                #:develop-task-test-system
+                #:develop-task-test-file
+                #:develop-task-path
+                #:develop-task-fixture-path
+                #:develop-task-error
+                #:develop-task-error-message
+                #:load-develop-task
+                #:discover-develop-tasks
+                #:prepare-develop-task-sandbox)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -308,6 +322,19 @@
            #:approximate-history-tokens
            #:compact-history
            #:gather-project-inventory
+           #:develop-task
+           #:develop-task-id
+           #:develop-task-goal
+           #:develop-task-system
+           #:develop-task-test-system
+           #:develop-task-test-file
+           #:develop-task-path
+           #:develop-task-fixture-path
+           #:develop-task-error
+           #:develop-task-error-message
+           #:load-develop-task
+           #:discover-develop-tasks
+           #:prepare-develop-task-sandbox
            #:bench-task
            #:bench-task-id
            #:bench-result

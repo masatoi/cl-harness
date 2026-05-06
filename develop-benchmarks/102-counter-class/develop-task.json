@@ -1,0 +1,8 @@
+{
+  "id": "102-counter-class",
+  "goal": "Add a `counter` defclass in package `counter` with one slot whose initial value is 0. Provide a constructor `make-counter` (taking an optional initial value, default 0), a generic function `increment` that bumps the slot by one and returns the new value, a generic function `reset-counter` that sets the slot back to 0 and returns 0, and a reader `counter-value` exposing the slot. Export `counter`, `make-counter`, `counter-value`, `increment`, and `reset-counter` from the package.",
+  "system": "counter",
+  "test-system": "counter/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture"
+}
