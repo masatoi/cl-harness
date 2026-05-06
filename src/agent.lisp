@@ -62,6 +62,10 @@
                 #:policy-mode
                 #:policy-allowed-tools
                 #:allowed-tool-p)
+  (:import-from #:cl-harness/src/state
+                #:develop-state-record-patch-record)
+  (:import-from #:cl-harness/src/patch-record
+                #:make-patch-record)
   (:import-from #:cl-harness/src/verify
                 #:verify-result-status
                 #:verify-result-passed
@@ -799,7 +803,26 @@ step since no real patch was applied."
                       `(("turn" . ,turn)
                         ("tool" . ,tool)
                         ("file" . ,(namestring target))
-                        ("diff" . ,(or diff ""))))))
+                        ("diff" . ,(or diff ""))))
+                     (when (agent-state-develop-state state)
+                       (let ((arguments (or (agent-action-arguments action)
+                                            (make-hash-table :test 'equal))))
+                         (develop-state-record-patch-record
+                          (agent-state-develop-state state)
+                          (make-patch-record
+                           :path target
+                           :via-tool tool
+                           :form-type (and (hash-table-p arguments)
+                                           (gethash "form_type" arguments))
+                           :form-name (and (hash-table-p arguments)
+                                           (gethash "form_name" arguments))
+                           :operation (and (hash-table-p arguments)
+                                           (gethash "operation" arguments))
+                           :diff-summary
+                           (when (and diff (plusp (length diff)))
+                             (subseq diff 0 (min 500 (length diff))))
+                           :related-step-index nil
+                           :turn turn))))))
                  (let ((v (verify-task mcp-client config)))
                    (log-event logger :verify (verify-event-payload turn v))
                    (if (verify-result-success-p v)
@@ -860,7 +883,8 @@ the loop should continue, otherwise a terminal status keyword
                   &key (clean-verify-p t)
                        dry-run-p
                        before-clean-verify-fn
-                       (isolate-asdf-p t))
+                       (isolate-asdf-p t)
+                       develop-state)
   "Execute the basic Phase 2 fix loop with a Phase 3 clean-verify safety net.
 
 CONFIG is a RUN-CONFIG. PROVIDER is an OPENAI-COMPATIBLE-PROVIDER (or any
@@ -894,13 +918,18 @@ with any user-supplied BEFORE-CLEAN-VERIFY-FN). Required for
 same-named system from a different directory; benchmark callers get the
 same guarantee for free.
 
+DEVELOP-STATE, when non-NIL, is the caller DEVELOP-STATE this agent
+loop is being driven from. Stashed on the constructed AGENT-STATE so
+that the patch instrumentation can record patch-records onto the
+develop-level ledger. NIL for standalone cl-harness:fix runs.
+
 Limits enforcement (PRD §8.4 REQ-AGENT-003): all seven RUN-LIMITS
 slots are now checked at every turn boundary (max-turns / max-tool-calls
 / max-patches / max-read-files / max-repl-evals /
 max-wall-clock-seconds / max-action-parse-errors). On exceeding any of
 them STATE's STATUS becomes :LIMIT-EXHAUSTED and LIMIT-HIT names the
 offending slot."
-  (let ((state (make-instance 'agent-state))
+  (let ((state (make-instance 'agent-state :develop-state develop-state))
         (effective-before-clean-verify-fn before-clean-verify-fn))
     (setf (agent-state-started-at state) (now))
     (when isolate-asdf-p
