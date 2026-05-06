@@ -214,3 +214,48 @@
            (out (context-view->string v :exploration)))
       (ok (search "defun greet" out))
       (ok (not (search "defungreet" out))))))
+
+(deftest implementation-formatter-includes-step-issue
+  (let* ((s (%state))
+         (v (make-context-view s :phase :implementation
+                                 :step (%step :issue "Add greet."))))
+    (ok (search "Add greet."
+                (context-view->string v :implementation)))))
+
+(deftest implementation-formatter-summarises-relevant-patches
+  (let* ((s (%state)))
+    (cl-harness/src/state:develop-state-record-patch-record
+     s (cl-harness/src/patch-record:make-patch-record
+        :path "/tmp/cv-test/src/greet.lisp"
+        :via-tool "lisp-edit-form"
+        :form-type "defun"
+        :form-name "greet"
+        :related-step-index 0
+        :turn 1))
+    (let* ((v (make-context-view s :phase :implementation
+                                   :step (%step :index 0)))
+           (out (context-view->string v :implementation)))
+      (ok (search "greet.lisp" out))
+      (ok (search "lisp-edit-form" out)))))
+
+(deftest implementation-formatter-includes-active-failures
+  (let* ((s (%state)))
+    (cl-harness/src/state:develop-state-record-failure
+     s (cl-harness/src/failure-ledger:make-failure-record
+        :kind :test-failed
+        :description "greet returned wrong"
+        :test-name "greet-returns-hello"
+        :verify-source :incremental
+        :related-step-index 0))
+    (let* ((v (make-context-view s :phase :implementation
+                                   :step (%step :index 0)))
+           (out (context-view->string v :implementation)))
+      (ok (search "greet returned wrong" out))
+      (ok (search "greet-returns-hello" out)))))
+
+(deftest implementation-formatter-omits-failure-section-when-clean
+  (let* ((s (%state))
+         (v (make-context-view s :phase :implementation
+                                 :step (%step :index 0))))
+    (ok (not (search "Active failures" (context-view->string
+                                        v :implementation))))))

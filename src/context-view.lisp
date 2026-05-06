@@ -34,9 +34,17 @@
                 #:investigation-target-name
                 #:investigation-target-intent)
   (:import-from #:cl-harness/src/patch-record
-                #:patch-record-related-step-index)
+                #:patch-record-related-step-index
+                #:patch-record-path
+                #:patch-record-via-tool
+                #:patch-record-form-type
+                #:patch-record-form-name
+                #:patch-record-verify-status)
   (:import-from #:cl-harness/src/failure-ledger
-                #:failure-ledger-active)
+                #:failure-ledger-active
+                #:failure-record-test-name
+                #:failure-record-description
+                #:failure-record-reason)
   (:export #:context-view
            #:make-context-view
            #:context-view-phase
@@ -245,4 +253,42 @@ targets (if any), and a one-line summary of relevant source-facts
                       (format nil " :: ~A ~A"
                               (or (source-fact-form-type fact) "")
                               (source-fact-form-name fact))
+                      "")))))))
+
+(defmethod context-view->string ((view context-view)
+                                  (phase (eql :implementation)))
+  "Implementation-phase view: current step's issue, a short
+summary of relevant patch-records (what's been changed in this
+step), and the active failure list (what's still broken). Source
+facts are not enumerated -- the agent's own tool calls are the
+authoritative read log; the source-fact slot is reserved for
+later phases that need it."
+  (with-output-to-string (s)
+    (let ((step (context-view-current-step view)))
+      (cond
+        ((null step)
+         (format s "## Current step~%(no current step)~%"))
+        (t
+         (format s "## Current step~%~A~%" (plan-step-issue step)))))
+    (let ((patches (context-view-relevant-patch-records view)))
+      (when patches
+        (format s "~%## Patches applied in this step~%")
+        (dolist (p patches)
+          (format s "- ~A (~A~A)~%"
+                  (namestring (patch-record-path p))
+                  (patch-record-via-tool p)
+                  (if (patch-record-form-name p)
+                      (format nil " on ~A ~A"
+                              (or (patch-record-form-type p) "")
+                              (patch-record-form-name p))
+                      "")))))
+    (let ((failures (context-view-active-failures view)))
+      (when failures
+        (format s "~%## Active failures~%")
+        (dolist (f failures)
+          (format s "- ~A: ~A~A~%"
+                  (or (failure-record-test-name f) "(unnamed)")
+                  (or (failure-record-description f) "(no description)")
+                  (if (failure-record-reason f)
+                      (format nil " (~A)" (failure-record-reason f))
                       "")))))))
