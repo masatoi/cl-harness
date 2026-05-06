@@ -110,7 +110,16 @@ green signal."
 (defun materialize-test-source (path source)
   "Append SOURCE to PATH on disk, creating PATH if it does not exist.
 A leading newline is inserted so successive deftest forms remain on
-their own lines. The directory is created if necessary."
+their own lines. The directory is created if necessary.
+
+Also invalidates the corresponding cached FASL via
+ASDF:APPLY-OUTPUT-TRANSLATIONS — without this step, asdf:load-system
+:force t in the executor's verify path can reuse a stale FASL that
+predates the append (it only propagates :force to the named system,
+not to package-inferred subsystems). Symptom observed during
+develop-benchmarks 100-greet live verification: the second deftest
+the planner authored never showed up in run-tests output even
+though it was on disk."
   (ensure-directories-exist path)
   (with-open-file (out path :direction :output
                             :if-exists :append
@@ -120,6 +129,12 @@ their own lines. The directory is created if necessary."
     (write-string source out)
     (terpri out)
     (finish-output out))
+  (let ((fasl (handler-case
+                  (asdf:apply-output-translations
+                   (compile-file-pathname (pathname path)))
+                (error () nil))))
+    (when (and fasl (probe-file fasl))
+      (handler-case (delete-file fasl) (error () nil))))
   (values))
 
 (defun plan-step->run-config (step
@@ -128,14 +143,17 @@ their own lines. The directory is created if necessary."
                                    limits)
   "Build a RUN-CONFIG from PLAN-STEP plus a per-execute-plan template.
 PROJECT-ROOT / SYSTEM / TEST-SYSTEM / CONDITION are shared across all
-steps in a plan. LIMITS, when supplied, overrides the run-config
-default."
-  (declare (ignore limits)) ;; reserved for callers that want custom limits
-  (make-run-config :project-root project-root
-                   :system system
-                   :test-system test-system
-                   :issue (plan-step-issue step)
-                   :condition condition))
+steps in a plan. LIMITS, when supplied, replaces the make-run-config
+default (typically used by callers that need a higher max-patches /
+max-turns budget than the conservative MVP defaults — greenfield
+develop runs do)."
+  (apply #'make-run-config
+         :project-root project-root
+         :system system
+         :test-system test-system
+         :issue (plan-step-issue step)
+         :condition condition
+         (when limits (list :limits limits))))
 
 ;; --- develop-level logging ------------------------------------------------
 
@@ -180,9 +198,7 @@ stand-in) returned. Real AGENT-STATE has STATUS as a slot; the test
 stub passes a hash-table with a 'status' key. Anything we can't
 recognize is reported as :unknown."
   (cond
-    ((and (typep state 'standard-object)
-          (find-method (function cl-harness/src/agent:agent-state-status)
-                       '() (list (find-class 'standard-object)) nil))
+    ((typep state 'cl-harness/src/agent:agent-state)
      (handler-case (cl-harness/src/agent:agent-state-status state)
        (error () :unknown)))
     ((hash-table-p state)
@@ -198,7 +214,7 @@ recognize is reported as :unknown."
 
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
-                      provider mcp-client)
+                      provider mcp-client run-limits)
   "Materialize the step's test, build a RUN-CONFIG, call RUN-FN, return
 a DEVELOP-STEP-RESULT. The RUN-AGENT's own JSONL is written under
 RUN-AGENT's normal logger; we do not interleave events with it here."
@@ -209,7 +225,8 @@ RUN-AGENT's normal logger; we do not interleave events with it here."
              :project-root project-root
              :system system
              :test-system test-system
-             :condition condition))
+             :condition condition
+             :limits run-limits))
         (policy (make-tool-policy condition))
         (run-logger-path
          (merge-pathnames
@@ -248,6 +265,7 @@ RUN-AGENT's normal logger; we do not interleave events with it here."
                           (condition :generic-mcp)
                           provider
                           mcp-client
+                          run-limits
                           log-path
                           (run-fn #'run-agent))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
@@ -299,7 +317,7 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                (let ((result (%execute-step step run-fn
                                             project-root system test-system
                                             condition test-file logger
-                                            provider mcp-client)))
+                                            provider mcp-client run-limits)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -366,6 +384,7 @@ attempted."
                 &key project-root system test-system test-file
                      provider mcp-client
                      (condition :generic-mcp)
+                     run-limits
                      log-path
                      (max-replans 3)
                      (planner-fn #'plan-development)
@@ -420,6 +439,7 @@ is added to the payload here.)"
                              :condition condition
                              :provider provider
                              :mcp-client mcp-client
+                             :run-limits run-limits
                              :log-path log-path
                              :run-fn run-fn))
              (last-result (car (last round-results))))

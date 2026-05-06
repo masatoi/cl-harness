@@ -6,6 +6,11 @@
 
 (defpackage #:greet/src/main
   (:nicknames #:greet)
-  (:use #:cl))
+  (:use #:cl)
+  ;; Pre-exporting the target symbol so planner-authored tests that
+  ;; refer to GREET:GREET can be READ even before the implementation
+  ;; lands. The function binding is what's missing on entry — that's
+  ;; the agent's job to add.
+  (:export #:greet))
 
 (in-package #:greet/src/main)

@@ -2,6 +2,7 @@
 
 (defpackage #:double/src/main
   (:nicknames #:double)
-  (:use #:cl))
+  (:use #:cl)
+  (:export #:double))
 
 (in-package #:double/src/main)

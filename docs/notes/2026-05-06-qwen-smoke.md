@@ -184,6 +184,68 @@ Optional / lower priority:
 - **Next Action #5 (full Qwen sweep):** unblocked. After running, append
   the report under `docs/benchmarks/`.
 
+## New Observation (2026-05-06): greenfield develop is model-capability-bound
+
+Live verification of `cl-harness:develop` against
+`develop-benchmarks/100-greet` (after fixing the
+`scope-asdf-to-project` package-deletion bug, anomaly #64) reveals
+two harness-side issues and one model-side limit:
+
+**Harness fixes (already in v0.3.1 follow-up):**
+
+- `%read-status-from-state` in `src/orchestrator.lisp` was using
+  `find-method` against `'standard-object`, which always returned NIL
+  because `agent-state-status` is specialised on `agent-state`. Result:
+  every step-end reported `status :unknown`, which the orchestrator
+  treated as a failure and triggered replan — even when the underlying
+  run-agent had legitimately reported `:passed`. Fixed to
+  `(typep state 'cl-harness/src/agent:agent-state)`.
+
+- `materialize-test-source` appended planner-authored deftest forms
+  but did not invalidate the test file's cached FASL. ASDF's
+  `:force t` does not propagate to package-inferred subsystems, so
+  the executor's verify path could reuse a stale FASL that predated
+  the append — symptomatically, only the FIRST step's deftest would
+  show up in `run-tests` output. Fixed by deleting the cached FASL
+  via `asdf:apply-output-translations` after every append.
+
+- `cl-harness:develop` (cli wrapper) now accepts `:max-patches`,
+  `:max-turns`, `:max-tool-calls`, `:max-wall-clock-seconds`, and
+  `:run-limits` kwargs. Greenfield work needs a higher patch budget
+  than the conservative MVP defaults (3 / 20).
+
+**Model-side limit (Qwen3.6-35B-A3B specifically):**
+
+Even with the harness fixes in place and `:max-patches 7` /
+`:max-turns 30`, Qwen3 cannot complete 100-greet within budget. The
+failure mode: it consistently mis-uses `lisp-edit-form`'s
+`form_name` parameter — passing `"in-package"` (the form-type
+keyword) as the form_name, when the form_name should be the actual
+package designator string `greet/src/main`. After 7 attempts at the
+same wrong shape, max-patches trips. 19 turns / 7 patch attempts /
+**0 patches applied**.
+
+This is a capability gap, not a harness bug. The bug-fix benchmarks
+(`benchmarks/`) all start from a source file that already contains
+the target form (e.g. `(defun add ...)`), so the model just needs
+`lisp-patch-form` with `old_text`/`new_text`. Greenfield insertion
+with `lisp-edit-form` `:operation "insert_after"` requires the model
+to understand the form_name parameter semantics, and Qwen3 35B
+empirically can't.
+
+Possible mitigations:
+
+- Use a stronger model (Claude-Sonnet-4.6, GPT-4o, etc.)
+- Improve the executor's system prompt to give explicit examples of
+  `lisp-edit-form insert_after` for `(in-package ...)` and
+  `(defpackage ...)` forms
+- Ship a fallback "use fs-write-file to overwrite the whole file"
+  hint when lisp-edit-form keeps failing on the same target
+
+Until one of these lands, **`cl-harness:develop` end-to-end pass on
+greenfield fixtures is gated on model strength**. The bug-fix
+benchmarks still hit 11/12 on Qwen3.
+
 ## New Observation (2026-05-06): Qwen3 emits flat-arg tool calls at random
 
 A re-run of 000-smoke under the new stdio default produced

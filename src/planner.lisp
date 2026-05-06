@@ -50,7 +50,7 @@
    (string #\Newline) (string #\Newline)
    "  {\"steps\": [ {\"issue\": <string>, "
    "\"test_name\": <string>, "
-   "\"test_source\": <string with a complete (deftest ...) form>, "
+   "\"test_source\": <string with a complete (rove:deftest ...) form>, "
    "\"files_to_modify\": [<relative path>, ...] }, ... ] }"
    (string #\Newline) (string #\Newline)
    "Constraints on each step:"
@@ -58,11 +58,21 @@
    "1. Implementable in one contiguous edit (a few file mods, a few "
    "defun/defclass forms; budget is ~3 patches per step)."
    (string #\Newline)
-   "2. Verifiable by exactly one rove test, which you author in the "
-   "test_source field; the test must FAIL before the step's "
-   "implementation lands and PASS after."
+   "2. Verifiable by exactly one rove test you author in test_source. "
+   "test_source MUST start with `(deftest <name>` and use rove's "
+   "`testing` / `ok` macros; the orchestrator rejects any plan whose "
+   "test_source does not contain a `(deftest ` form."
    (string #\Newline)
    "3. Cumulative: each step assumes earlier steps are complete."
+   (string #\Newline) (string #\Newline)
+   "Required test_source shape (use this template; do NOT use `defun "
+   "test-...` or plain `assert` — those will be rejected):"
+   (string #\Newline)
+   "  (deftest <test-name>"
+   (string #\Newline)
+   "    (testing \"<short description of expected behaviour>\""
+   (string #\Newline)
+   "      (ok (<predicate that calls the function under test>))))"
    (string #\Newline) (string #\Newline)
    "Rules:"
    (string #\Newline)

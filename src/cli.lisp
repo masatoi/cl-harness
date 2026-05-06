@@ -217,6 +217,12 @@ mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
                      (temperature 0.0) (max-tokens 4096)
                      reasoning-effort extra-body
                      (max-replans 3)
+                     ;; Per-step run-limits overrides. Greenfield work
+                     ;; often needs a higher patch budget than the
+                     ;; conservative MVP defaults (3 patches / 20 turns).
+                     max-patches max-turns max-tool-calls
+                     max-wall-clock-seconds
+                     run-limits
                      log-path)
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
@@ -267,18 +273,44 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                     (format nil "cl-harness-develop-~A.jsonl"
                             (get-universal-time))
                     (uiop:temporary-directory)))))
-    (unwind-protect
-         (let ((result (cl-harness/src/orchestrator:develop
-                        goal
-                        :project-root project-root
-                        :system system
-                        :test-system test-system
-                        :test-file test-file
-                        :provider provider
-                        :mcp-client client
-                        :condition condition
-                        :max-replans max-replans
-                        :log-path path)))
-           (format t "~A" (format-develop-report result :log-path path))
-           result)
-      (close-mcp-client client))))
+    (let ((effective-limits
+           (or run-limits
+               (when (or max-patches max-turns max-tool-calls
+                         max-wall-clock-seconds)
+                 (let ((d (cl-harness/src/config:make-default-limits)))
+                   (make-instance
+                    'cl-harness/src/config:run-limits
+                    :max-turns
+                    (or max-turns
+                        (cl-harness/src/config:run-limits-max-turns d))
+                    :max-tool-calls
+                    (or max-tool-calls
+                        (cl-harness/src/config:run-limits-max-tool-calls d))
+                    :max-patches
+                    (or max-patches
+                        (cl-harness/src/config:run-limits-max-patches d))
+                    :max-read-files
+                    (cl-harness/src/config:run-limits-max-read-files d)
+                    :max-repl-evals
+                    (cl-harness/src/config:run-limits-max-repl-evals d)
+                    :max-wall-clock-seconds
+                    (or max-wall-clock-seconds
+                        (cl-harness/src/config:run-limits-max-wall-clock-seconds d))
+                    :max-action-parse-errors
+                    (cl-harness/src/config:run-limits-max-action-parse-errors d)))))))
+      (unwind-protect
+           (let ((result (cl-harness/src/orchestrator:develop
+                          goal
+                          :project-root project-root
+                          :system system
+                          :test-system test-system
+                          :test-file test-file
+                          :provider provider
+                          :mcp-client client
+                          :condition condition
+                          :run-limits effective-limits
+                          :max-replans max-replans
+                          :log-path path)))
+             (format t "~A" (format-develop-report result :log-path path))
+             result)
+        (close-mcp-client client)))))
