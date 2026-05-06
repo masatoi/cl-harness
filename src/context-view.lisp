@@ -184,3 +184,21 @@ Phase C MVP supports :PLANNING, :EXPLORATION, :IMPLEMENTATION."))
 (defmethod context-view->string ((view context-view) phase)
   (declare (ignore view))
   (error "context-view->string: no method for phase ~S" phase))
+
+(defmethod context-view->string ((view context-view) (phase (eql :planning)))
+  "Planning-phase view: goal, project inventory, prior-plan + failure
+context (replan only). The output is a multi-section markdown block
+that the planner's user-prompt builder can splice in place of its
+current ad-hoc inventory + goal + replan block."
+  (with-output-to-string (s)
+    (when (context-view-project-inventory view)
+      (format s "## Project inventory~%~A~%~%"
+              (context-view-project-inventory view)))
+    (format s "## Goal~%~A~%"
+            (or (context-view-goal view) ""))
+    (when (context-view-prior-plan view)
+      (format s "~%## Prior plan (failed last round)~%~S~%"
+              (context-view-prior-plan view)))
+    (when (context-view-failure-context view)
+      (format s "~%## Prior failure context~%~A~%"
+              (context-view-failure-context view)))))

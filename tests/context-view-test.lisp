@@ -35,7 +35,8 @@
                 #:context-view-active-failures
                 #:context-view-prior-plan
                 #:context-view-failure-context
-                #:context-view-project-inventory))
+                #:context-view-project-inventory
+                #:context-view->string))
 
 (in-package #:cl-harness/tests/context-view-test)
 
@@ -116,3 +117,29 @@
   (let* ((s (%state))
          (v (make-context-view s :phase :planning :step :sentinel-step)))
     (ok (null (context-view-current-step v)))))
+
+(defun %render-planning (s &key prior-plan failure-context)
+  (let ((v (make-context-view s :phase :planning
+                                :prior-plan prior-plan
+                                :failure-context failure-context)))
+    (context-view->string v :planning)))
+
+(deftest planning-formatter-includes-goal
+  (let ((out (%render-planning (%state))))
+    (ok (search "implement greet" out))))
+
+(deftest planning-formatter-includes-project-inventory
+  (let ((out (%render-planning (%state))))
+    (ok (search "demo .asd inventory" out))))
+
+(deftest planning-formatter-omits-replan-block-on-initial
+  (let ((out (%render-planning (%state))))
+    (ok (not (search "Prior plan" out)))
+    (ok (not (search "Prior failure" out)))))
+
+(deftest planning-formatter-includes-replan-block-on-replan
+  (let ((out (%render-planning (%state)
+                               :prior-plan '(:dummy)
+                               :failure-context "step 0 failed")))
+    (ok (search "Prior plan" out))
+    (ok (search "step 0 failed" out))))
