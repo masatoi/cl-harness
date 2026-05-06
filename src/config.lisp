@@ -73,7 +73,7 @@ Resets to zero on any successful PARSE-ACTION."))
   (check-type system string)
   (check-type test-system string)
   (check-type issue string)
-  (check-type condition (member :file-only :generic-mcp :runtime-native))
+  (check-type condition (member :file-only :generic-mcp :runtime-native :explore))
   (make-instance 'run-config
                  :project-root project-root
                  :system system

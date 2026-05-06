@@ -84,7 +84,25 @@ prompt.")
                       "code-*"
                       "repl-*"
                       "inspect-*"
-                      "pool-*")))
+                      "pool-*"))
+    ;; v0.4 Phase 3: read-only exploration policy. Strict subset of
+    ;; runtime-native — same probe and read tools, no write/edit.
+    ;; Used by RUN-EXPLORE-AGENT before the implement step when a
+    ;; plan-step requests exploration.
+    (:explore        ("fs-list-directory"
+                      "fs-read-file"
+                      "fs-set-project-root"
+                      "fs-get-project-info"
+                      "load-system"
+                      "run-tests"
+                      "lisp-read-file"
+                      "lisp-check-parens"
+                      "clgrep-*"
+                      "clhs-*"
+                      "code-*"
+                      "repl-*"
+                      "inspect-*"
+                      "pool-status")))
   "Per-condition allow rules. Each entry is (MODE RULE-LIST). A rule
 is either:
   - a literal tool-name string (matched exactly), or
@@ -136,7 +154,7 @@ allow rules. When NIL, the policy materialises against
 AVAILABLE-TOOLS, when supplied, is a list of tool-name strings (the
 live cl-mcp catalog at session start); otherwise the policy uses
 the historical static list."
-  (check-type mode (member :file-only :generic-mcp :runtime-native))
+  (check-type mode (member :file-only :generic-mcp :runtime-native :explore))
   (when available-tools
     (assert (listp available-tools) (available-tools)
             "policy: :available-tools must be a list of tool-name strings, got ~A"

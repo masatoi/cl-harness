@@ -108,6 +108,7 @@
                 #:develop-step-result-test-name
                 #:develop-step-result-run-config
                 #:develop-step-result-run-agent-state
+                #:develop-step-result-explore-result
                 #:develop-result
                 #:develop-result-status
                 #:develop-result-final-plan
@@ -115,6 +116,13 @@
                 #:develop-result-replan-count
                 #:develop-result-limit-hit
                 #:execute-plan)
+  (:import-from #:cl-harness/src/explore
+                #:explore-result
+                #:explore-result-status
+                #:explore-result-memo
+                #:explore-result-turns
+                #:explore-result-token-total
+                #:run-explore-agent)
   (:import-from #:cl-harness/src/compact
                 #:approximate-history-tokens
                 #:compact-history)
@@ -223,6 +231,7 @@
            #:develop-step-result-test-name
            #:develop-step-result-run-config
            #:develop-step-result-run-agent-state
+           #:develop-step-result-explore-result
            #:develop-result
            #:develop-result-status
            #:develop-result-final-plan
@@ -230,6 +239,12 @@
            #:develop-result-replan-count
            #:develop-result-limit-hit
            #:execute-plan
+           #:explore-result
+           #:explore-result-status
+           #:explore-result-memo
+           #:explore-result-turns
+           #:explore-result-token-total
+           #:run-explore-agent
            #:approximate-history-tokens
            #:compact-history
            #:gather-project-inventory

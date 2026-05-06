@@ -122,3 +122,28 @@
     (dolist (must-not '("repl-eval" "inspect-object" "code-find"
                         "pool-kill-worker"))
       (ok (not (member must-not a :test #'equal))))))
+
+;; --- v0.4 Phase 3: :explore mode -----------------------------------------
+
+(deftest explore-mode-allows-read-and-probe-tools
+  (let ((p (make-tool-policy :explore)))
+    (dolist (must '("fs-read-file" "fs-list-directory" "lisp-read-file"
+                    "lisp-check-parens" "repl-eval" "inspect-object"
+                    "code-find" "code-describe" "code-find-references"
+                    "clgrep-search" "load-system" "run-tests"))
+      (ok (allowed-tool-p p must)
+          (format nil "explore allows ~A" must)))))
+
+(deftest explore-mode-denies-write-tools
+  ;; Read-only invariant: edit tools must be rejected so an
+  ;; LLM that accidentally proposes one is caught at the policy
+  ;; gate, not after the file is mutated.
+  (let ((p (make-tool-policy :explore)))
+    (dolist (must-not '("lisp-patch-form" "lisp-edit-form"
+                        "fs-write-file" "pool-kill-worker"))
+      (ok (not (allowed-tool-p p must-not))
+          (format nil "explore denies ~A" must-not)))))
+
+(deftest make-tool-policy-accepts-explore-mode
+  (ok (typep (make-tool-policy :explore) 'tool-policy))
+  (ok (eq :explore (policy-mode (make-tool-policy :explore)))))

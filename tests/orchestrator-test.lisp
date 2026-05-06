@@ -23,6 +23,7 @@
   (:import-from #:cl-harness/src/orchestrator
                 #:develop-step-result-status
                 #:develop-step-result-step-index
+                #:develop-step-result-explore-result
                 #:develop-result
                 #:develop-result-status
                 #:develop-result-step-results
@@ -154,6 +155,23 @@ gethash and stop on non-:passed."
          ("turn" . 1)
          ("token-total" . 100))
        :test 'equal))))
+
+(defun %fake-explorer (memos &optional log)
+  "Build an explore-fn that hands out canned memos in order. LOG, when
+supplied, is a cons-cell whose CAR is appended with each call so a
+test can verify the explorer was invoked with the right plan-step."
+  (lambda (config provider mcp-client policy logger
+           &key max-turns plan-step)
+    (declare (ignore config provider mcp-client policy logger max-turns))
+    (when log (push plan-step (car log)))
+    (let ((memo (or (pop (car memos))
+                    "memo: investigated nothing in particular.")))
+      (make-instance
+       'cl-harness/src/explore:explore-result
+       :status :reported
+       :memo memo
+       :turns 1
+       :token-total 50))))
 
 (deftest execute-plan-runs-each-step-in-order
   (let* ((project-root (uiop:temporary-directory))
@@ -461,6 +479,90 @@ plan (so a stuck loop test can keep getting the same response)."
                  "only one replan was attempted; the second-round repeat got caught")
              (ok (= 1 (length (develop-result-step-results result)))
                  "stuck detection fires before the runner is invoked on the identical plan")))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+;; --- v0.4 Phase 3: explore phase --------------------------------------
+
+(deftest execute-plan-skips-explore-when-needs-exploration-is-none
+  ;; Default plan-step has needs-exploration :none, so the explorer
+  ;; must not be invoked.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-no-explore"))
+         (steps (list (%make-step :index 0 :test-name "first")))
+         (call-log (cons '() nil))
+         (explore-log (cons '() nil))
+         (runner (%fake-runner call-log (cons (list :passed) nil)))
+         (explorer (%fake-explorer (cons '() nil) explore-log)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (execute-plan
+            steps
+            :project-root (namestring project-root)
+            :system "demo"
+            :test-system "demo/tests"
+            :test-file test-file
+            :log-path log-path
+            :run-fn runner
+            :explore-fn explorer)
+           (ok (zerop (length (car explore-log)))
+               "explore-fn not invoked when needs-exploration is :none"))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest execute-plan-runs-explore-and-prepends-memo-when-requested
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-with-explore"))
+         (steps (list (make-instance
+                       'plan-step
+                       :index 0
+                       :issue "Implement feature X."
+                       :test-name "x-test"
+                       :test-source "(deftest x-test (ok t))"
+                       :files-to-modify nil
+                       :needs-exploration :lightweight)))
+         (call-log (cons '() nil))
+         (explore-log (cons '() nil))
+         (runner (%fake-runner call-log (cons (list :passed) nil)))
+         (explorer (%fake-explorer
+                    (cons (list "memo: package X already exists, has Y exported.")
+                          nil)
+                    explore-log)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((results (execute-plan
+                           steps
+                           :project-root (namestring project-root)
+                           :system "demo"
+                           :test-system "demo/tests"
+                           :test-file test-file
+                           :log-path log-path
+                           :run-fn runner
+                           :explore-fn explorer)))
+             (ok (= 1 (length (car explore-log)))
+                 "explore-fn was invoked once for the lightweight step")
+             (let* ((step-result (first results))
+                    (er (develop-step-result-explore-result step-result)))
+               (ok er "develop-step-result carries the explore-result")
+               (when er
+                 (ok (search "package X already exists"
+                             (cl-harness/src/explore:explore-result-memo er)))))
+             ;; The implement runner saw the enriched issue (memo prepended).
+             (let ((seen-issue (first (car call-log))))
+               (ok (search "## Prior exploration" seen-issue))
+               (ok (search "package X already exists" seen-issue))
+               (ok (search "## Task" seen-issue))
+               (ok (search "Implement feature X" seen-issue)))))
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 

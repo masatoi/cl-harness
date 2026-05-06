@@ -38,8 +38,13 @@
                 #:plan-step-test-name
                 #:plan-step-test-source
                 #:plan-step-files-to-modify
+                #:plan-step-needs-exploration
                 #:plan-development
                 #:planner-error)
+  (:import-from #:cl-harness/src/explore
+                #:run-explore-agent
+                #:explore-result
+                #:explore-result-memo)
   (:import-from #:cl-harness/src/agent
                 #:run-agent)
   (:export #:develop-step-result
@@ -48,6 +53,8 @@
            #:develop-step-result-run-config
            #:develop-step-result-run-agent-state
            #:develop-step-result-test-name
+           #:develop-step-result-transcript-path
+           #:develop-step-result-explore-result
            #:develop-result
            #:develop-result-status
            #:develop-result-final-plan
@@ -74,13 +81,17 @@
                     :reader develop-step-result-run-agent-state)
    (transcript-path :initarg :transcript-path
                     :initform nil
-                    :reader develop-step-result-transcript-path))
+                    :reader develop-step-result-transcript-path)
+   (explore-result :initarg :explore-result :initform nil
+                   :reader develop-step-result-explore-result))
   (:documentation
    "One step's outcome inside an EXECUTE-PLAN run. STATUS mirrors the
 RUN-AGENT terminal status (:PASSED, :GIVE-UP, :LIMIT-EXHAUSTED,
 :DIRTY-ONLY, :ERROR). RUN-AGENT-STATE is the underlying AGENT-STATE
 the executor returned; the orchestrator stays agnostic about its
-exact shape so tests can inject a stand-in."))
+exact shape so tests can inject a stand-in. EXPLORE-RESULT (v0.4
+Phase 3) is the EXPLORE-RESULT object from the explore sub-agent
+when needs-exploration was non-:NONE; NIL otherwise."))
 
 ;; --- helpers --------------------------------------------------------------
 
@@ -212,38 +223,86 @@ recognize is reported as :unknown."
      ("status" . ,(%symbol-status (develop-step-result-status result))))
    :test 'equal))
 
+(defun %enriched-issue (step memo)
+  "Return the issue string fed to the implement step. When MEMO is
+non-empty, prepend it as a `Prior exploration:` block so the
+executor inherits the explore findings as plain text in the
+initial user prompt."
+  (if (and memo (plusp (length memo)))
+      (format nil "## Prior exploration (read-only)~%~A~%~%## Task~%~A"
+              memo (plan-step-issue step))
+      (plan-step-issue step)))
+
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
-                      provider mcp-client run-limits)
-  "Materialize the step's test, build a RUN-CONFIG, call RUN-FN, return
-a DEVELOP-STEP-RESULT. The RUN-AGENT's own JSONL is written under
-RUN-AGENT's normal logger; we do not interleave events with it here."
+                      provider mcp-client run-limits explore-fn)
+  "Materialize the step's test, optionally run an exploration sub-agent,
+build a RUN-CONFIG (with the explore memo prepended to the issue
+when present), call RUN-FN, return a DEVELOP-STEP-RESULT. The
+RUN-AGENT's own JSONL is written under RUN-AGENT's normal logger;
+we do not interleave events with it here.
+
+When PLAN-STEP's needs-exploration is :LIGHTWEIGHT or :DEEP and
+EXPLORE-FN is non-nil, an explore loop runs FIRST against the same
+provider/mcp-client with policy :EXPLORE (read-only). The memo
+returned from that loop is captured in the develop-step-result
+and prepended to the implement issue."
   (validate-test-source (plan-step-test-source step) (plan-step-index step))
   (materialize-test-source test-file (plan-step-test-source step))
-  (let ((rc (plan-step->run-config
-             step
-             :project-root project-root
-             :system system
-             :test-system test-system
-             :condition condition
-             :limits run-limits))
-        (policy (make-tool-policy condition))
-        (run-logger-path
-         (merge-pathnames
-          (format nil "develop-step-~D-~A-~A.jsonl"
-                  (plan-step-index step)
-                  (plan-step-test-name step)
-                  (get-internal-real-time))
-          (uiop:temporary-directory))))
+  (let* ((needs (plan-step-needs-exploration step))
+         (do-explore (and explore-fn
+                          needs
+                          (not (eq :none needs))))
+         (explore-policy (when do-explore (make-tool-policy :explore)))
+         (run-logger-path
+          (merge-pathnames
+           (format nil "develop-step-~D-~A-~A.jsonl"
+                   (plan-step-index step)
+                   (plan-step-test-name step)
+                   (get-internal-real-time))
+           (uiop:temporary-directory)))
+         (explore-orient-config
+          (when do-explore
+            (make-run-config :project-root project-root
+                             :system system
+                             :test-system test-system
+                             :issue (plan-step-issue step)
+                             :condition :explore))))
     (%log-develop-event
      logger :step-start
      (alist-hash-table
       `(("step_index" . ,(plan-step-index step))
         ("test_name" . ,(plan-step-test-name step))
         ("issue" . ,(plan-step-issue step))
+        ("needs_exploration" . ,(string-downcase
+                                 (symbol-name (or needs :none))))
         ("transcript_path" . ,(namestring run-logger-path)))
       :test 'equal))
     (let* ((step-logger (open-run-logger run-logger-path))
+           (explore-result
+            (when do-explore
+              (handler-case
+                  (funcall explore-fn
+                           explore-orient-config provider mcp-client
+                           explore-policy step-logger
+                           :plan-step step)
+                (error (c)
+                  (%log-develop-event
+                   logger :explore-aborted
+                   (alist-hash-table
+                    `(("step_index" . ,(plan-step-index step))
+                      ("message" . ,(princ-to-string c)))
+                    :test 'equal))
+                  nil))))
+           (memo (when explore-result (explore-result-memo explore-result)))
+           (rc (make-run-config :project-root project-root
+                                :system system
+                                :test-system test-system
+                                :issue (%enriched-issue step memo)
+                                :condition condition
+                                :limits (or run-limits
+                                            (cl-harness/src/config:make-default-limits))))
+           (policy (make-tool-policy condition))
            (state (unwind-protect
                        (funcall run-fn rc provider mcp-client policy step-logger)
                     (close-run-logger step-logger)))
@@ -255,7 +314,8 @@ RUN-AGENT's normal logger; we do not interleave events with it here."
                     :run-config rc
                     :status status
                     :run-agent-state state
-                    :transcript-path run-logger-path)))
+                    :transcript-path run-logger-path
+                    :explore-result explore-result)))
       (%log-develop-event logger :step-end
                           (%step-event-payload step result))
       result)))
@@ -267,7 +327,8 @@ RUN-AGENT's normal logger; we do not interleave events with it here."
                           mcp-client
                           run-limits
                           log-path
-                          (run-fn #'run-agent))
+                          (run-fn #'run-agent)
+                          (explore-fn #'run-explore-agent))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -317,7 +378,8 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                (let ((result (%execute-step step run-fn
                                             project-root system test-system
                                             condition test-file logger
-                                            provider mcp-client run-limits)))
+                                            provider mcp-client run-limits
+                                            explore-fn)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -389,7 +451,8 @@ attempted."
                      log-path
                      (max-replans 3)
                      (planner-fn #'plan-development)
-                     (run-fn #'run-agent))
+                     (run-fn #'run-agent)
+                     (explore-fn #'run-explore-agent))
   "Plan, execute, and replan-on-failure end-to-end.
 
 Workflow:
@@ -443,7 +506,8 @@ is added to the payload here.)"
                              :mcp-client mcp-client
                              :run-limits run-limits
                              :log-path log-path
-                             :run-fn run-fn))
+                             :run-fn run-fn
+                             :explore-fn explore-fn))
              (last-result (car (last round-results))))
         (setf results (append results round-results))
         (cond
