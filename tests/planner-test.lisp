@@ -16,6 +16,18 @@
                 #:plan-step-test-name
                 #:plan-step-test-source
                 #:plan-step-files-to-modify
+                ;; v0.4 Phase 1 additions:
+                #:plan-step-purpose
+                #:plan-step-acceptance-criteria
+                #:plan-step-investigation-targets
+                #:plan-step-risks
+                #:plan-step-needs-exploration
+                #:plan-step-adopted-abstractions
+                #:plan-step-rejected-abstractions
+                #:investigation-target
+                #:investigation-target-kind
+                #:investigation-target-name
+                #:investigation-target-intent
                 #:plan-development
                 #:planner-error
                 #:planner-error-message))
@@ -140,3 +152,94 @@
             (progn (plan-development "demo" :provider provider) nil)
           (planner-error (c)
             (and (search "test_name" (planner-error-message c)) t))))))
+
+;; --- v0.4 Phase 1: enriched plan-step schema -------------------------------
+
+(deftest plan-development-defaults-new-fields-when-absent
+  ;; Backward compat: old-style responses (only issue / test_name /
+  ;; test_source) must continue to parse, with all v0.4 fields
+  ;; defaulting to NIL / :none.
+  (let* ((provider (%make-stub-provider
+                    :transport (%canned-transport +canonical-plan+)))
+         (plan (plan-development "demo" :provider provider)))
+    (let ((s (first plan)))
+      (ok (null (plan-step-purpose s)))
+      (ok (null (plan-step-acceptance-criteria s)))
+      (ok (null (plan-step-investigation-targets s)))
+      (ok (null (plan-step-risks s)))
+      (ok (eq :none (plan-step-needs-exploration s)))
+      (ok (null (plan-step-adopted-abstractions s)))
+      (ok (null (plan-step-rejected-abstractions s))))))
+
+(defparameter +enriched-plan+
+  "{\"steps\":[{
+      \"issue\":\"Implement greet under demo package.\",
+      \"test_name\":\"greet-says-hello\",
+      \"test_source\":\"(deftest greet-says-hello (ok (string= (demo:greet \\\"X\\\") \\\"Hello, X!\\\")))\",
+      \"files_to_modify\":[\"src/main.lisp\"],
+      \"purpose\":\"Provide a single-arg greeter callable as demo:greet.\",
+      \"acceptance_criteria\":[\"greet exists in package demo\",\"greet returns 'Hello, NAME!'\"],
+      \"investigation_targets\":[
+        {\"kind\":\"package\",\"name\":\"demo\",\"intent\":\"check existing exports\"},
+        {\"kind\":\"function\",\"name\":\"format\",\"intent\":\"reuse formatter\"}
+      ],
+      \"risks\":[\"format directive choice\",\"NAME may be NIL\"],
+      \"needs_exploration\":\"lightweight\"
+    }]}")
+
+(deftest plan-development-parses-enriched-fields
+  (let* ((provider (%make-stub-provider
+                    :transport (%canned-transport +enriched-plan+)))
+         (plan (plan-development "demo" :provider provider)))
+    (let ((s (first plan)))
+      (ok (search "single-arg greeter" (plan-step-purpose s)))
+      (let ((ac (plan-step-acceptance-criteria s)))
+        (ok (= 2 (length ac)))
+        (ok (search "exists" (first ac)))
+        (ok (search "Hello, NAME" (second ac))))
+      (let ((targets (plan-step-investigation-targets s)))
+        (ok (= 2 (length targets)))
+        (let ((t1 (first targets)))
+          (ok (typep t1 'investigation-target))
+          (ok (eq :package (investigation-target-kind t1)))
+          (ok (equal "demo" (investigation-target-name t1)))
+          (ok (search "exports" (investigation-target-intent t1))))
+        (let ((t2 (second targets)))
+          (ok (eq :function (investigation-target-kind t2)))
+          (ok (equal "format" (investigation-target-name t2)))))
+      (ok (= 2 (length (plan-step-risks s))))
+      (ok (eq :lightweight (plan-step-needs-exploration s))))))
+
+(deftest plan-development-needs-exploration-keyword-mapping
+  ;; Each of the three documented levels parses to its keyword.
+  (dolist (pair '(("none" . :none)
+                  ("lightweight" . :lightweight)
+                  ("deep" . :deep)))
+    (let* ((body (format nil
+                         "{\"steps\":[{\"issue\":\"x\",\"test_name\":\"t\",\"test_source\":\"(deftest t (ok t))\",\"needs_exploration\":~S}]}"
+                         (car pair)))
+           (provider (%make-stub-provider
+                      :transport (%canned-transport body)))
+           (plan (plan-development "demo" :provider provider)))
+      (ok (eq (cdr pair)
+              (plan-step-needs-exploration (first plan)))
+          (format nil "~A maps to ~A"
+                  (car pair) (cdr pair))))))
+
+(deftest plan-development-rejects-unknown-needs-exploration
+  ;; Anything other than none / lightweight / deep is a planner-error.
+  (let* ((body "{\"steps\":[{\"issue\":\"x\",\"test_name\":\"t\",\"test_source\":\"(deftest t (ok t))\",\"needs_exploration\":\"someday\"}]}")
+         (provider (%make-stub-provider
+                    :transport (%canned-transport body))))
+    (ok (handler-case
+            (progn (plan-development "demo" :provider provider) nil)
+          (planner-error (c)
+            (and (search "needs_exploration"
+                         (planner-error-message c)) t))))))
+
+(deftest plan-development-investigation-targets-empty-array-yields-nil
+  (let* ((body "{\"steps\":[{\"issue\":\"x\",\"test_name\":\"t\",\"test_source\":\"(deftest t (ok t))\",\"investigation_targets\":[]}]}")
+         (provider (%make-stub-provider
+                    :transport (%canned-transport body)))
+         (plan (plan-development "demo" :provider provider)))
+    (ok (null (plan-step-investigation-targets (first plan))))))

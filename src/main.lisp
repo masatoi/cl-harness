@@ -87,6 +87,18 @@
                 #:plan-step-test-name
                 #:plan-step-test-source
                 #:plan-step-files-to-modify
+                ;; v0.4 Phase 1:
+                #:plan-step-purpose
+                #:plan-step-acceptance-criteria
+                #:plan-step-investigation-targets
+                #:plan-step-risks
+                #:plan-step-needs-exploration
+                #:plan-step-adopted-abstractions
+                #:plan-step-rejected-abstractions
+                #:investigation-target
+                #:investigation-target-kind
+                #:investigation-target-name
+                #:investigation-target-intent
                 #:plan-development
                 #:planner-error)
   (:import-from #:cl-harness/src/orchestrator
@@ -190,6 +202,17 @@
            #:plan-step-test-name
            #:plan-step-test-source
            #:plan-step-files-to-modify
+           #:plan-step-purpose
+           #:plan-step-acceptance-criteria
+           #:plan-step-investigation-targets
+           #:plan-step-risks
+           #:plan-step-needs-exploration
+           #:plan-step-adopted-abstractions
+           #:plan-step-rejected-abstractions
+           #:investigation-target
+           #:investigation-target-kind
+           #:investigation-target-name
+           #:investigation-target-intent
            #:plan-development
            #:planner-error
            #:develop-step-result

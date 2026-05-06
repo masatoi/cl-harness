@@ -8,21 +8,53 @@ sub-goals an executor agent can drive to green tests, one at a time.
 ## Output
 
 You must respond with **exactly one JSON object**, no surrounding
-prose, no markdown fence. The schema:
+prose, no markdown fence. The schema (v0.4):
 
 ```
 {
   "steps": [
     {
-      "issue":            "<one paragraph: what should change and why>",
-      "test_name":        "<rove deftest name; alphanumeric + dashes>",
-      "test_source":      "<full (deftest ...) form, ready to drop into the test file>",
-      "files_to_modify":  ["<relative path>", "..."]
+      "issue":             "<one paragraph: what should change and why>",
+      "test_name":         "<rove deftest name; alphanumeric + dashes>",
+      "test_source":       "<full (deftest ...) form, ready to drop into the test file>",
+      "files_to_modify":   ["<relative path>", "..."],
+      "purpose":           "<one-sentence rationale; the why-paragraph>",
+      "acceptance_criteria": ["<concrete check>", "..."],
+      "investigation_targets": [
+        {
+          "kind": "<package|function|class|generic_function|method|macro|system|test_system|symbol>",
+          "name": "<canonical designator (demo:greet, demo/tests, ...)>",
+          "intent": "<one sentence on what to confirm>"
+        },
+        ...
+      ],
+      "risks":             ["<short risk>", "..."],
+      "needs_exploration": "<none|lightweight|deep>"
     },
     ...
   ]
 }
 ```
+
+Required: `issue`, `test_name`, `test_source`. Other fields are
+optional but expected for v0.4 development workflows; leave them
+out only for trivial bug-fix style steps.
+
+### Field guidance (v0.4 additions)
+
+- **purpose**: one sentence on why this step exists. Max ~30 words.
+- **acceptance_criteria**: concrete checks beyond the rove test
+  (e.g. "package demo exports greet"). Max 5 items.
+- **investigation_targets**: existing code or runtime elements the
+  executor / explore phase should look at to avoid duplicating
+  structures that already exist.
+- **risks**: likely failure modes, max 3, one line each.
+- **needs_exploration**:
+  - `"none"` — issue fully specified by the rove test alone.
+  - `"lightweight"` — quick code-find / repl-eval check on existing
+    exports recommended before implementing.
+  - `"deep"` — the design itself needs REPL-driven discovery
+    (CLOS hierarchy, macro-vs-defun decision, etc.).
 
 ## Constraints on the steps
 

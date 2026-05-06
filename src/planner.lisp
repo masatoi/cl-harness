@@ -26,6 +26,18 @@
            #:plan-step-test-name
            #:plan-step-test-source
            #:plan-step-files-to-modify
+           ;; v0.4 Phase 1 additions:
+           #:plan-step-purpose
+           #:plan-step-acceptance-criteria
+           #:plan-step-investigation-targets
+           #:plan-step-risks
+           #:plan-step-needs-exploration
+           #:plan-step-adopted-abstractions
+           #:plan-step-rejected-abstractions
+           #:investigation-target
+           #:investigation-target-kind
+           #:investigation-target-name
+           #:investigation-target-intent
            #:plan-development
            #:planner-error
            #:planner-error-message
@@ -48,10 +60,46 @@
    "Respond with EXACTLY ONE JSON object, no surrounding prose, no "
    "markdown fence. Schema:"
    (string #\Newline) (string #\Newline)
-   "  {\"steps\": [ {\"issue\": <string>, "
+   "  {\"steps\": [ "
+   "{\"issue\": <string>, "
    "\"test_name\": <string>, "
    "\"test_source\": <string with a complete (rove:deftest ...) form>, "
-   "\"files_to_modify\": [<relative path>, ...] }, ... ] }"
+   "\"files_to_modify\": [<relative path>, ...], "
+   "\"purpose\": <one-sentence rationale>, "
+   "\"acceptance_criteria\": [<short check>, ...], "
+   "\"investigation_targets\": [{\"kind\": <\"package\"|\"function\"|\"class\"|\"generic_function\"|\"method\"|\"macro\"|\"system\"|\"test_system\"|\"symbol\">, \"name\": <designator>, \"intent\": <short>}, ...], "
+   "\"risks\": [<short risk>, ...], "
+   "\"needs_exploration\": <\"none\"|\"lightweight\"|\"deep\">"
+   " }, ... ] }"
+   (string #\Newline) (string #\Newline)
+   "Required fields per step: issue, test_name, test_source. Other "
+   "fields are optional but expected for v0.4 development workflows; "
+   "leave them out for trivial bug-fix style steps."
+   (string #\Newline) (string #\Newline)
+   "Field guidance:"
+   (string #\Newline)
+   "- purpose:   one sentence on why this step exists (the "
+   "implementer's `why` paragraph)."
+   (string #\Newline)
+   "- acceptance_criteria: concrete checks beyond the rove test "
+   "(e.g. \"package demo exports greet\", \"behavior preserves "
+   "negative inputs\"). Max 5 items."
+   (string #\Newline)
+   "- investigation_targets: existing code/runtime elements the "
+   "executor (or the explore phase, when needs_exploration > "
+   "\"none\") should look at to avoid inventing structures that "
+   "duplicate what already exists. Each entry names a kind + a "
+   "designator + a one-sentence intent."
+   (string #\Newline)
+   "- risks: likely failure modes (one-line each, max 3). Helps the "
+   "executor pre-empt them."
+   (string #\Newline)
+   "- needs_exploration: \"none\" when the issue is fully specified "
+   "by the rove test alone; \"lightweight\" when a quick "
+   "code-find / repl-eval check on existing exports is useful "
+   "before implementing; \"deep\" when the design itself needs "
+   "REPL-driven discovery (CLOS hierarchy, macro-vs-defun "
+   "decisions, etc.)."
    (string #\Newline) (string #\Newline)
    "Constraints on each step:"
    (string #\Newline)
@@ -103,6 +151,33 @@ turned into a valid plan-step list.")
 
 ;; --- plan-step -----------------------------------------------------------
 
+(defclass investigation-target ()
+  ((kind :initarg :kind :reader investigation-target-kind)
+   (name :initarg :name :reader investigation-target-name)
+   (intent :initarg :intent :reader investigation-target-intent))
+  (:documentation
+   "One existing-code element the planner expects the executor (or
+the explore phase) to look at before / during the step. KIND is one
+of the keywords listed in +INVESTIGATION-TARGET-KINDS+
+(:package, :function, :class, :generic-function, :method, :macro,
+:system, :test-system, :symbol). NAME is the canonical designator
+string (e.g. \"demo:greet\", \"demo/tests\"). INTENT is one short
+sentence on what the planner wants confirmed."))
+
+(defparameter +investigation-target-kinds+
+  '(:package :symbol :function :generic-function :method
+    :class :macro :system :test-system)
+  "Allowed values of INVESTIGATION-TARGET-KIND. Planner responses
+using a different `kind` string are rejected with planner-error
+so a confused planner can't propagate a malformed shape into the
+orchestrator.")
+
+(defparameter +needs-exploration-levels+
+  '(:none :lightweight :deep)
+  "Allowed values for plan-step-needs-exploration. The orchestrator
+(Phase P3, v0.4) uses this to decide whether to run an explore
+sub-step before the implement sub-step.")
+
 (defclass plan-step ()
   ((index :initarg :index :reader plan-step-index)
    (issue :initarg :issue :reader plan-step-issue)
@@ -110,14 +185,43 @@ turned into a valid plan-step list.")
    (test-source :initarg :test-source :reader plan-step-test-source)
    (files-to-modify :initarg :files-to-modify
                     :initform nil
-                    :reader plan-step-files-to-modify))
+                    :reader plan-step-files-to-modify)
+   ;; v0.4 Phase 1 additions. All optional so v0.3 planner responses
+   ;; continue to parse with sensible defaults.
+   (purpose :initarg :purpose :initform nil
+            :reader plan-step-purpose)
+   (acceptance-criteria :initarg :acceptance-criteria :initform nil
+                        :reader plan-step-acceptance-criteria)
+   (investigation-targets :initarg :investigation-targets :initform nil
+                          :reader plan-step-investigation-targets)
+   (risks :initarg :risks :initform nil
+          :reader plan-step-risks)
+   (needs-exploration :initarg :needs-exploration :initform :none
+                      :reader plan-step-needs-exploration)
+   ;; Written by the orchestrator (P3 / P4) — not by the planner.
+   ;; Initialised here to NIL so callers can read the slot
+   ;; uniformly.
+   (adopted-abstractions :initarg :adopted-abstractions :initform nil
+                         :accessor plan-step-adopted-abstractions)
+   (rejected-abstractions :initarg :rejected-abstractions :initform nil
+                          :accessor plan-step-rejected-abstractions))
   (:documentation
    "One sub-goal in a development plan. INDEX is 0-based, in the order
 emitted by the planner. ISSUE is the free-text problem statement the
 executor will see. TEST-NAME and TEST-SOURCE describe the rove test
 the orchestrator (Phase P2) will materialise on disk before invoking
-RUN-AGENT for this step. FILES-TO-MODIFY is an informational hint
-about which source files the planner expects this step to touch."))
+RUN-AGENT for this step. FILES-TO-MODIFY is an informational hint.
+
+v0.4 Phase 1 additions (see docs/notes/2026-05-06-v0.4-development-harness.md):
+PURPOSE is the why-paragraph (one sentence). ACCEPTANCE-CRITERIA is
+a list of strings the run is graded against. INVESTIGATION-TARGETS
+is a list of INVESTIGATION-TARGET instances pointing at existing
+code/runtime elements the planner wants the explore phase to
+confirm. RISKS lists likely failure modes (max ~3). NEEDS-EXPLORATION
+is one of +NEEDS-EXPLORATION-LEVELS+. ADOPTED-ABSTRACTIONS and
+REJECTED-ABSTRACTIONS are written by the orchestrator after the
+explore phase to capture which design candidates were promoted to
+source and which were left as REPL-only experiments."))
 
 ;; --- prompt construction -------------------------------------------------
 
@@ -215,21 +319,132 @@ strings. Anything else signals planner-error."
               :message "files_to_modify must be an array of strings"
               :raw raw))))
 
+(defun %as-list-of-strings (raw field-name)
+  "Like %PARSE-FILES but parameterised by the JSON field name so the
+error message can name the offending field. Returns NIL for
+absent/empty input, a list of strings otherwise."
+  (cond
+    ((null raw) nil)
+    ((or (vectorp raw) (listp raw))
+     (let ((items (if (vectorp raw) (coerce raw 'list) raw)))
+       (dolist (item items)
+         (unless (stringp item)
+           (error 'planner-error
+                  :message (format nil
+                                   "~A entries must be strings"
+                                   field-name)
+                  :raw raw)))
+       items))
+    (t (error 'planner-error
+              :message (format nil
+                               "~A must be an array of strings"
+                               field-name)
+              :raw raw))))
+
+(defun %parse-investigation-target (table step-index target-index)
+  (unless (hash-table-p table)
+    (error 'planner-error
+           :message (format nil
+                            "step ~D investigation_targets[~D] must be an object"
+                            step-index target-index)
+           :raw table))
+  (let ((kind-raw (gethash "kind" table))
+        (name-raw (gethash "name" table))
+        (intent-raw (or (gethash "intent" table) "")))
+    (unless (and (stringp kind-raw) (plusp (length kind-raw)))
+      (error 'planner-error
+             :message (format nil
+                              "step ~D investigation_targets[~D] missing 'kind'"
+                              step-index target-index)
+             :raw table))
+    (unless (and (stringp name-raw) (plusp (length name-raw)))
+      (error 'planner-error
+             :message (format nil
+                              "step ~D investigation_targets[~D] missing 'name'"
+                              step-index target-index)
+             :raw table))
+    (let ((kind-kw (intern (string-upcase
+                            (substitute #\- #\_ kind-raw))
+                           :keyword)))
+      (unless (member kind-kw +investigation-target-kinds+)
+        (error 'planner-error
+               :message (format nil
+                                "step ~D investigation_targets[~D] kind ~S is not one of ~A"
+                                step-index target-index
+                                kind-raw +investigation-target-kinds+)
+               :raw table))
+      (make-instance 'investigation-target
+                     :kind kind-kw
+                     :name name-raw
+                     :intent intent-raw))))
+
+(defun %parse-investigation-targets (raw step-index)
+  (cond
+    ((null raw) nil)
+    ((or (vectorp raw) (listp raw))
+     (let ((items (if (vectorp raw) (coerce raw 'list) raw)))
+       (loop for item in items
+             for i from 0
+             collect (%parse-investigation-target item step-index i))))
+    (t (error 'planner-error
+              :message (format nil
+                               "step ~D investigation_targets must be an array"
+                               step-index)
+              :raw raw))))
+
+(defun %parse-needs-exploration (raw step-index)
+  (cond
+    ((null raw) :none)
+    ((stringp raw)
+     (let ((kw (intern (string-upcase raw) :keyword)))
+       (unless (member kw +needs-exploration-levels+)
+         (error 'planner-error
+                :message (format nil
+                                 "step ~D needs_exploration ~S is not one of ~A"
+                                 step-index raw +needs-exploration-levels+)
+                :raw raw))
+       kw))
+    (t (error 'planner-error
+              :message (format nil
+                               "step ~D needs_exploration must be a string"
+                               step-index)
+              :raw raw))))
+
 (defun %hash-to-step (table index)
   "Build a PLAN-STEP from the hash-table TABLE for the step at INDEX
-(0-based). Validates the required fields and defaults files_to_modify
-to NIL when absent."
+(0-based). Validates the required fields, defaults files_to_modify
+to NIL when absent, and reads the v0.4 Phase 1 optional fields
+(purpose / acceptance_criteria / investigation_targets / risks /
+needs_exploration). Anything missing in the response defaults to
+NIL or :none — old v0.3 planner outputs continue to parse."
   (unless (hash-table-p table)
     (error 'planner-error
            :message (format nil "step ~D is not a JSON object" index)
            :raw table))
-  (make-instance 'plan-step
-                 :index index
-                 :issue (%require-string table "issue" index)
-                 :test-name (%require-string table "test_name" index)
-                 :test-source (%require-string table "test_source" index)
-                 :files-to-modify (%parse-files
-                                   (gethash "files_to_modify" table))))
+  (let ((purpose-raw (gethash "purpose" table)))
+    (when (and purpose-raw (not (stringp purpose-raw)))
+      (error 'planner-error
+             :message (format nil "step ~D purpose must be a string" index)
+             :raw table))
+    (make-instance
+     'plan-step
+     :index index
+     :issue (%require-string table "issue" index)
+     :test-name (%require-string table "test_name" index)
+     :test-source (%require-string table "test_source" index)
+     :files-to-modify (%parse-files
+                       (gethash "files_to_modify" table))
+     :purpose (and purpose-raw (plusp (length purpose-raw)) purpose-raw)
+     :acceptance-criteria (%as-list-of-strings
+                           (gethash "acceptance_criteria" table)
+                           "acceptance_criteria")
+     :investigation-targets (%parse-investigation-targets
+                             (gethash "investigation_targets" table)
+                             index)
+     :risks (%as-list-of-strings (gethash "risks" table) "risks")
+     :needs-exploration (%parse-needs-exploration
+                         (gethash "needs_exploration" table)
+                         index))))
 
 (defun %parse-plan (text)
   "Parse a planner response TEXT (raw or fenced JSON) into a list of
