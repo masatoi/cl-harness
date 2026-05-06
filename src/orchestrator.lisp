@@ -388,7 +388,8 @@ without a develop-state)."
                        (funcall explore-fn
                                 explore-orient-config provider mcp-client
                                 explore-policy step-logger
-                                :plan-step step)
+                                :plan-step step
+                                :develop-state develop-state)
                      (error (c)
                        (%log-develop-event
                         logger :explore-aborted

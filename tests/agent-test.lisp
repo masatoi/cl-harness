@@ -36,7 +36,15 @@
                 #:patch-record-verify-status)
   (:import-from #:cl-harness/src/source-fact
                 #:source-fact-path
-                #:source-fact-via-tool))
+                #:source-fact-via-tool)
+  (:import-from #:cl-harness/src/planner
+                #:plan-step
+                #:investigation-target)
+  (:import-from #:cl-harness/src/explore
+                #:run-explore-agent
+                #:explore-result
+                #:explore-result-status
+                #:explore-result-memo))
 
 (in-package #:cl-harness/tests/agent-test)
 
@@ -998,3 +1006,63 @@ order. Helper for tests that assert against the on-disk transcript."
       (let ((f (first facts)))
         (ok (search "foo" (namestring (source-fact-path f))))
         (ok (string= "lisp-read-file" (source-fact-via-tool f)))))))
+
+(deftest run-explore-agent-uses-context-view-when-develop-state-supplied
+  ;; Phase C.7 wiring: when :develop-state is passed, the initial user
+  ;; prompt's issue + investigation-targets section is rendered via
+  ;; CONTEXT-VIEW->STRING with the :exploration formatter. Capture the
+  ;; HTTP body the LLM transport receives, and assert the rendered
+  ;; section markers ("## Current step", "## Investigation targets")
+  ;; and the investigation-target marker string both appear.
+  (let* ((ds (make-develop-state
+              :goal "g"
+              :project-root "/tmp/cl-harness-c7-test/"
+              :system "demo"
+              :test-system "demo/tests"))
+         (target (make-instance 'investigation-target
+                                :kind :function
+                                :name "[INVESTIGATION-MARKER]"
+                                :intent "verify wiring"))
+         (step (make-instance 'plan-step
+                              :index 0
+                              :issue "Add greet."
+                              :test-name "greet-test"
+                              :test-source "(deftest greet-test (ok t))"
+                              :investigation-targets (list target)
+                              :needs-exploration :lightweight))
+         (captured (cons nil nil))
+         (transport
+          (lambda (url headers body)
+            (declare (ignore url headers))
+            (setf (car captured) body)
+            (values
+             (%llm-body
+              "{\"type\":\"finish\",\"status\":\"fixed\",\"summary\":\"ok\"}")
+             200
+             (make-hash-table :test 'equal))))
+         (provider (%make-stub-provider :transport transport))
+         (mcp (%make-mcp-client-with-handler))
+         (policy (make-tool-policy :explore))
+         (config (%make-config))
+         (path (%temp-log-path)))
+    (setf (cl-harness/src/state:develop-state-current-step-index ds) 0)
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (unwind-protect
+                (run-explore-agent config provider mcp policy logger
+                                   :plan-step step
+                                   :develop-state ds)
+             (close-run-logger logger)))
+      (when (probe-file path) (delete-file path)))
+    (let* ((req (yason:parse (car captured)))
+           (messages (gethash "messages" req))
+           (user-msg (find-if (lambda (m) (equal "user" (gethash "role" m)))
+                              (coerce messages 'list)))
+           (content (and user-msg (gethash "content" user-msg))))
+      (ok user-msg "user message present in captured request")
+      (ok (and content (search "## Current step" content))
+          "context-view :exploration Current step heading present")
+      (ok (and content (search "## Investigation targets" content))
+          "context-view :exploration Investigation targets heading present")
+      (ok (and content (search "[INVESTIGATION-MARKER]" content))
+          "investigation-target name appears in user prompt"))))
