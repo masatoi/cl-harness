@@ -45,6 +45,8 @@
                 #:run-explore-agent
                 #:explore-result
                 #:explore-result-memo)
+  (:import-from #:cl-harness/src/abstraction
+                #:parse-abstraction-decisions)
   (:import-from #:cl-harness/src/agent
                 #:run-agent)
   (:export #:develop-step-result
@@ -55,12 +57,14 @@
            #:develop-step-result-test-name
            #:develop-step-result-transcript-path
            #:develop-step-result-explore-result
+           #:develop-step-result-abstraction-decisions
            #:develop-result
            #:develop-result-status
            #:develop-result-final-plan
            #:develop-result-step-results
            #:develop-result-replan-count
            #:develop-result-limit-hit
+           #:develop-result-abstraction-ledger
            #:validate-test-source
            #:materialize-test-source
            #:plan-step->run-config
@@ -83,7 +87,9 @@
                     :initform nil
                     :reader develop-step-result-transcript-path)
    (explore-result :initarg :explore-result :initform nil
-                   :reader develop-step-result-explore-result))
+                   :reader develop-step-result-explore-result)
+   (abstraction-decisions :initarg :abstraction-decisions :initform nil
+                          :reader develop-step-result-abstraction-decisions))
   (:documentation
    "One step's outcome inside an EXECUTE-PLAN run. STATUS mirrors the
 RUN-AGENT terminal status (:PASSED, :GIVE-UP, :LIMIT-EXHAUSTED,
@@ -91,7 +97,10 @@ RUN-AGENT terminal status (:PASSED, :GIVE-UP, :LIMIT-EXHAUSTED,
 the executor returned; the orchestrator stays agnostic about its
 exact shape so tests can inject a stand-in. EXPLORE-RESULT (v0.4
 Phase 3) is the EXPLORE-RESULT object from the explore sub-agent
-when needs-exploration was non-:NONE; NIL otherwise."))
+when needs-exploration was non-:NONE; NIL otherwise.
+ABSTRACTION-DECISIONS (v0.4 Phase 4) is the list of
+ABSTRACTION-DECISION instances PARSE-ABSTRACTION-DECISIONS extracted
+from the explore memo (NIL when no explore ran or no markers found)."))
 
 ;; --- helpers --------------------------------------------------------------
 
@@ -295,6 +304,10 @@ and prepended to the implement issue."
                     :test 'equal))
                   nil))))
            (memo (when explore-result (explore-result-memo explore-result)))
+           (abstraction-decisions
+            (when memo
+              (parse-abstraction-decisions memo
+                                           :step-index (plan-step-index step))))
            (rc (make-run-config :project-root project-root
                                 :system system
                                 :test-system test-system
@@ -315,7 +328,25 @@ and prepended to the implement issue."
                     :status status
                     :run-agent-state state
                     :transcript-path run-logger-path
-                    :explore-result explore-result)))
+                    :explore-result explore-result
+                    :abstraction-decisions abstraction-decisions)))
+      (when abstraction-decisions
+        (%log-develop-event
+         logger :abstraction-decision
+         (alist-hash-table
+          `(("step_index" . ,(plan-step-index step))
+            ("decisions"
+             . ,(map 'vector
+                     (lambda (d)
+                       (alist-hash-table
+                        `(("kind" . ,(string-downcase
+                                      (symbol-name
+                                       (cl-harness/src/abstraction:abstraction-decision-kind d))))
+                          ("name" . ,(cl-harness/src/abstraction:abstraction-decision-name d))
+                          ("rationale" . ,(cl-harness/src/abstraction:abstraction-decision-rationale d)))
+                        :test 'equal))
+                     abstraction-decisions)))
+          :test 'equal)))
       (%log-develop-event logger :step-end
                           (%step-event-payload step result))
       result)))
@@ -425,6 +456,12 @@ intermediate plan failed without recovery. STEP-RESULTS is the flat
 list of every step run across every replan round, in execution
 order. FINAL-PLAN is the plan currently active at the moment the
 run terminated."))
+
+(defun develop-result-abstraction-ledger (result)
+  "Return the flat list of every ABSTRACTION-DECISION captured across
+RESULT's step-results, preserving step order. v0.4 Phase 4."
+  (loop for sr in (develop-result-step-results result)
+        append (develop-step-result-abstraction-decisions sr)))
 
 (defun %first-test-name (plan)
   "Return the test_name of PLAN's first PLAN-STEP, or NIL when PLAN is

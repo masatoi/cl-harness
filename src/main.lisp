@@ -21,7 +21,18 @@
   (:import-from #:cl-harness/src/cli
                 #:fix
                 #:bench
-                #:develop)
+                #:develop
+                #:format-develop-report
+                #:format-develop-report-markdown)
+  (:import-from #:cl-harness/src/abstraction
+                #:abstraction-decision
+                #:abstraction-decision-kind
+                #:abstraction-decision-name
+                #:abstraction-decision-rationale
+                #:abstraction-decision-step-index
+                #:make-abstraction-decision
+                #:parse-abstraction-decisions
+                #:format-abstraction-ledger-markdown)
   (:import-from #:cl-harness/src/cli-main
                 #:main)
   (:import-from #:cl-harness/src/mcp
@@ -109,12 +120,14 @@
                 #:develop-step-result-run-config
                 #:develop-step-result-run-agent-state
                 #:develop-step-result-explore-result
+                #:develop-step-result-abstraction-decisions
                 #:develop-result
                 #:develop-result-status
                 #:develop-result-final-plan
                 #:develop-result-step-results
                 #:develop-result-replan-count
                 #:develop-result-limit-hit
+                #:develop-result-abstraction-ledger
                 #:execute-plan)
   (:import-from #:cl-harness/src/explore
                 #:explore-result
@@ -149,6 +162,16 @@
   (:export #:fix
            #:bench
            #:develop
+           #:format-develop-report
+           #:format-develop-report-markdown
+           #:abstraction-decision
+           #:abstraction-decision-kind
+           #:abstraction-decision-name
+           #:abstraction-decision-rationale
+           #:abstraction-decision-step-index
+           #:make-abstraction-decision
+           #:parse-abstraction-decisions
+           #:format-abstraction-ledger-markdown
            #:main
            #:run-config
            #:make-run-config
@@ -232,12 +255,14 @@
            #:develop-step-result-run-config
            #:develop-step-result-run-agent-state
            #:develop-step-result-explore-result
+           #:develop-step-result-abstraction-decisions
            #:develop-result
            #:develop-result-status
            #:develop-result-final-plan
            #:develop-result-step-results
            #:develop-result-replan-count
            #:develop-result-limit-hit
+           #:develop-result-abstraction-ledger
            #:execute-plan
            #:explore-result
            #:explore-result-status

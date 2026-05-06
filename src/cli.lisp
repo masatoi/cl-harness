@@ -35,6 +35,8 @@
   (:export #:fix
            #:bench
            #:develop
+           #:format-develop-report
+           #:format-develop-report-markdown
            #:not-implemented-error))
 
 (in-package #:cl-harness/src/cli)
@@ -210,7 +212,71 @@ mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
     (format s "Replans:          ~D~%" (develop-result-replan-count result))
     (format s "Step results:     ~D~%"
             (length (develop-result-step-results result)))
+    (let ((ledger (cl-harness/src/orchestrator:develop-result-abstraction-ledger
+                   result)))
+      (when ledger
+        (format s "Abstractions:     ~D recorded (~D adopted, ~D rejected, ~D deferred)~%"
+                (length ledger)
+                (count :adopted ledger
+                       :key #'cl-harness/src/abstraction:abstraction-decision-kind)
+                (count :rejected ledger
+                       :key #'cl-harness/src/abstraction:abstraction-decision-kind)
+                (count :deferred ledger
+                       :key #'cl-harness/src/abstraction:abstraction-decision-kind))))
     (when log-path (format s "Develop log:      ~A~%" log-path))))
+
+(defun format-develop-report-markdown (result &key goal log-path)
+  "Render DEVELOP-RESULT as a structured markdown report
+(requirement 4.11). Sections: user request (when GOAL is supplied),
+status / counts, adopted / rejected / deferred abstractions,
+explore notes per step, and per-step status summary.
+
+Empty sections are omitted so the output stays terse for
+trivial runs."
+  (with-output-to-string (s)
+    (format s "# cl-harness develop report~%")
+    (when goal
+      (format s "~%## User request~%~A~%" goal))
+    (format s "~%## Outcome~%")
+    (format s "- Status: `:~A`~%"
+            (string-upcase (%symbol-down (develop-result-status result))))
+    (when (develop-result-limit-hit result)
+      (format s "- Limit hit: `:~A`~%"
+              (string-upcase (%symbol-down (develop-result-limit-hit result)))))
+    (format s "- Replans: ~D~%" (develop-result-replan-count result))
+    (format s "- Step results: ~D~%"
+            (length (develop-result-step-results result)))
+    (let ((ledger (cl-harness/src/orchestrator:develop-result-abstraction-ledger
+                   result)))
+      (when ledger
+        (format
+         s "~A"
+         (cl-harness/src/abstraction:format-abstraction-ledger-markdown
+          ledger :header-level 2))))
+    (let ((with-explore
+           (remove-if-not
+            (lambda (sr)
+              (cl-harness/src/orchestrator:develop-step-result-explore-result sr))
+            (develop-result-step-results result))))
+      (when with-explore
+        (format s "~%## Exploration notes~%")
+        (dolist (sr with-explore)
+          (let* ((er (cl-harness/src/orchestrator:develop-step-result-explore-result sr))
+                 (memo (and er (cl-harness/src/explore:explore-result-memo er))))
+            (format s "~%### Step ~D: ~A~%~A~%"
+                    (cl-harness/src/orchestrator:develop-step-result-step-index sr)
+                    (cl-harness/src/orchestrator:develop-step-result-test-name sr)
+                    (or memo "(no memo)"))))))
+    (format s "~%## Per-step status~%")
+    (dolist (sr (develop-result-step-results result))
+      (format s "- Step ~D `~A`: :~A~%"
+              (cl-harness/src/orchestrator:develop-step-result-step-index sr)
+              (cl-harness/src/orchestrator:develop-step-result-test-name sr)
+              (string-upcase
+               (%symbol-down
+                (cl-harness/src/orchestrator:develop-step-result-status sr)))))
+    (when log-path
+      (format s "~%## Logs~%- ~A~%" log-path))))
 
 (defun develop (&key goal project-root system test-system test-file
                      (condition :generic-mcp)

@@ -32,7 +32,8 @@
                "cl-harness/tests/planner-test"
                "cl-harness/tests/orchestrator-test"
                "cl-harness/tests/compact-test"
-               "cl-harness/tests/inventory-test")
+               "cl-harness/tests/inventory-test"
+               "cl-harness/tests/abstraction-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
