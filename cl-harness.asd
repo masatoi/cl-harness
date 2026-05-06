@@ -36,7 +36,8 @@
                "cl-harness/tests/abstraction-test"
                "cl-harness/tests/integration-test"
                "cl-harness/tests/mode-selector-test"
-               "cl-harness/tests/develop-bench-test")
+               "cl-harness/tests/develop-bench-test"
+               "cl-harness/tests/state-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
