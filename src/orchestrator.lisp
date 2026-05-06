@@ -48,6 +48,16 @@
                 #:explore-result-memo)
   (:import-from #:cl-harness/src/abstraction
                 #:parse-abstraction-decisions)
+  (:import-from #:cl-harness/src/state
+                #:make-develop-state
+                #:develop-state-record-step-result
+                #:develop-state-current-plan
+                #:develop-state-replan-count
+                #:develop-state-last-failure-test-name
+                #:develop-state-status
+                #:develop-state-limit-hit
+                #:develop-state-integration-issues
+                #:develop-state-step-results)
   (:import-from #:cl-harness/src/integration
                 #:gather-package-graph
                 #:find-integration-issues
@@ -535,18 +545,23 @@ attempted."
 
 Workflow:
   1. Call PLANNER-FN(GOAL, ...) to obtain the initial plan.
-  2. EXECUTE-PLAN the result; record outcomes.
-  3. If the last step :PASSED → success.
-  4. Otherwise, if MAX-REPLANS is exhausted → :LIMIT-EXHAUSTED.
+  2. EXECUTE-PLAN the result; record outcomes on STATE.
+  3. If the last step :PASSED -> success.
+  4. Otherwise, if MAX-REPLANS is exhausted -> :LIMIT-EXHAUSTED.
   5. Otherwise, call PLANNER-FN with PRIOR-PLAN and FAILURE-CONTEXT
      populated to ask for a revised plan.
   6. If the revised plan's first step has the same TEST-NAME as the
-     failed step → :STUCK (no progress).
+     failed step -> :STUCK (no progress).
   7. Otherwise, EXECUTE-PLAN the revised plan and loop.
 
 Returns a DEVELOP-RESULT capturing the final status, the final
 plan, every step result across every round, the replan count, and
 which budget (if any) tripped.
+
+Internally the loop drives a DEVELOP-STATE (Phase A of the
+context-management refactor); the DEVELOP-RESULT is built from
+that state at the end. Callers do not see the state object --
+DEVELOP's keyword arguments and return type are unchanged.
 
 The orchestrator does not own PROVIDER or MCP-CLIENT; callers build
 them per cl-harness:fix conventions and pass them through. PLANNER-FN
@@ -561,33 +576,37 @@ once per round; readers should disambiguate by replan-index, which
 is added to the payload here.)
 
 MODE (v0.4 Phase 6) selects the development style:
-:TOP-DOWN  — implement-first; every plan-step's needs-exploration is
-             coerced to :NONE before execution.
-:BOTTOM-UP — explore-first; :NONE / NIL needs-exploration is promoted
-             to :LIGHTWEIGHT.
-:MIXED     — let the planner decide per step (default)."
+:TOP-DOWN  -- implement-first; every plan-step's needs-exploration is
+              coerced to :NONE before execution.
+:BOTTOM-UP -- explore-first; :NONE / NIL needs-exploration is promoted
+              to :LIGHTWEIGHT.
+:MIXED     -- let the planner decide per step (default)."
   (check-type goal string)
   (check-type max-replans (integer 0))
   (unless (member mode +supported-development-modes+)
     (error "develop: unsupported :mode ~S; expected one of ~S"
            mode +supported-development-modes+))
-  (let ((plan (%apply-mode-to-plan
-               (funcall planner-fn goal
-                        :project-root project-root
-                        :system system
-                        :test-system test-system
-                        :provider provider
-                        :project-inventory project-inventory
-                        :mode mode)
-               mode))
-        (results '())
-        (replans 0)
-        (last-failure-test-name nil)
-        (status :unknown)
-        (limit-hit nil))
+  (let ((state (make-develop-state :goal goal
+                                   :project-root project-root
+                                   :system system
+                                   :test-system test-system
+                                   :condition condition
+                                   :run-limits run-limits
+                                   :project-inventory project-inventory
+                                   :mode mode)))
+    (setf (develop-state-current-plan state)
+          (%apply-mode-to-plan
+           (funcall planner-fn goal
+                    :project-root project-root
+                    :system system
+                    :test-system test-system
+                    :provider provider
+                    :project-inventory project-inventory
+                    :mode mode)
+           mode))
     (loop
       (let* ((round-results (execute-plan
-                             plan
+                             (develop-state-current-plan state)
                              :project-root project-root
                              :system system
                              :test-system test-system
@@ -600,29 +619,30 @@ MODE (v0.4 Phase 6) selects the development style:
                              :run-fn run-fn
                              :explore-fn explore-fn))
              (last-result (car (last round-results))))
-        (setf results (append results round-results))
+        (dolist (r round-results)
+          (develop-state-record-step-result state r))
         (cond
           ((null last-result)
-           (setf status :empty)
+           (setf (develop-state-status state) :empty)
            (return))
           ((eq :passed (develop-step-result-status last-result))
-           (setf status :passed)
+           (setf (develop-state-status state) :passed)
            (return))
-          ((>= replans max-replans)
-           (setf status :limit-exhausted
-                 limit-hit :max-replans)
+          ((>= (develop-state-replan-count state) max-replans)
+           (setf (develop-state-status state) :limit-exhausted
+                 (develop-state-limit-hit state) :max-replans)
            (return))
           (t
-           ;; Detect stuck: same failing test_name as the prior round.
            (let ((this-failure (develop-step-result-test-name last-result)))
-             (when (and last-failure-test-name
-                        (equal last-failure-test-name this-failure))
-               (setf status :stuck
-                     limit-hit :no-progress)
+             (when (and (develop-state-last-failure-test-name state)
+                        (equal (develop-state-last-failure-test-name state)
+                               this-failure))
+               (setf (develop-state-status state) :stuck
+                     (develop-state-limit-hit state) :no-progress)
                (return))
-             (setf last-failure-test-name this-failure))
-           ;; Replan.
-           (incf replans)
+             (setf (develop-state-last-failure-test-name state)
+                   this-failure))
+           (incf (develop-state-replan-count state))
            (let ((new-plan (%apply-mode-to-plan
                             (funcall planner-fn goal
                                      :project-root project-root
@@ -631,53 +651,53 @@ MODE (v0.4 Phase 6) selects the development style:
                                      :provider provider
                                      :project-inventory project-inventory
                                      :mode mode
-                                     :prior-plan plan
-                                     :failure-context (%failure-context last-result))
+                                     :prior-plan (develop-state-current-plan state)
+                                     :failure-context
+                                     (%failure-context last-result))
                             mode)))
              (when (equal (%first-test-name new-plan)
-                          last-failure-test-name)
-               (setf status :stuck
-                     limit-hit :no-progress)
+                          (develop-state-last-failure-test-name state))
+               (setf (develop-state-status state) :stuck
+                     (develop-state-limit-hit state) :no-progress)
                (return))
-             (setf plan new-plan))))))
-    (let ((integration-issues
-           (when (and (eq status :passed) project-root)
-             (handler-case
-                 (let ((issues
-                        (find-integration-issues
+             (setf (develop-state-current-plan state) new-plan))))))
+    (when (and (eq (develop-state-status state) :passed) project-root)
+      (handler-case
+          (let ((issues (find-integration-issues
                          (gather-package-graph project-root))))
-                   (when log-path
-                     (let ((logger (open-run-logger log-path)))
-                       (unwind-protect
-                            (log-event
-                             logger :integration-check
-                             (alist-hash-table
-                              `(("issue_count" . ,(length issues))
-                                ("issues"
-                                 . ,(map 'vector
-                                         (lambda (i)
-                                           (alist-hash-table
-                                            `(("kind"
-                                               . ,(string-downcase
-                                                   (symbol-name
-                                                    (integration-issue-kind i))))
-                                              ("package"
-                                               . ,(integration-issue-package i))
-                                              ("file"
-                                               . ,(let ((f (integration-issue-file i)))
-                                                    (if f (namestring f) "")))
-                                              ("description"
-                                               . ,(integration-issue-description i)))
-                                            :test 'equal))
-                                         issues)))
-                              :test 'equal))
-                         (close-run-logger logger))))
-                   issues)
-               (error () nil)))))
-      (make-instance 'develop-result
-                     :status status
-                     :final-plan plan
-                     :step-results results
-                     :replan-count replans
-                     :limit-hit limit-hit
-                     :integration-issues integration-issues))))
+            (when log-path
+              (let ((logger (open-run-logger log-path)))
+                (unwind-protect
+                     (log-event
+                      logger :integration-check
+                      (alist-hash-table
+                       `(("issue_count" . ,(length issues))
+                         ("issues"
+                          . ,(map 'vector
+                                  (lambda (i)
+                                    (alist-hash-table
+                                     `(("kind"
+                                        . ,(string-downcase
+                                            (symbol-name
+                                             (integration-issue-kind i))))
+                                       ("package"
+                                        . ,(integration-issue-package i))
+                                       ("file"
+                                        . ,(let ((f (integration-issue-file i)))
+                                             (if f (namestring f) "")))
+                                       ("description"
+                                        . ,(integration-issue-description i)))
+                                     :test 'equal))
+                                  issues)))
+                       :test 'equal))
+                  (close-run-logger logger))))
+            (setf (develop-state-integration-issues state) issues))
+        (error () nil)))
+    (make-instance 'develop-result
+                   :status (develop-state-status state)
+                   :final-plan (develop-state-current-plan state)
+                   :step-results (develop-state-step-results state)
+                   :replan-count (develop-state-replan-count state)
+                   :limit-hit (develop-state-limit-hit state)
+                   :integration-issues
+                   (develop-state-integration-issues state))))
