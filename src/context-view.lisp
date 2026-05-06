@@ -23,7 +23,16 @@
                 #:develop-state-patch-records
                 #:develop-state-failure-ledger)
   (:import-from #:cl-harness/src/source-fact
-                #:source-fact-related-step-index)
+                #:source-fact-related-step-index
+                #:source-fact-path
+                #:source-fact-form-type
+                #:source-fact-form-name)
+  (:import-from #:cl-harness/src/planner
+                #:plan-step-issue
+                #:plan-step-investigation-targets
+                #:investigation-target-kind
+                #:investigation-target-name
+                #:investigation-target-intent)
   (:import-from #:cl-harness/src/patch-record
                 #:patch-record-related-step-index)
   (:import-from #:cl-harness/src/failure-ledger
@@ -202,3 +211,38 @@ current ad-hoc inventory + goal + replan block."
     (when (context-view-failure-context view)
       (format s "~%## Prior failure context~%~A~%"
               (context-view-failure-context view)))))
+
+(defmethod context-view->string ((view context-view)
+                                  (phase (eql :exploration)))
+  "Exploration-phase view: current step's issue, investigation
+targets (if any), and a one-line summary of relevant source-facts
+(which files have been read in this step). Defensive: when no
+:STEP was passed, emit a placeholder so the formatter never errors."
+  (with-output-to-string (s)
+    (let ((step (context-view-current-step view)))
+      (cond
+        ((null step)
+         (format s "## Current step~%(no current step)~%"))
+        (t
+         (format s "## Current step~%~A~%"
+                 (or (plan-step-issue step) ""))
+         (let ((targets (plan-step-investigation-targets step)))
+           (when targets
+             (format s "~%## Investigation targets~%")
+             (dolist (target targets)
+               (format s "- [~A] ~A — ~A~%"
+                       (string-downcase
+                        (symbol-name (investigation-target-kind target)))
+                       (investigation-target-name target)
+                       (investigation-target-intent target))))))))
+    (let ((facts (context-view-relevant-source-facts view)))
+      (when facts
+        (format s "~%## Source already read in this step~%")
+        (dolist (fact facts)
+          (format s "- ~A~A~%"
+                  (namestring (source-fact-path fact))
+                  (if (source-fact-form-name fact)
+                      (format nil " :: ~A~A"
+                              (or (source-fact-form-type fact) "")
+                              (source-fact-form-name fact))
+                      "")))))))

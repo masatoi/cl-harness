@@ -24,6 +24,9 @@
                 #:make-patch-record)
   (:import-from #:cl-harness/src/failure-ledger
                 #:make-failure-record)
+  (:import-from #:cl-harness/src/planner
+                #:plan-step
+                #:investigation-target)
   (:import-from #:cl-harness/src/context-view
                 #:context-view
                 #:make-context-view
@@ -143,3 +146,53 @@
                                :failure-context "step 0 failed")))
     (ok (search "Prior plan" out))
     (ok (search "step 0 failed" out))))
+
+(defun %step (&key (index 0)
+                (issue "Add greet function.")
+                (test-name "greet-returns-hello")
+                (test-source "(rove:deftest greet-returns-hello (rove:ok t))")
+                (investigation-targets nil))
+  (make-instance 'cl-harness/src/planner:plan-step
+                 :index index
+                 :issue issue
+                 :test-name test-name
+                 :test-source test-source
+                 :investigation-targets investigation-targets))
+
+(deftest exploration-formatter-includes-step-issue
+  (let* ((s (%state))
+         (v (make-context-view s :phase :exploration
+                                 :step (%step :issue "Add greet."))))
+    (ok (search "Add greet."
+                (context-view->string v :exploration)))))
+
+(deftest exploration-formatter-includes-investigation-targets
+  (let* ((s (%state))
+         (target (make-instance 'cl-harness/src/planner:investigation-target
+                                :kind :function :name "existing-greeter"
+                                :intent "check signature"))
+         (v (make-context-view s :phase :exploration
+                                 :step (%step :investigation-targets
+                                              (list target)))))
+    (let ((out (context-view->string v :exploration)))
+      (ok (search "existing-greeter" out))
+      (ok (search "check signature" out)))))
+
+(deftest exploration-formatter-handles-no-step-gracefully
+  ;; Defensive: caller passed :phase :exploration but no :step. The
+  ;; formatter should not crash; it emits a "no current step" notice.
+  (let* ((s (%state))
+         (v (make-context-view s :phase :exploration)))
+    (ok (stringp (context-view->string v :exploration)))))
+
+(deftest exploration-formatter-summarises-relevant-source-facts
+  (let* ((s (%state)))
+    (cl-harness/src/state:develop-state-record-source-fact
+     s (cl-harness/src/source-fact:make-source-fact
+        :path "/tmp/cv-test/src/greet.lisp"
+        :via-tool "lisp-read-file"
+        :related-step-index 0))
+    (let* ((v (make-context-view s :phase :exploration
+                                   :step (%step :index 0)))
+           (out (context-view->string v :exploration)))
+      (ok (search "greet.lisp" out)))))
