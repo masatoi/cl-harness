@@ -49,24 +49,15 @@
   (:import-from #:cl-harness/src/abstraction
                 #:parse-abstraction-decisions)
   (:import-from #:cl-harness/src/state
-                #:develop-state
                 #:make-develop-state
-                #:develop-state-goal
-                #:develop-state-project-root
-                #:develop-state-system
-                #:develop-state-test-system
-                #:develop-state-condition
-                #:develop-state-run-limits
-                #:develop-state-project-inventory
-                #:develop-state-mode
+                #:develop-state-record-step-result
                 #:develop-state-current-plan
-                #:develop-state-step-results
                 #:develop-state-replan-count
                 #:develop-state-last-failure-test-name
                 #:develop-state-status
                 #:develop-state-limit-hit
                 #:develop-state-integration-issues
-                #:develop-state-record-step-result)
+                #:develop-state-step-results)
   (:import-from #:cl-harness/src/integration
                 #:gather-package-graph
                 #:find-integration-issues
@@ -674,7 +665,6 @@ MODE (v0.4 Phase 6) selects the development style:
       (handler-case
           (let ((issues (find-integration-issues
                          (gather-package-graph project-root))))
-            (setf (develop-state-integration-issues state) issues)
             (when log-path
               (let ((logger (open-run-logger log-path)))
                 (unwind-protect
@@ -700,7 +690,8 @@ MODE (v0.4 Phase 6) selects the development style:
                                      :test 'equal))
                                   issues)))
                        :test 'equal))
-                  (close-run-logger logger)))))
+                  (close-run-logger logger))))
+            (setf (develop-state-integration-issues state) issues))
         (error () nil)))
     (make-instance 'develop-result
                    :status (develop-state-status state)
