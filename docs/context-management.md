@@ -721,11 +721,16 @@ clean runtimeで検証されたこと
 | Phase | 内容 | 状態 | 関連 plan |
 |---|---|---|---|
 | A | 中央 `develop-state` クラスの導入と `develop` の thread 化 | landed (2026-05-06) | `docs/plans/2026-05-06-phase-a-develop-state.md` |
-| B | `source-fact` / `patch-record` / `failure-ledger` / `runtime-vocabulary` slot 追加 | not started | TBD |
+| B (source/patch/failure) | `source-fact` / `patch-record` / `failure-ledger` の追加とインストルメント | landed (2026-05-07) | `docs/plans/2026-05-07-phase-b-source-patch-failure.md` |
+| B (runtime-vocabulary) | 構造化 packages / exports / classes / generic functions / conditions / ASDF systems (REPL introspection 経由) | not started | TBD |
 | C | `make-context-view` による phase/subtask ごとの圧縮 view 生成 | not started | TBD |
 | D | tool 結果圧縮、REPL transcript の finding 化 | not started | TBD |
 | E | staleness 管理、構造化 reporting | not started | TBD |
 
 Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
-§3.9 (Verification) の保持先として機能する土台で、§3.3 / §3.4 / §3.5 / §3.6 /
-§3.8 / §4 / §5 / §6 / §8 / §9 / §10 は後続 phase で実装する。
+§3.9 (Verification) の保持先として機能する土台。Phase B は §3.5 (Source) /
+§3.8 (Patch) / §3.9 + §8 (Failure ledger active/resolved) を加え、agent loop /
+orchestrator から自動記録するインストルメントを設置した。Phase B は
+**記録のみ**で、記録した状態を消費する圧縮 view 生成は Phase C 以降で扱う。
+§3.3 (Project) / §3.4 (Runtime Vocabulary) / §3.6 (Exploration) / §4 / §5 / §6 /
+§9 / §10 は後続 phase で実装する。
