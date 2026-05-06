@@ -128,10 +128,12 @@
 plan steps directly, not the runner's view of them."
   (lambda (config provider mcp-client policy logger
            &key clean-verify-p dry-run-p before-clean-verify-fn
-                isolate-asdf-p)
+                isolate-asdf-p develop-state
+           &allow-other-keys)
     (declare (ignore config provider mcp-client policy logger
                      clean-verify-p dry-run-p
-                     before-clean-verify-fn isolate-asdf-p))
+                     before-clean-verify-fn isolate-asdf-p
+                     develop-state))
     (alexandria:alist-hash-table
      `(("status" . :passed)
        ("turn" . 1)

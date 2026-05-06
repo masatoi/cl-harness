@@ -57,7 +57,20 @@
                 #:develop-state-status
                 #:develop-state-limit-hit
                 #:develop-state-integration-issues
-                #:develop-state-step-results)
+                #:develop-state-step-results
+                #:develop-state-record-failure
+                #:develop-state-failure-ledger
+                #:develop-state-patch-records)
+  (:import-from #:cl-harness/src/failure-ledger
+                #:parse-failure-records-from-test-result
+                #:failure-ledger-active
+                #:mark-resolved-by
+                #:failure-record-test-name
+                #:failure-record-source-file)
+  (:import-from #:cl-harness/src/patch-record
+                #:patch-record-path)
+  (:import-from #:cl-harness/src/verify
+                #:verify-result-test)
   (:import-from #:cl-harness/src/integration
                 #:gather-package-graph
                 #:find-integration-issues
@@ -66,7 +79,9 @@
                 #:integration-issue-file
                 #:integration-issue-description)
   (:import-from #:cl-harness/src/agent
-                #:run-agent)
+                #:run-agent
+                #:agent-state
+                #:agent-state-final-verify)
   (:export #:develop-step-result
            #:develop-step-result-status
            #:develop-step-result-step-index
@@ -262,9 +277,56 @@ initial user prompt."
               memo (plan-step-issue step))
       (plan-step-issue step)))
 
+(defun %most-recent-patch-on-file (state path)
+  "Return the most recent PATCH-RECORD on PATH from STATE's patch-records,
+or NIL when none. Walks newest-first. STATE may be NIL (returns NIL);
+PATH may be NIL or a pathname/string."
+  (when (and state path)
+    (let ((target (pathname path)))
+      (find-if (lambda (p)
+                 (let ((pp (patch-record-path p)))
+                   (and pp (equal (namestring pp)
+                                  (namestring target)))))
+               (reverse (develop-state-patch-records state))))))
+
+(defun %record-and-resolve-failures (develop-state state step)
+  "When DEVELOP-STATE and STATE (an AGENT-STATE) supply a verify-result
+with a test-result hash-table, parse the failed_tests into
+FAILURE-RECORDs and append them to DEVELOP-STATE's failure-ledger.
+Any prior-active failure whose test-name is no longer present is
+moved to :RESOLVED via MARK-RESOLVED-BY, attributed to the most
+recent patch-record on the same source file (or NIL when no patch
+matches). No-op when develop-state is NIL, when state is not an
+AGENT-STATE (test stubs may pass hash-tables), or when the verify
+slot is empty."
+  (when (and develop-state (typep state 'agent-state))
+    (let* ((vr (agent-state-final-verify state))
+           (test-result (and vr (verify-result-test vr))))
+      (when test-result
+        (let* ((ledger (develop-state-failure-ledger develop-state))
+               (prior-active (copy-list (failure-ledger-active ledger)))
+               (new-records
+                (parse-failure-records-from-test-result
+                 test-result
+                 :verify-source :incremental
+                 :related-step-index (plan-step-index step)))
+               (new-test-names (mapcar #'failure-record-test-name
+                                       new-records)))
+          (dolist (prior prior-active)
+            (unless (member (failure-record-test-name prior) new-test-names
+                            :test #'equal)
+              (mark-resolved-by
+               ledger prior
+               :patch (%most-recent-patch-on-file
+                       develop-state
+                       (failure-record-source-file prior)))))
+          (dolist (rec new-records)
+            (develop-state-record-failure develop-state rec)))))))
+
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
-                      provider mcp-client run-limits explore-fn)
+                      provider mcp-client run-limits explore-fn
+                      &key develop-state)
   "Materialize the step's test, optionally run an exploration sub-agent,
 build a RUN-CONFIG (with the explore memo prepended to the issue
 when present), call RUN-FN, return a DEVELOP-STEP-RESULT. The
@@ -337,7 +399,8 @@ and prepended to the implement issue."
                                             (cl-harness/src/config:make-default-limits))))
            (policy (make-tool-policy condition))
            (state (unwind-protect
-                       (funcall run-fn rc provider mcp-client policy step-logger)
+                       (funcall run-fn rc provider mcp-client policy step-logger
+                                :develop-state develop-state)
                     (close-run-logger step-logger)))
            (status (%read-status-from-state state))
            (result (make-instance
@@ -350,6 +413,7 @@ and prepended to the implement issue."
                     :transcript-path run-logger-path
                     :explore-result explore-result
                     :abstraction-decisions abstraction-decisions)))
+      (%record-and-resolve-failures develop-state state step)
       (when abstraction-decisions
         (%log-develop-event
          logger :abstraction-decision
@@ -379,7 +443,8 @@ and prepended to the implement issue."
                           run-limits
                           log-path
                           (run-fn #'run-agent)
-                          (explore-fn #'run-explore-agent))
+                          (explore-fn #'run-explore-agent)
+                          develop-state)
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -430,7 +495,8 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                                             project-root system test-system
                                             condition test-file logger
                                             provider mcp-client run-limits
-                                            explore-fn)))
+                                            explore-fn
+                                            :develop-state develop-state)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -617,7 +683,8 @@ MODE (v0.4 Phase 6) selects the development style:
                              :run-limits run-limits
                              :log-path log-path
                              :run-fn run-fn
-                             :explore-fn explore-fn))
+                             :explore-fn explore-fn
+                             :develop-state state))
              (last-result (car (last round-results))))
         (dolist (r round-results)
           (develop-state-record-step-result state r))

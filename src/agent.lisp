@@ -62,6 +62,13 @@
                 #:policy-mode
                 #:policy-allowed-tools
                 #:allowed-tool-p)
+  (:import-from #:cl-harness/src/state
+                #:develop-state-record-patch-record
+                #:develop-state-record-source-fact)
+  (:import-from #:cl-harness/src/patch-record
+                #:make-patch-record)
+  (:import-from #:cl-harness/src/source-fact
+                #:make-source-fact)
   (:import-from #:cl-harness/src/verify
                 #:verify-result-status
                 #:verify-result-passed
@@ -86,6 +93,7 @@
            #:agent-state-started-at
            #:agent-state-limit-hit
            #:agent-state-parse-error-streak
+           #:agent-state-develop-state
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -197,8 +205,23 @@ silently consume the whole turn budget.")
    (limit-hit :initform nil :accessor agent-state-limit-hit
               :documentation "When STATUS is :LIMIT-EXHAUSTED, names the
 LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
-:MAX-PATCHES / :MAX-READ-FILES / :MAX-REPL-EVALS / :MAX-WALL-CLOCK)."))
+:MAX-PATCHES / :MAX-READ-FILES / :MAX-REPL-EVALS / :MAX-WALL-CLOCK).")
+   (develop-state :initarg :develop-state
+                  :reader agent-state-develop-state
+                  :initform nil
+                  :documentation "When this agent loop is being driven
+from inside a DEVELOP run, the back-reference to the caller's
+DEVELOP-STATE so RUN-AGENT can record source-facts, patch-records, and
+failures into the develop-level ledgers. NIL when run-agent is invoked
+standalone (cl-harness:fix path)."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
+
+(defun %make-agent-state-for-tests (&rest initargs &key &allow-other-keys)
+  "Test-only helper: constructs an AGENT-STATE with sensible defaults
+for slots whose presence is not what the test cares about. Forwards
+INITARGS to MAKE-INSTANCE so tests can override any field. Not
+exported; intended for use only by cl-harness/tests/*-test."
+  (apply #'make-instance 'agent-state initargs))
 
 (defun check-limits (state limits)
   "Compare STATE's counters against LIMITS and return the keyword for
@@ -763,6 +786,30 @@ step since no real patch was applied."
                       messages "user"
                       (format nil "Tool ~A result:~%~A"
                               tool (summarize-tool-result tool result)))))
+           ;; Record a SOURCE-FACT on the develop-level ledger for any
+           ;; successful read-style tool call. Step-index threading is
+           ;; deferred (no agent-state-step-index slot today); pass NIL
+           ;; until a follow-up wires plan-step context through here.
+           (when (and (agent-state-develop-state state)
+                      (not (and (gethash "isError" result) t))
+                      (member tool '("lisp-read-file" "fs-read-file"
+                                     "clgrep-search")
+                              :test #'string=))
+             (let* ((arguments (or (agent-action-arguments action)
+                                   (make-hash-table :test 'equal)))
+                    (target-path (and (hash-table-p arguments)
+                                      (gethash "path" arguments))))
+               (when (and (stringp target-path) (plusp (length target-path)))
+                 (develop-state-record-source-fact
+                  (agent-state-develop-state state)
+                  (make-source-fact
+                   :path target-path
+                   :via-tool tool
+                   :form-type (and (hash-table-p arguments)
+                                   (gethash "form_type" arguments))
+                   :form-name (and (hash-table-p arguments)
+                                   (gethash "form_name" arguments))
+                   :related-step-index nil)))))
            (cond
              ((member tool +source-mutating-tools+ :test #'equal)
               (incf (agent-state-patch-attempts state))
@@ -783,7 +830,26 @@ step since no real patch was applied."
                       `(("turn" . ,turn)
                         ("tool" . ,tool)
                         ("file" . ,(namestring target))
-                        ("diff" . ,(or diff ""))))))
+                        ("diff" . ,(or diff ""))))
+                     (when (agent-state-develop-state state)
+                       (let ((arguments (or (agent-action-arguments action)
+                                            (make-hash-table :test 'equal))))
+                         (develop-state-record-patch-record
+                          (agent-state-develop-state state)
+                          (make-patch-record
+                           :path target
+                           :via-tool tool
+                           :form-type (and (hash-table-p arguments)
+                                           (gethash "form_type" arguments))
+                           :form-name (and (hash-table-p arguments)
+                                           (gethash "form_name" arguments))
+                           :operation (and (hash-table-p arguments)
+                                           (gethash "operation" arguments))
+                           :diff-summary
+                           (when (and diff (plusp (length diff)))
+                             (subseq diff 0 (min 500 (length diff))))
+                           :related-step-index nil
+                           :turn turn))))))
                  (let ((v (verify-task mcp-client config)))
                    (log-event logger :verify (verify-event-payload turn v))
                    (if (verify-result-success-p v)
@@ -844,7 +910,8 @@ the loop should continue, otherwise a terminal status keyword
                   &key (clean-verify-p t)
                        dry-run-p
                        before-clean-verify-fn
-                       (isolate-asdf-p t))
+                       (isolate-asdf-p t)
+                       develop-state)
   "Execute the basic Phase 2 fix loop with a Phase 3 clean-verify safety net.
 
 CONFIG is a RUN-CONFIG. PROVIDER is an OPENAI-COMPATIBLE-PROVIDER (or any
@@ -878,13 +945,18 @@ with any user-supplied BEFORE-CLEAN-VERIFY-FN). Required for
 same-named system from a different directory; benchmark callers get the
 same guarantee for free.
 
+DEVELOP-STATE, when non-NIL, is the caller DEVELOP-STATE this agent
+loop is being driven from. Stashed on the constructed AGENT-STATE so
+that the patch instrumentation can record patch-records onto the
+develop-level ledger. NIL for standalone cl-harness:fix runs.
+
 Limits enforcement (PRD §8.4 REQ-AGENT-003): all seven RUN-LIMITS
 slots are now checked at every turn boundary (max-turns / max-tool-calls
 / max-patches / max-read-files / max-repl-evals /
 max-wall-clock-seconds / max-action-parse-errors). On exceeding any of
 them STATE's STATUS becomes :LIMIT-EXHAUSTED and LIMIT-HIT names the
 offending slot."
-  (let ((state (make-instance 'agent-state))
+  (let ((state (make-instance 'agent-state :develop-state develop-state))
         (effective-before-clean-verify-fn before-clean-verify-fn))
     (setf (agent-state-started-at state) (now))
     (when isolate-asdf-p
