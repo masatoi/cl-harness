@@ -25,6 +25,7 @@
            #:develop-state-project-inventory
            #:develop-state-mode
            #:develop-state-current-plan
+           #:develop-state-current-step-index
            #:develop-state-step-results
            #:develop-state-replan-count
            #:develop-state-last-failure-test-name
@@ -86,6 +87,14 @@ runtime-vocabulary slot.")
    (current-plan :initform nil :accessor develop-state-current-plan
                  :documentation "PLAN-STEP list currently being
 executed. Replaced wholesale on each replan round.")
+   (current-step-index :initform nil
+                       :accessor develop-state-current-step-index
+                       :documentation "PLAN-STEP-INDEX of the step
+the orchestrator is currently executing, or NIL when not inside a
+step (e.g. before the loop starts, between steps, or after the
+final step). Set by %execute-step at entry, cleared at exit. Used
+by MAKE-CONTEXT-VIEW to filter ledger entries to those belonging
+to the active step.")
    (step-results :initform nil :accessor %step-results
                  :documentation "Reverse-chronological list of
 DEVELOP-STEP-RESULT instances. Internal; callers use

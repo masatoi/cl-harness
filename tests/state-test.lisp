@@ -23,6 +23,7 @@
                 #:develop-state-project-inventory
                 #:develop-state-mode
                 #:develop-state-current-plan
+                #:develop-state-current-step-index
                 #:develop-state-step-results
                 #:develop-state-replan-count
                 #:develop-state-last-failure-test-name
@@ -156,3 +157,14 @@
          (l (develop-state-failure-ledger s)))
     (develop-state-record-failure s :a-failure-record)
     (ok (equal '(:a-failure-record) (failure-ledger-active l)))))
+
+(deftest develop-state-current-step-index-defaults-to-nil
+  (let ((s (%make)))
+    (ok (null (develop-state-current-step-index s)))))
+
+(deftest develop-state-current-step-index-is-writable
+  (let ((s (%make)))
+    (setf (develop-state-current-step-index s) 3)
+    (ok (= 3 (develop-state-current-step-index s)))
+    (setf (develop-state-current-step-index s) nil)
+    (ok (null (develop-state-current-step-index s)))))

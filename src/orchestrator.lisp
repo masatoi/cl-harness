@@ -52,6 +52,7 @@
                 #:make-develop-state
                 #:develop-state-record-step-result
                 #:develop-state-current-plan
+                #:develop-state-current-step-index
                 #:develop-state-replan-count
                 #:develop-state-last-failure-test-name
                 #:develop-state-status
@@ -337,103 +338,116 @@ When PLAN-STEP's needs-exploration is :LIGHTWEIGHT or :DEEP and
 EXPLORE-FN is non-nil, an explore loop runs FIRST against the same
 provider/mcp-client with policy :EXPLORE (read-only). The memo
 returned from that loop is captured in the develop-step-result
-and prepended to the implement issue."
+and prepended to the implement issue.
+
+When DEVELOP-STATE is non-nil, the step's PLAN-STEP-INDEX is written
+to its CURRENT-STEP-INDEX slot on entry and cleared (set to NIL) on
+exit via UNWIND-PROTECT. Used by MAKE-CONTEXT-VIEW (Phase C) to
+filter ledger entries to those bound to the active step. Inert when
+DEVELOP-STATE is NIL (e.g. test stubs that exercise %execute-step
+without a develop-state)."
   (validate-test-source (plan-step-test-source step) (plan-step-index step))
   (materialize-test-source test-file (plan-step-test-source step))
-  (let* ((needs (plan-step-needs-exploration step))
-         (do-explore (and explore-fn
-                          needs
-                          (not (eq :none needs))))
-         (explore-policy (when do-explore (make-tool-policy :explore)))
-         (run-logger-path
-          (merge-pathnames
-           (format nil "develop-step-~D-~A-~A.jsonl"
-                   (plan-step-index step)
-                   (plan-step-test-name step)
-                   (get-internal-real-time))
-           (uiop:temporary-directory)))
-         (explore-orient-config
-          (when do-explore
-            (make-run-config :project-root project-root
-                             :system system
-                             :test-system test-system
-                             :issue (plan-step-issue step)
-                             :condition :explore))))
-    (%log-develop-event
-     logger :step-start
-     (alist-hash-table
-      `(("step_index" . ,(plan-step-index step))
-        ("test_name" . ,(plan-step-test-name step))
-        ("issue" . ,(plan-step-issue step))
-        ("needs_exploration" . ,(string-downcase
-                                 (symbol-name (or needs :none))))
-        ("transcript_path" . ,(namestring run-logger-path)))
-      :test 'equal))
-    (let* ((step-logger (open-run-logger run-logger-path))
-           (explore-result
-            (when do-explore
-              (handler-case
-                  (funcall explore-fn
-                           explore-orient-config provider mcp-client
-                           explore-policy step-logger
-                           :plan-step step)
-                (error (c)
-                  (%log-develop-event
-                   logger :explore-aborted
-                   (alist-hash-table
-                    `(("step_index" . ,(plan-step-index step))
-                      ("message" . ,(princ-to-string c)))
-                    :test 'equal))
-                  nil))))
-           (memo (when explore-result (explore-result-memo explore-result)))
-           (abstraction-decisions
-            (when memo
-              (parse-abstraction-decisions memo
-                                           :step-index (plan-step-index step))))
-           (rc (make-run-config :project-root project-root
-                                :system system
-                                :test-system test-system
-                                :issue (%enriched-issue step memo)
-                                :condition condition
-                                :limits (or run-limits
-                                            (cl-harness/src/config:make-default-limits))))
-           (policy (make-tool-policy condition))
-           (state (unwind-protect
-                       (funcall run-fn rc provider mcp-client policy step-logger
-                                :develop-state develop-state)
-                    (close-run-logger step-logger)))
-           (status (%read-status-from-state state))
-           (result (make-instance
-                    'develop-step-result
-                    :step-index (plan-step-index step)
-                    :test-name (plan-step-test-name step)
-                    :run-config rc
-                    :status status
-                    :run-agent-state state
-                    :transcript-path run-logger-path
-                    :explore-result explore-result
-                    :abstraction-decisions abstraction-decisions)))
-      (%record-and-resolve-failures develop-state state step)
-      (when abstraction-decisions
-        (%log-develop-event
-         logger :abstraction-decision
-         (alist-hash-table
-          `(("step_index" . ,(plan-step-index step))
-            ("decisions"
-             . ,(map 'vector
-                     (lambda (d)
-                       (alist-hash-table
-                        `(("kind" . ,(string-downcase
-                                      (symbol-name
-                                       (cl-harness/src/abstraction:abstraction-decision-kind d))))
-                          ("name" . ,(cl-harness/src/abstraction:abstraction-decision-name d))
-                          ("rationale" . ,(cl-harness/src/abstraction:abstraction-decision-rationale d)))
-                        :test 'equal))
-                     abstraction-decisions)))
-          :test 'equal)))
-      (%log-develop-event logger :step-end
-                          (%step-event-payload step result))
-      result)))
+  (when develop-state
+    (setf (develop-state-current-step-index develop-state)
+          (plan-step-index step)))
+  (unwind-protect
+       (let* ((needs (plan-step-needs-exploration step))
+              (do-explore (and explore-fn
+                               needs
+                               (not (eq :none needs))))
+              (explore-policy (when do-explore (make-tool-policy :explore)))
+              (run-logger-path
+               (merge-pathnames
+                (format nil "develop-step-~D-~A-~A.jsonl"
+                        (plan-step-index step)
+                        (plan-step-test-name step)
+                        (get-internal-real-time))
+                (uiop:temporary-directory)))
+              (explore-orient-config
+               (when do-explore
+                 (make-run-config :project-root project-root
+                                  :system system
+                                  :test-system test-system
+                                  :issue (plan-step-issue step)
+                                  :condition :explore))))
+         (%log-develop-event
+          logger :step-start
+          (alist-hash-table
+           `(("step_index" . ,(plan-step-index step))
+             ("test_name" . ,(plan-step-test-name step))
+             ("issue" . ,(plan-step-issue step))
+             ("needs_exploration" . ,(string-downcase
+                                      (symbol-name (or needs :none))))
+             ("transcript_path" . ,(namestring run-logger-path)))
+           :test 'equal))
+         (let* ((step-logger (open-run-logger run-logger-path))
+                (explore-result
+                 (when do-explore
+                   (handler-case
+                       (funcall explore-fn
+                                explore-orient-config provider mcp-client
+                                explore-policy step-logger
+                                :plan-step step)
+                     (error (c)
+                       (%log-develop-event
+                        logger :explore-aborted
+                        (alist-hash-table
+                         `(("step_index" . ,(plan-step-index step))
+                           ("message" . ,(princ-to-string c)))
+                         :test 'equal))
+                       nil))))
+                (memo (when explore-result (explore-result-memo explore-result)))
+                (abstraction-decisions
+                 (when memo
+                   (parse-abstraction-decisions memo
+                                                :step-index (plan-step-index step))))
+                (rc (make-run-config :project-root project-root
+                                     :system system
+                                     :test-system test-system
+                                     :issue (%enriched-issue step memo)
+                                     :condition condition
+                                     :limits (or run-limits
+                                                 (cl-harness/src/config:make-default-limits))))
+                (policy (make-tool-policy condition))
+                (state (unwind-protect
+                            (funcall run-fn rc provider mcp-client policy step-logger
+                                     :develop-state develop-state)
+                         (close-run-logger step-logger)))
+                (status (%read-status-from-state state))
+                (result (make-instance
+                         'develop-step-result
+                         :step-index (plan-step-index step)
+                         :test-name (plan-step-test-name step)
+                         :run-config rc
+                         :status status
+                         :run-agent-state state
+                         :transcript-path run-logger-path
+                         :explore-result explore-result
+                         :abstraction-decisions abstraction-decisions)))
+           (%record-and-resolve-failures develop-state state step)
+           (when abstraction-decisions
+             (%log-develop-event
+              logger :abstraction-decision
+              (alist-hash-table
+               `(("step_index" . ,(plan-step-index step))
+                 ("decisions"
+                  . ,(map 'vector
+                          (lambda (d)
+                            (alist-hash-table
+                             `(("kind" . ,(string-downcase
+                                           (symbol-name
+                                            (cl-harness/src/abstraction:abstraction-decision-kind d))))
+                               ("name" . ,(cl-harness/src/abstraction:abstraction-decision-name d))
+                               ("rationale" . ,(cl-harness/src/abstraction:abstraction-decision-rationale d)))
+                             :test 'equal))
+                          abstraction-decisions)))
+               :test 'equal)))
+           (%log-develop-event logger :step-end
+                               (%step-event-payload step result))
+           result))
+    (when develop-state
+      (setf (develop-state-current-step-index develop-state) nil))))
 
 (defun execute-plan (plan
                      &key project-root system test-system test-file
