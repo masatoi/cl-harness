@@ -28,11 +28,15 @@
                 #:summarize-tool-result)
   (:import-from #:cl-harness/src/state
                 #:make-develop-state
-                #:develop-state-patch-records)
+                #:develop-state-patch-records
+                #:develop-state-source-facts)
   (:import-from #:cl-harness/src/patch-record
                 #:patch-record-path
                 #:patch-record-via-tool
-                #:patch-record-verify-status))
+                #:patch-record-verify-status)
+  (:import-from #:cl-harness/src/source-fact
+                #:source-fact-path
+                #:source-fact-via-tool))
 
 (in-package #:cl-harness/tests/agent-test)
 
@@ -950,3 +954,47 @@ order. Helper for tests that assert against the on-disk transcript."
         (ok (search "x.lisp" (namestring (patch-record-path p))))
         (ok (string= "lisp-edit-form" (patch-record-via-tool p)))
         (ok (eq :pending (patch-record-verify-status p)))))))
+
+(deftest run-agent-records-source-fact-into-develop-state
+  ;; Drive run-agent with a develop-state back-ref + a stub LLM that
+  ;; emits one lisp-read-file action followed by finish. Verify exactly
+  ;; one source-fact lands in the ledger with the expected file path
+  ;; and via-tool.
+  (let* ((ds (make-develop-state
+              :goal "g"
+              :project-root "/tmp/cl-harness-b7-test/"
+              :system "demo"
+              :test-system "demo/tests"))
+         (*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"src/foo.lisp\",\"name_pattern\":\"^bar$\"},\"thought\":\"read foo\"}"
+                "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"done\"}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body)
+                 (%ok-tool-result id))
+                ((search "\"load-system\"" body)
+                 (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-read-file\"" body)
+                 (%ok-tool-result id))
+                ((search "\"pool-kill-worker\"" body)
+                 (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (path (%temp-log-path)))
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (run-agent (%make-config) provider mcp policy logger
+                      :develop-state ds)
+           (close-run-logger logger))
+      (when (probe-file path) (delete-file path)))
+    (let ((facts (develop-state-source-facts ds)))
+      (ok (= 1 (length facts)))
+      (let ((f (first facts)))
+        (ok (search "foo" (namestring (source-fact-path f))))
+        (ok (string= "lisp-read-file" (source-fact-via-tool f)))))))

@@ -264,7 +264,8 @@ initial user prompt."
 
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
-                      provider mcp-client run-limits explore-fn)
+                      provider mcp-client run-limits explore-fn
+                      &key develop-state)
   "Materialize the step's test, optionally run an exploration sub-agent,
 build a RUN-CONFIG (with the explore memo prepended to the issue
 when present), call RUN-FN, return a DEVELOP-STEP-RESULT. The
@@ -337,7 +338,8 @@ and prepended to the implement issue."
                                             (cl-harness/src/config:make-default-limits))))
            (policy (make-tool-policy condition))
            (state (unwind-protect
-                       (funcall run-fn rc provider mcp-client policy step-logger)
+                       (funcall run-fn rc provider mcp-client policy step-logger
+                                :develop-state develop-state)
                     (close-run-logger step-logger)))
            (status (%read-status-from-state state))
            (result (make-instance
@@ -379,7 +381,8 @@ and prepended to the implement issue."
                           run-limits
                           log-path
                           (run-fn #'run-agent)
-                          (explore-fn #'run-explore-agent))
+                          (explore-fn #'run-explore-agent)
+                          develop-state)
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -430,7 +433,8 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                                             project-root system test-system
                                             condition test-file logger
                                             provider mcp-client run-limits
-                                            explore-fn)))
+                                            explore-fn
+                                            :develop-state develop-state)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -617,7 +621,8 @@ MODE (v0.4 Phase 6) selects the development style:
                              :run-limits run-limits
                              :log-path log-path
                              :run-fn run-fn
-                             :explore-fn explore-fn))
+                             :explore-fn explore-fn
+                             :develop-state state))
              (last-result (car (last round-results))))
         (dolist (r round-results)
           (develop-state-record-step-result state r))

@@ -63,9 +63,12 @@
                 #:policy-allowed-tools
                 #:allowed-tool-p)
   (:import-from #:cl-harness/src/state
-                #:develop-state-record-patch-record)
+                #:develop-state-record-patch-record
+                #:develop-state-record-source-fact)
   (:import-from #:cl-harness/src/patch-record
                 #:make-patch-record)
+  (:import-from #:cl-harness/src/source-fact
+                #:make-source-fact)
   (:import-from #:cl-harness/src/verify
                 #:verify-result-status
                 #:verify-result-passed
@@ -783,6 +786,30 @@ step since no real patch was applied."
                       messages "user"
                       (format nil "Tool ~A result:~%~A"
                               tool (summarize-tool-result tool result)))))
+           ;; Record a SOURCE-FACT on the develop-level ledger for any
+           ;; successful read-style tool call. Step-index threading is
+           ;; deferred (no agent-state-step-index slot today); pass NIL
+           ;; until a follow-up wires plan-step context through here.
+           (when (and (agent-state-develop-state state)
+                      (not (and (gethash "isError" result) t))
+                      (member tool '("lisp-read-file" "fs-read-file"
+                                     "clgrep-search")
+                              :test #'string=))
+             (let* ((arguments (or (agent-action-arguments action)
+                                   (make-hash-table :test 'equal)))
+                    (target-path (and (hash-table-p arguments)
+                                      (gethash "path" arguments))))
+               (when (and (stringp target-path) (plusp (length target-path)))
+                 (develop-state-record-source-fact
+                  (agent-state-develop-state state)
+                  (make-source-fact
+                   :path target-path
+                   :via-tool tool
+                   :form-type (and (hash-table-p arguments)
+                                   (gethash "form_type" arguments))
+                   :form-name (and (hash-table-p arguments)
+                                   (gethash "form_name" arguments))
+                   :related-step-index nil)))))
            (cond
              ((member tool +source-mutating-tools+ :test #'equal)
               (incf (agent-state-patch-attempts state))

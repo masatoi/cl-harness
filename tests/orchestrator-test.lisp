@@ -144,10 +144,12 @@ hash carries that status so the orchestrator can read it via
 gethash and stop on non-:passed."
   (lambda (config provider mcp-client policy logger
            &key clean-verify-p dry-run-p before-clean-verify-fn
-                isolate-asdf-p)
+                isolate-asdf-p develop-state
+           &allow-other-keys)
     (declare (ignore provider mcp-client policy logger
                      clean-verify-p dry-run-p
-                     before-clean-verify-fn isolate-asdf-p))
+                     before-clean-verify-fn isolate-asdf-p
+                     develop-state))
     (push (run-config-issue config) (car calls))
     (let ((status (or (pop (car outcomes)) :passed)))
       (alist-hash-table
