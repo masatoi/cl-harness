@@ -740,3 +740,11 @@ testing phase は implementation と同じ run-agent loop で扱われるため
 `:implementation` formatter に折り込んだ。
 §3.3 (Project) / §3.4 (Runtime Vocabulary) / §3.6 (Exploration) / §6 (圧縮) /
 §9 (Staleness) / §10 (Reporting) は後続 phase で実装する。
+
+**注**: Phase C は orchestrator → planner-fn の `:develop-state` 配線を
+意図的に保留している。`plan-development` は kwarg を受け付けるものの、
+`develop` のループは現状 kwarg を渡していないため、`:planning` formatter
+は test 経由でのみ exercise される。develop-state を planner-fn に流すと
+プロンプトの section 順序が変わる（mode-nudge が prior-plan / failure-
+context の後ろに移動する）ため、後続 phase で実モデルに対して検証した上で
+有効化する。

@@ -677,6 +677,14 @@ MODE (v0.4 Phase 6) selects the development style:
                                    :mode mode)))
     (setf (develop-state-current-plan state)
           (%apply-mode-to-plan
+           ;; Phase C: planner-fn is intentionally NOT given :develop-state here.
+           ;; Phase C wired the :planning formatter into PLAN-DEVELOPMENT, but the
+           ;; planner branch's section ordering differs from legacy (mode-nudge
+           ;; moves after prior-plan / failure-context). Threading :develop-state
+           ;; through here would silently switch production prompts to the new
+           ;; ordering, which has not been validated against a real model. A future
+           ;; phase should either (a) align the two orderings, or (b) explicitly
+           ;; opt into the new shape after validation.
            (funcall planner-fn goal
                     :project-root project-root
                     :system system
@@ -726,6 +734,14 @@ MODE (v0.4 Phase 6) selects the development style:
                    this-failure))
            (incf (develop-state-replan-count state))
            (let ((new-plan (%apply-mode-to-plan
+                            ;; Phase C: planner-fn is intentionally NOT given :develop-state here.
+                            ;; Phase C wired the :planning formatter into PLAN-DEVELOPMENT, but the
+                            ;; planner branch's section ordering differs from legacy (mode-nudge
+                            ;; moves after prior-plan / failure-context). Threading :develop-state
+                            ;; through here would silently switch production prompts to the new
+                            ;; ordering, which has not been validated against a real model. A future
+                            ;; phase should either (a) align the two orderings, or (b) explicitly
+                            ;; opt into the new shape after validation.
                             (funcall planner-fn goal
                                      :project-root project-root
                                      :system system
