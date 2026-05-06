@@ -191,7 +191,12 @@ first)."
 (defun mark-resolved-by (ledger record &key patch)
   "Move RECORD from active to resolved on LEDGER. Sets
 record's status, resolved-at, resolved-by-patch (PATCH may be NIL).
-Idempotent for records already absent from active. Returns LEDGER."
+Idempotent: a second call on a record whose status is already
+:RESOLVED is a no-op (returns LEDGER unchanged; original
+resolution timestamp and patch attribution are preserved). Returns
+LEDGER."
+  (when (eq (slot-value record 'status) :resolved)
+    (return-from mark-resolved-by ledger))
   (setf (%active-internal ledger)
         (remove record (%active-internal ledger) :test #'eq))
   (setf (slot-value record 'status) :resolved

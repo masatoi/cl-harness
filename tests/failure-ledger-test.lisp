@@ -118,6 +118,21 @@
       (ok (eq :resolved (failure-record-status entry)))
       (ok (null (failure-record-resolved-by-patch entry))))))
 
+(deftest mark-resolved-by-is-idempotent-on-resolved-record
+  ;; Second call on an already-resolved record must not duplicate
+  ;; the resolved-list entry, must not overwrite resolved-at, and
+  ;; must not overwrite resolved-by-patch.
+  (let* ((l (make-failure-ledger))
+         (f (%fr :test-name "double-resolve")))
+    (record-failure l f)
+    (mark-resolved-by l f :patch :first-patch)
+    (let ((first-resolved-at (failure-record-resolved-at f)))
+      ;; Second call with a different patch should be a no-op.
+      (mark-resolved-by l f :patch :second-patch)
+      (ok (= 1 (length (failure-ledger-resolved l))))
+      (ok (eq :first-patch (failure-record-resolved-by-patch f)))
+      (ok (= first-resolved-at (failure-record-resolved-at f))))))
+
 (deftest parse-failure-records-from-test-result-handles-empty
   ;; A clean run-tests returns an empty failed_tests array (or no key).
   (let ((tr (alist-hash-table
@@ -175,3 +190,21 @@
       (let ((r (first records)))
         (ok (string= "x" (failure-record-test-name r)))
         (ok (null (failure-record-reason r)))))))
+
+(deftest parse-failure-records-uses-unknown-failure-sentinel-when-both-keys-missing
+  ;; A degenerate entry missing both description AND test_name should
+  ;; produce a record with the sentinel description "unknown failure"
+  ;; rather than crashing or producing NIL. Locks in the parser's
+  ;; defensive fallback contract for cl-mcp shape drift.
+  (let* ((entry-h (alist-hash-table
+                   '(("form" . "(ok t)"))
+                   :test 'equal))
+         (tr (alist-hash-table
+              `(("failed_tests" . #(,entry-h)))
+              :test 'equal)))
+    (let ((records (parse-failure-records-from-test-result
+                    tr :verify-source :incremental)))
+      (ok (= 1 (length records)))
+      (let ((r (first records)))
+        (ok (string= "unknown failure" (failure-record-description r)))
+        (ok (null (failure-record-test-name r)))))))
