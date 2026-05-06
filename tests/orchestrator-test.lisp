@@ -313,9 +313,11 @@ list of PLAN-STEP. Calls past the end of the list reuse the last
 plan (so a stuck loop test can keep getting the same response)."
   (let ((remaining plans))
     (lambda (goal &key project-root system test-system provider
-                       prior-plan failure-context system-prompt)
+                       prior-plan failure-context system-prompt
+                       project-inventory)
       (declare (ignore goal project-root system test-system provider
-                       prior-plan failure-context system-prompt))
+                       prior-plan failure-context system-prompt
+                       project-inventory))
       (cond
         ((null remaining)
          (error "canned-planner exhausted"))

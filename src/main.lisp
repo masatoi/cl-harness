@@ -118,6 +118,8 @@
   (:import-from #:cl-harness/src/compact
                 #:approximate-history-tokens
                 #:compact-history)
+  (:import-from #:cl-harness/src/inventory
+                #:gather-project-inventory)
   (:import-from #:cl-harness/src/bench
                 #:bench-task
                 #:bench-task-id
@@ -230,6 +232,7 @@
            #:execute-plan
            #:approximate-history-tokens
            #:compact-history
+           #:gather-project-inventory
            #:bench-task
            #:bench-task-id
            #:bench-result

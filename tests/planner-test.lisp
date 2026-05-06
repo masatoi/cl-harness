@@ -243,3 +243,59 @@
                     :transport (%canned-transport body)))
          (plan (plan-development "demo" :provider provider)))
     (ok (null (plan-step-investigation-targets (first plan))))))
+
+;; --- v0.4 Phase 2: project inventory injection -----------------------------
+
+(deftest plan-development-prepends-project-inventory-to-user-prompt
+  ;; When :project-inventory is supplied, the planner's user message
+  ;; must contain the inventory verbatim. We capture the request body
+  ;; via a custom transport that records what got sent.
+  (let* ((captured (cons nil nil))
+         (transport
+          (lambda (url headers body)
+            (declare (ignore url headers))
+            (setf (car captured) body)
+            (values (%llm-body +canonical-plan+) 200
+                    (make-hash-table :test 'equal))))
+         (provider (%make-stub-provider :transport transport))
+         (inv "Project Inventory~%=================~%System: demo~%(asdf-stuff)"))
+    (plan-development "do the thing"
+                      :project-root "/tmp/x"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :provider provider
+                      :project-inventory inv)
+    (let* ((req (yason:parse (car captured)))
+           (messages (gethash "messages" req))
+           (user-msg (find-if (lambda (m)
+                                (equal "user" (gethash "role" m)))
+                              (coerce messages 'list))))
+      (ok user-msg "user message present")
+      (when user-msg
+        (let ((content (gethash "content" user-msg)))
+          (ok (search "Project Inventory" content)
+              "inventory header present in user prompt")
+          (ok (search "(asdf-stuff)" content)
+              "inventory body verbatim in user prompt")
+          (ok (search "Goal: do the thing" content)
+              "goal still appears below inventory"))))))
+
+(deftest plan-development-no-inventory-keeps-original-prompt-shape
+  ;; When :project-inventory is omitted (or nil), the user prompt must
+  ;; not gain a stray Project Inventory section.
+  (let* ((captured (cons nil nil))
+         (transport
+          (lambda (url headers body)
+            (declare (ignore url headers))
+            (setf (car captured) body)
+            (values (%llm-body +canonical-plan+) 200
+                    (make-hash-table :test 'equal))))
+         (provider (%make-stub-provider :transport transport)))
+    (plan-development "do the thing" :provider provider)
+    (let* ((req (yason:parse (car captured)))
+           (messages (gethash "messages" req))
+           (user-msg (find-if (lambda (m)
+                                (equal "user" (gethash "role" m)))
+                              (coerce messages 'list)))
+           (content (gethash "content" user-msg)))
+      (ok (not (search "Project Inventory" content))))))

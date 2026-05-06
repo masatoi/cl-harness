@@ -238,14 +238,22 @@ summary suitable for inclusion in a replan prompt."
                      (plan-step-test-name step)))))
 
 (defun %build-user-prompt (goal &key project-root system test-system
-                                     prior-plan failure-context)
+                                     prior-plan failure-context
+                                     project-inventory)
   "Assemble the user-side message for the planner LLM call.
+
+PROJECT-INVENTORY (v0.4 Phase 2), when supplied, is prepended as a
+read-only snapshot of the existing project's vocabulary so the
+planner builds on what's already there instead of inventing parallel
+structures.
 
 PRIOR-PLAN, when supplied, is rendered as a `Previous plan:` block
 above the goal. FAILURE-CONTEXT, when supplied, is rendered as a
 `Failure:` paragraph. Together they're how P3's replan path tells the
 planner what was tried and why it didn't work."
   (with-output-to-string (s)
+    (when (and project-inventory (plusp (length project-inventory)))
+      (format s "~A~%~%" project-inventory))
     (format s "Goal: ~A~%~%" goal)
     (when project-root
       (format s "Project root: ~A~%" project-root))
@@ -484,6 +492,7 @@ schema."
                                    provider
                                    prior-plan
                                    failure-context
+                                   project-inventory
                                    (system-prompt
                                     +default-planner-system-prompt+))
   "Decompose a high-level GOAL into an ordered list of PLAN-STEP
@@ -494,6 +503,12 @@ PROJECT-ROOT, SYSTEM, and TEST-SYSTEM, when supplied, are appended to
 the user-side prompt as orientation. They do not narrow the plan
 mechanically — the planner is allowed to ignore them — but they
 constrain what the LLM treats as the ambient project shape.
+
+PROJECT-INVENTORY (v0.4 Phase 2), when supplied, is prepended to the
+user-side prompt as the existing vocabulary the planner is expected
+to build on. Typically produced by
+`cl-harness/src/inventory:gather-project-inventory'. NIL means
+\"plan from convention only\" (v0.3 behavior).
 
 PRIOR-PLAN and FAILURE-CONTEXT, when supplied together, drive the
 P3 replan path: the planner sees what was tried and why it failed,
@@ -514,7 +529,8 @@ PLANNER-ERROR when the response cannot be parsed."
                                               :system system
                                               :test-system test-system
                                               :prior-plan prior-plan
-                                              :failure-context failure-context))))
+                                              :failure-context failure-context
+                                              :project-inventory project-inventory))))
          (response (complete-chat provider messages))
          (content (chat-response-content response)))
     (unless (and (stringp content) (plusp (length content)))

@@ -30,6 +30,8 @@
                 #:develop-result-replan-count
                 #:develop-result-step-results
                 #:develop-result-limit-hit)
+  (:import-from #:cl-harness/src/inventory
+                #:gather-project-inventory)
   (:export #:fix
            #:bench
            #:develop
@@ -223,6 +225,14 @@ mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
                      max-patches max-turns max-tool-calls
                      max-wall-clock-seconds
                      run-limits
+                     ;; v0.4 Phase 2: project inventory snapshot.
+                     ;; When INVENTORY is supplied verbatim it's
+                     ;; passed through as-is. When :GATHER-INVENTORY-P
+                     ;; is true (default), the harness builds one
+                     ;; itself from PROJECT-ROOT.
+                     project-inventory
+                     (gather-inventory-p t)
+                     (inventory-byte-budget 5000)
                      log-path)
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
@@ -298,19 +308,30 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                         (cl-harness/src/config:run-limits-max-wall-clock-seconds d))
                     :max-action-parse-errors
                     (cl-harness/src/config:run-limits-max-action-parse-errors d)))))))
-      (unwind-protect
-           (let ((result (cl-harness/src/orchestrator:develop
-                          goal
-                          :project-root project-root
-                          :system system
-                          :test-system test-system
-                          :test-file test-file
-                          :provider provider
-                          :mcp-client client
-                          :condition condition
-                          :run-limits effective-limits
-                          :max-replans max-replans
-                          :log-path path)))
-             (format t "~A" (format-develop-report result :log-path path))
-             result)
-        (close-mcp-client client)))))
+      (let ((effective-inventory
+             (or project-inventory
+                 (when gather-inventory-p
+                   (handler-case
+                       (gather-project-inventory
+                        :project-root project-root
+                        :system system
+                        :test-system test-system
+                        :byte-budget inventory-byte-budget)
+                     (error () nil))))))
+        (unwind-protect
+             (let ((result (cl-harness/src/orchestrator:develop
+                            goal
+                            :project-root project-root
+                            :system system
+                            :test-system test-system
+                            :test-file test-file
+                            :provider provider
+                            :mcp-client client
+                            :condition condition
+                            :run-limits effective-limits
+                            :project-inventory effective-inventory
+                            :max-replans max-replans
+                            :log-path path)))
+               (format t "~A" (format-develop-report result :log-path path))
+               result)
+          (close-mcp-client client))))))

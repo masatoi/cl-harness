@@ -385,6 +385,7 @@ attempted."
                      provider mcp-client
                      (condition :generic-mcp)
                      run-limits
+                     project-inventory
                      log-path
                      (max-replans 3)
                      (planner-fn #'plan-development)
@@ -423,7 +424,8 @@ is added to the payload here.)"
                        :project-root project-root
                        :system system
                        :test-system test-system
-                       :provider provider))
+                       :provider provider
+                       :project-inventory project-inventory))
         (results '())
         (replans 0)
         (last-failure-test-name nil)
@@ -471,6 +473,7 @@ is added to the payload here.)"
                                     :system system
                                     :test-system test-system
                                     :provider provider
+                                    :project-inventory project-inventory
                                     :prior-plan plan
                                     :failure-context (%failure-context last-result))))
              (when (equal (%first-test-name new-plan)
