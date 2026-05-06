@@ -264,10 +264,10 @@ shape already matches."
     ((:mixed nil) nil)
     (t nil)))
 
-(defun %build-user-prompt (goal &key project-root system test-system
-                                     prior-plan failure-context
-                                     project-inventory
-                                     mode)
+(defun %build-user-prompt
+       (goal
+        &key project-root system test-system prior-plan failure-context
+        project-inventory mode develop-state)
   "Assemble the user-side message for the planner LLM call.
 
 PROJECT-INVENTORY (v0.4 Phase 2), when supplied, is prepended as a
@@ -282,27 +282,64 @@ planner what was tried and why it didn't work.
 
 MODE (v0.4 Phase 6) is the development style the orchestrator will
 enforce after the plan returns; rendering it here lets the LLM
-produce a plan whose needs_exploration values already match."
+produce a plan whose needs_exploration values already match.
+
+DEVELOP-STATE (v0.4 Phase C) is the opt-in wiring entry point. When
+non-NIL, the inventory + goal + prior-plan + failure-context block
+is rendered via `cl-harness/src/context-view:context-view->string'
+:planning instead of the legacy ad-hoc string assembly. The
+mode-instruction and project-root/system/test-system metadata block
+remain unchanged. Resolved at call-time via `uiop:symbol-call' to
+avoid an ASDF circular dependency (context-view already depends on
+planner)."
   (with-output-to-string (s)
-    (when (and project-inventory (plusp (length project-inventory)))
-      (format s "~A~%~%" project-inventory))
-    (format s "Goal: ~A~%~%" goal)
-    (let ((nudge (%mode-instruction mode)))
-      (when nudge
-        (format s "~A~%~%" nudge)))
-    (when project-root
-      (format s "Project root: ~A~%" project-root))
-    (when system
-      (format s "System name: ~A~%" system))
-    (when test-system
-      (format s "Test system: ~A~%" test-system))
-    (when prior-plan
-      (format s "~%~A" (%format-prior-plan prior-plan)))
-    (when failure-context
-      (format s "~%Failure: ~A~%" failure-context)
-      (format s "Produce a REVISED plan that takes the failure into account.~%")
-      (format s "Do not repeat earlier steps that already passed; pick up~%")
-      (format s "from where the prior plan got stuck.~%"))
+    (cond
+      (develop-state
+       ;; Phase C.6 wiring: render inventory + goal + replan-context
+       ;; via the :planning formatter. The mode-instruction and
+       ;; project-root/system/test-system metadata block follow as
+       ;; before (they are not part of the context-view).
+       (let ((rendered
+              (uiop:symbol-call '#:cl-harness/src/context-view
+                                '#:context-view->string
+                                (uiop:symbol-call
+                                 '#:cl-harness/src/context-view
+                                 '#:make-context-view
+                                 develop-state
+                                 :phase :planning
+                                 :prior-plan prior-plan
+                                 :failure-context failure-context)
+                                :planning)))
+         (format s "~A~%" rendered))
+       (let ((nudge (%mode-instruction mode)))
+         (when nudge (format s "~A~%~%" nudge)))
+       (when project-root (format s "Project root: ~A~%" project-root))
+       (when system (format s "System name: ~A~%" system))
+       (when test-system (format s "Test system: ~A~%" test-system))
+       (when failure-context
+         (format s
+                 "~%Produce a REVISED plan that takes the failure into account.~%")
+         (format s "Do not repeat earlier steps that already passed; pick up~%")
+         (format s "from where the prior plan got stuck.~%")))
+      (t
+       ;; Legacy path: unchanged string-assembly. Behavior preservation
+       ;; for standalone callers (test stubs, external callers, the
+       ;; bench harness's planner-fn callback).
+       (when (and project-inventory (plusp (length project-inventory)))
+         (format s "~A~%~%" project-inventory))
+       (format s "Goal: ~A~%~%" goal)
+       (let ((nudge (%mode-instruction mode)))
+         (when nudge (format s "~A~%~%" nudge)))
+       (when project-root (format s "Project root: ~A~%" project-root))
+       (when system (format s "System name: ~A~%" system))
+       (when test-system (format s "Test system: ~A~%" test-system))
+       (when prior-plan (format s "~%~A" (%format-prior-plan prior-plan)))
+       (when failure-context
+         (format s "~%Failure: ~A~%" failure-context)
+         (format s
+                 "Produce a REVISED plan that takes the failure into account.~%")
+         (format s "Do not repeat earlier steps that already passed; pick up~%")
+         (format s "from where the prior plan got stuck.~%"))))
     (format s "~%Return the plan as a JSON object per the schema above.")))
 
 ;; --- response parsing ----------------------------------------------------
@@ -529,6 +566,7 @@ schema."
                                    failure-context
                                    project-inventory
                                    (mode :mixed)
+                                   develop-state
                                    (system-prompt
                                     +default-planner-system-prompt+))
   "Decompose a high-level GOAL into an ordered list of PLAN-STEP
@@ -551,6 +589,14 @@ P3 replan path: the planner sees what was tried and why it failed,
 and is asked to produce a revised plan that picks up from the
 failure point. Pass NIL for both on the first planning round.
 
+DEVELOP-STATE (v0.4 Phase C) is an opt-in wiring kwarg. When
+non-NIL, the user-prompt builder routes the inventory + goal +
+replan-context block through
+`cl-harness/src/context-view:context-view->string' :planning
+instead of the legacy ad-hoc string assembly. Standalone callers
+(test stubs, external callers, the bench harness's planner-fn
+callback) leave it NIL and keep the v0.4.0 behavior unchanged.
+
 SYSTEM-PROMPT defaults to +DEFAULT-PLANNER-SYSTEM-PROMPT+; override
 when iterating on prompt design without rebuilding the system.
 
@@ -572,7 +618,8 @@ PLANNER-ERROR when the response cannot be parsed."
                                               :prior-plan prior-plan
                                               :failure-context failure-context
                                               :project-inventory project-inventory
-                                              :mode mode))))
+                                              :mode mode
+                                              :develop-state develop-state))))
          (response (complete-chat provider messages))
          (content (chat-response-content response)))
     (unless (and (stringp content) (plusp (length content)))

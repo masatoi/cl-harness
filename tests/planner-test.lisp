@@ -9,6 +9,8 @@
   (:use #:cl #:rove)
   (:import-from #:cl-harness/src/model
                 #:make-openai-provider)
+  (:import-from #:cl-harness/src/state
+                #:make-develop-state)
   (:import-from #:cl-harness/src/planner
                 #:plan-step
                 #:plan-step-index
@@ -299,3 +301,47 @@
                               (coerce messages 'list)))
            (content (gethash "content" user-msg)))
       (ok (not (search "Project Inventory" content))))))
+
+;; --- Phase C.6: develop-state opt-in wiring -----------------------------
+
+(deftest plan-development-uses-context-view-when-develop-state-supplied
+  ;; When :develop-state is supplied, the user-prompt builder routes
+  ;; through context-view->string :planning, which renders the goal
+  ;; under a "## Goal" heading and the inventory under a
+  ;; "## Project inventory" heading (instead of the legacy
+  ;; "Goal: ..." line and bare inventory block). Standalone callers
+  ;; that pass no :develop-state keep the old shape -- covered by the
+  ;; pre-existing tests above.
+  (let* ((captured (cons nil nil))
+         (transport
+          (lambda (url headers body)
+            (declare (ignore url headers))
+            (setf (car captured) body)
+            (values (%llm-body +canonical-plan+) 200
+                    (make-hash-table :test 'equal))))
+         (provider (%make-stub-provider :transport transport))
+         (s (make-develop-state :goal "g"
+                                :project-root "/tmp/"
+                                :system "demo"
+                                :test-system "demo/tests"
+                                :project-inventory "[INVENTORY-MARKER]")))
+    (plan-development "g"
+                      :provider provider
+                      :project-root "/tmp/"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :project-inventory "[INVENTORY-MARKER]"
+                      :develop-state s)
+    (let* ((req (yason:parse (car captured)))
+           (messages (gethash "messages" req))
+           (user-msg (find-if (lambda (m)
+                                (equal "user" (gethash "role" m)))
+                              (coerce messages 'list)))
+           (content (gethash "content" user-msg)))
+      (ok user-msg "user message present")
+      (ok (search "## Goal" content)
+          "context-view :planning Goal heading present")
+      (ok (search "## Project inventory" content)
+          "context-view :planning Project inventory heading present")
+      (ok (search "[INVENTORY-MARKER]" content)
+          "inventory body verbatim in user prompt"))))
