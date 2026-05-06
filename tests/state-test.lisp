@@ -41,6 +41,7 @@
   (let ((s (%make)))
     (ok (typep s 'develop-state))
     (ok (string= "implement greet" (develop-state-goal s)))
+    (ok (string= "/tmp/cl-harness-state-test/" (develop-state-project-root s)))
     (ok (string= "demo" (develop-state-system s)))
     (ok (string= "demo/tests" (develop-state-test-system s)))))
 
