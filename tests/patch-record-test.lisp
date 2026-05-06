@@ -90,7 +90,9 @@
     (ok (handler-case
             (progn (patch-record-set-verify-status p :passed :elsewhere)
                    nil)
-          (error () t)))))
+          (error () t)))
+    (ok (eq :pending (patch-record-verify-status p)))
+    (ok (null (patch-record-verify-source p)))))
 
 (deftest patch-record-set-verify-status-allows-clean-overrides-incremental
   ;; A clean verify after an incremental verify is the authoritative
