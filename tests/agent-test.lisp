@@ -1066,3 +1066,70 @@ order. Helper for tests that assert against the on-disk transcript."
           "context-view :exploration Investigation targets heading present")
       (ok (and content (search "[INVESTIGATION-MARKER]" content))
           "investigation-target name appears in user prompt"))))
+
+(deftest run-agent-uses-context-view-when-develop-state-supplied
+  ;; Phase C.8 wiring: when :develop-state is passed AND develop-state
+  ;; has a current-plan with a step at current-step-index, run-agent's
+  ;; initial-user-prompt renders the issue/task section via
+  ;; CONTEXT-VIEW->STRING with the :implementation formatter. Capture
+  ;; the HTTP body the LLM transport receives, and assert the rendered
+  ;; section markers ("## Current step") and the issue marker string
+  ;; both appear.
+  (let* ((step (make-instance 'plan-step
+                              :index 0
+                              :issue "[IMPLEMENTATION-MARKER]"
+                              :test-name "test-marker"
+                              :test-source
+                              "(rove:deftest test-marker (rove:ok t))"))
+         (ds (make-develop-state
+              :goal "g"
+              :project-root "/tmp/cl-harness-c8-test/"
+              :system "demo"
+              :test-system "demo/tests"))
+         (captured (cons nil nil))
+         (transport
+          (lambda (url headers body)
+            (declare (ignore url headers))
+            (setf (car captured) body)
+            (values
+             (%llm-body
+              "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"ok\"}")
+             200
+             (make-hash-table :test 'equal))))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body)
+                 (%ok-tool-result id))
+                ((search "\"load-system\"" body)
+                 (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"pool-kill-worker\"" body)
+                 (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (provider (%make-stub-provider :transport transport))
+         (mcp (%make-mcp-client-with-handler))
+         (policy (make-tool-policy :generic-mcp))
+         (config (%make-config))
+         (path (%temp-log-path)))
+    (setf (cl-harness/src/state:develop-state-current-plan ds) (list step))
+    (setf (cl-harness/src/state:develop-state-current-step-index ds) 0)
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (unwind-protect
+                (run-agent config provider mcp policy logger
+                           :develop-state ds)
+             (close-run-logger logger)))
+      (when (probe-file path) (delete-file path)))
+    (let* ((req (yason:parse (car captured)))
+           (messages (gethash "messages" req))
+           (user-msg (find-if (lambda (m) (equal "user" (gethash "role" m)))
+                              (coerce messages 'list)))
+           (content (and user-msg (gethash "content" user-msg))))
+      (ok user-msg "user message present in captured request")
+      (ok (and content (search "## Current step" content))
+          "context-view :implementation Current step heading present")
+      (ok (and content (search "[IMPLEMENTATION-MARKER]" content))
+          "plan-step issue text appears in user prompt"))))

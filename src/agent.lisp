@@ -64,7 +64,12 @@
                 #:allowed-tool-p)
   (:import-from #:cl-harness/src/state
                 #:develop-state-record-patch-record
-                #:develop-state-record-source-fact)
+                #:develop-state-record-source-fact
+                #:develop-state-current-plan
+                #:develop-state-current-step-index)
+  (:import-from #:cl-harness/src/context-view
+                #:make-context-view
+                #:context-view->string)
   (:import-from #:cl-harness/src/patch-record
                 #:make-patch-record)
   (:import-from #:cl-harness/src/source-fact
@@ -473,14 +478,40 @@ typo was in the tests/ :IMPORT-FROM clause."
         (when load-text
           (format s "Load failure detail:~%~A~%" load-text))))))
 
-(defun initial-user-prompt (config verify-result)
+(defun initial-user-prompt (config verify-result &key develop-state)
   "Return the first USER message that gives the LLM the project context
-and the initial verification snapshot."
+and the initial verification snapshot.
+
+DEVELOP-STATE (v0.4 Phase C) is an opt-in wiring kwarg. When non-NIL
+AND develop-state has a current-step-index set (i.e. the orchestrator
+is mid-step), the issue line is replaced with the
+`cl-harness/src/context-view:context-view->string' :implementation
+rendering of the active plan-step. The project-root / system /
+test-system orientation block, the verify-summary, and the
+verify-detail-prose section remain byte-identical so the legacy path
+(standalone cl-harness:fix callers, test stubs without develop-state,
+develop-state without an active step) is preserved verbatim."
   (with-output-to-string (s)
     (format s "Project root: ~A~%" (run-config-project-root config))
     (format s "ASDF system: ~A~%" (run-config-system config))
     (format s "Test system: ~A~%" (run-config-test-system config))
-    (format s "Issue: ~A~%~%" (run-config-issue config))
+    (let ((step-index (and develop-state
+                           (develop-state-current-step-index develop-state))))
+      (cond
+        (step-index
+         ;; Phase C.8 wiring: render the current step via the
+         ;; :implementation formatter.
+         (let* ((plan (develop-state-current-plan develop-state))
+                (step (and plan (elt plan step-index))))
+           (format s "~%~A~%"
+                   (context-view->string
+                    (make-context-view develop-state
+                                       :phase :implementation
+                                       :step step)
+                    :implementation))))
+        (t
+         ;; Legacy path: preserved unchanged for standalone callers.
+         (format s "Issue: ~A~%~%" (run-config-issue config)))))
     (format s "Initial verification: ~A~%" (verify-summary verify-result))
     (let ((detail (verify-detail-prose verify-result)))
       (when detail
@@ -1008,7 +1039,9 @@ offending slot."
            logger)))
       (let ((messages (list (make-chat-message "system" (system-prompt policy))
                             (make-chat-message
-                             "user" (initial-user-prompt config initial)))))
+                             "user" (initial-user-prompt
+                                     config initial
+                                     :develop-state develop-state)))))
         (loop for turn from 1
               do (setf (agent-state-turn state) turn)
                  (multiple-value-bind (next-messages outcome verify action)
