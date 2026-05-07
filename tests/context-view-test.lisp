@@ -14,7 +14,10 @@
                 #:develop-state-current-step-index
                 #:develop-state-record-source-fact
                 #:develop-state-record-patch-record
-                #:develop-state-record-failure)
+                #:develop-state-record-failure
+                #:develop-state-record-runtime-vocab-fact)
+  (:import-from #:cl-harness/src/runtime-vocabulary
+                #:make-runtime-vocab-fact)
   (:import-from #:cl-harness/src/source-fact
                 #:make-source-fact)
   (:import-from #:cl-harness/src/patch-record
@@ -345,3 +348,69 @@
                                             fresh-pos))))))))
       (when (probe-file stale-path) (delete-file stale-path))
       (when (probe-file fresh-path) (delete-file fresh-path)))))
+
+(deftest exploration-formatter-renders-runtime-vocab-bullet
+  (let ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests"))
+        (step (make-instance 'cl-harness/src/planner:plan-step
+                             :index 0 :test-name "t"
+                             :test-source "(deftest t)"
+                             :issue "explore the failure mode")))
+    (setf (cl-harness/src/state:develop-state-current-plan s) (list step))
+    (setf (develop-state-current-step-index s) 0)
+    (develop-state-record-runtime-vocab-fact
+     s (make-runtime-vocab-fact
+        :kind :function :name "foo" :package "CL-USER"
+        :via-tool "code-describe"
+        :related-step-index 0))
+    (let* ((view (make-context-view s :phase :exploration :step step))
+           (str (context-view->string view :exploration)))
+      (ok (search "Runtime vocabulary probed in this step" str))
+      (ok (search "[function] CL-USER:foo" str)))))
+
+(deftest exploration-formatter-marks-stale-runtime-vocab-fact
+  (let ((path (uiop:tmpize-pathname
+               (merge-pathnames "rv-cv-stale.lisp"
+                                (uiop:default-temporary-directory))))
+        (s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests"))
+        (step (make-instance 'cl-harness/src/planner:plan-step
+                             :index 0 :test-name "t"
+                             :test-source "(deftest t)"
+                             :issue "explore")))
+    (unwind-protect
+         (progn
+           (with-open-file (out path :direction :output
+                                     :if-does-not-exist :create
+                                     :if-exists :supersede)
+             (format out ";; placeholder~%"))
+           (setf (cl-harness/src/state:develop-state-current-plan s) (list step))
+           (setf (develop-state-current-step-index s) 0)
+           (develop-state-record-runtime-vocab-fact
+            s (make-runtime-vocab-fact
+               :kind :function :name "foo"
+               :source-file path :probed-at 100
+               :via-tool "code-describe"
+               :related-step-index 0))
+           (let* ((view (make-context-view s :phase :exploration :step step))
+                  (str (context-view->string view :exploration)))
+             (ok (search "[STALE]" str))))
+      (when (probe-file path) (delete-file path)))))
+
+(deftest planning-formatter-emits-runtime-vocab-summary-when-non-empty
+  (let ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests")))
+    (develop-state-record-runtime-vocab-fact
+     s (make-runtime-vocab-fact
+        :kind :package :name "CL-USER" :via-tool "code-find"))
+    (let* ((view (make-context-view s :phase :planning))
+           (str (context-view->string view :planning)))
+      (ok (search "Runtime vocabulary observed so far" str))
+      (ok (search "[package] CL-USER" str)))))
+
+(deftest planning-formatter-omits-runtime-vocab-section-when-empty
+  (let* ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                                :system "x" :test-system "x/tests"))
+         (view (make-context-view s :phase :planning))
+         (str (context-view->string view :planning)))
+    (ok (null (search "Runtime vocabulary observed so far" str)))))

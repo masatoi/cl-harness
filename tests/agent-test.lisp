@@ -1004,6 +1004,69 @@ order. Helper for tests that assert against the on-disk transcript."
         (ok (search "foo" (namestring (source-fact-path f))))
         (ok (string= "lisp-read-file" (source-fact-via-tool f)))))))
 
+(deftest agent-records-runtime-vocab-fact-on-code-describe-success
+  ;; Drive the recorder logic in isolation by feeding a hash-table
+  ;; that mimics a successful code-describe tool result. Tests the
+  ;; private helper directly; no live MCP client needed.
+  (let* ((result (alexandria:plist-hash-table
+                  (list "kind" "function"
+                        "name" "foo"
+                        "package" "CL-USER"
+                        "summary" "(foo x) -> integer")
+                  :test 'equal))
+         (fact (cl-harness/src/agent::%vocab-fact-from-tool-result
+                "code-describe" result :related-step-index 3)))
+    (ok (typep fact 'cl-harness/src/runtime-vocabulary:runtime-vocab-fact))
+    (ok (eq :function
+            (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-kind fact)))
+    (ok (string= "foo"
+                 (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-name
+                  fact)))
+    (ok (string= "CL-USER"
+                 (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-package
+                  fact)))
+    (ok (eql 3 (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-related-step-index
+                fact)))))
+
+(deftest agent-records-runtime-vocab-fact-skips-on-isError
+  (let* ((result (alexandria:plist-hash-table
+                  (list "isError" t "kind" "function" "name" "foo")
+                  :test 'equal))
+         (fact (cl-harness/src/agent::%vocab-fact-from-tool-result
+                "code-describe" result)))
+    (ok (null fact))))
+
+(deftest agent-records-runtime-vocab-fact-skips-on-missing-name
+  (let* ((result (alexandria:plist-hash-table
+                  (list "kind" "function") :test 'equal))
+         (fact (cl-harness/src/agent::%vocab-fact-from-tool-result
+                "code-describe" result)))
+    (ok (null fact))))
+
+(deftest agent-records-runtime-vocab-fact-on-code-find-list-result
+  ;; code-find returns a list-shaped result with multiple entries;
+  ;; the helper records one fact per entry.
+  (let* ((result (alexandria:plist-hash-table
+                  (list "results"
+                        (list (alexandria:plist-hash-table
+                               (list "kind" "function" "name" "f1"
+                                     "package" "P")
+                               :test 'equal)
+                              (alexandria:plist-hash-table
+                               (list "kind" "class" "name" "C1"
+                                     "package" "P")
+                               :test 'equal)))
+                  :test 'equal))
+         (facts (cl-harness/src/agent::%vocab-facts-from-tool-result
+                 "code-find" result)))
+    (ok (= 2 (length facts)))
+    (ok (eq :function
+            (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-kind
+             (first facts))))
+    (ok (eq :class
+            (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-kind
+             (second facts))))))
+
 (deftest run-explore-agent-uses-context-view-when-develop-state-supplied
   ;; Phase C.7 wiring: when :develop-state is passed, the initial user
   ;; prompt's issue + investigation-targets section is rendered via

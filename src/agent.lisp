@@ -69,8 +69,12 @@
   (:import-from #:cl-harness/src/state
                 #:develop-state-record-patch-record
                 #:develop-state-record-source-fact
+                #:develop-state-record-runtime-vocab-fact
                 #:develop-state-current-plan
                 #:develop-state-current-step-index)
+  (:import-from #:cl-harness/src/runtime-vocabulary
+                #:make-runtime-vocab-fact
+                #:+supported-runtime-vocab-kinds+)
   (:import-from #:cl-harness/src/context-view
                 #:make-context-view
                 #:context-view->string)
@@ -169,6 +173,67 @@ on both sides of the diff header."
                               :output :string
                               :ignore-error-status t)))
       (error () nil))))
+
+(defun %vocab-kind-from-string (kind-string)
+  "Coerce a string like \"function\" into a keyword from
++SUPPORTED-RUNTIME-VOCAB-KINDS+, or NIL when the string isn't a
+recognised kind. Uses FIND-SYMBOL (not INTERN) so unknown kinds do
+not pollute the keyword package — cl-mcp results are external input
+and the project style guide forbids runtime INTERN of untrusted
+strings."
+  (when (stringp kind-string)
+    (let ((normalized (find-symbol (string-upcase
+                                    (substitute #\- #\_ kind-string))
+                                   :keyword)))
+      (when (and normalized
+                 (member normalized +supported-runtime-vocab-kinds+))
+        normalized))))
+
+(defun %vocab-fact-from-tool-result (tool result &key related-step-index)
+  "Try to extract a single RUNTIME-VOCAB-FACT from a tool RESULT
+hash-table (cl-mcp's structured output). Returns NIL when the result
+shape doesn't match (missing name, error flag set, unknown kind).
+Best-effort: never raises."
+  (when (and (hash-table-p result)
+             (not (gethash "isError" result)))
+    (let ((kind-string (gethash "kind" result))
+          (name (gethash "name" result))
+          (package (gethash "package" result))
+          (source-file (gethash "source_file" result))
+          (summary (gethash "summary" result)))
+      (let ((kind (%vocab-kind-from-string kind-string)))
+        (when (and kind (stringp name) (plusp (length name)))
+          (handler-case
+              (make-runtime-vocab-fact
+               :kind kind
+               :name name
+               :package (and (stringp package) package)
+               :source-file (and (stringp source-file) source-file)
+               :summary (and (stringp summary) summary)
+               :via-tool tool
+               :related-step-index related-step-index)
+            (error () nil)))))))
+
+(defun %vocab-facts-from-tool-result (tool result &key related-step-index)
+  "List variant: code-find returns a {\"results\": [...]} shape.
+Returns a list of facts (possibly empty); never raises. Falls back to
+%VOCAB-FACT-FROM-TOOL-RESULT when the result has no list section."
+  (when (and (hash-table-p result)
+             (not (gethash "isError" result)))
+    (let ((entries (gethash "results" result)))
+      (cond
+        ((listp entries)
+         (loop for entry in entries
+               for fact = (and (hash-table-p entry)
+                               (%vocab-fact-from-tool-result
+                                tool entry
+                                :related-step-index related-step-index))
+               when fact collect fact))
+        (t
+         (let ((single (%vocab-fact-from-tool-result
+                        tool result
+                        :related-step-index related-step-index)))
+           (and single (list single))))))))
 
 (defparameter +read-file-tools+
   '("fs-read-file"
@@ -889,6 +954,19 @@ step since no real patch was applied."
                    :form-name (and (hash-table-p arguments)
                                    (gethash "form_name" arguments))
                    :related-step-index nil)))))
+           ;; Record runtime-vocab-facts on the develop-level ledger
+           ;; for any successful runtime-introspection tool call. Step
+           ;; index threading deferred (mirrors source-fact recorder).
+           (when (and (agent-state-develop-state state)
+                      (not (and (gethash "isError" result) t))
+                      (member tool '("code-describe" "code-find"
+                                     "code-find-references")
+                              :test #'string=))
+             (let ((facts (%vocab-facts-from-tool-result
+                           tool result :related-step-index nil)))
+               (dolist (fact facts)
+                 (develop-state-record-runtime-vocab-fact
+                  (agent-state-develop-state state) fact))))
            (cond
              ((member tool +source-mutating-tools+ :test #'equal)
               (incf (agent-state-patch-attempts state))

@@ -37,6 +37,8 @@
            #:develop-state-record-source-fact
            #:develop-state-patch-records
            #:develop-state-record-patch-record
+           #:develop-state-runtime-vocabulary
+           #:develop-state-record-runtime-vocab-fact
            #:develop-state-failure-ledger
            #:develop-state-record-failure))
 
@@ -128,7 +130,13 @@ DEVELOP-STATE-PATCH-RECORDS.")
                    :documentation "FAILURE-LEDGER owned by this
 state. Auto-initialised in INITIALIZE-INSTANCE :AFTER below; no
 :initform because we don't want to share one ledger across
-instances."))
+instances.")
+   (runtime-vocabulary :initform nil :accessor %runtime-vocabulary
+                       :documentation "Reverse-chronological list of
+RUNTIME-VOCAB-FACT instances captured by the agent loop's runtime
+introspection probes (cl-mcp code-find / code-describe /
+code-find-references results). Internal; public reader is
+DEVELOP-STATE-RUNTIME-VOCABULARY."))
   (:documentation
    "Central state for one DEVELOP invocation. Aggregates the goal,
 project context, current plan, step outcomes across replan rounds,
@@ -218,3 +226,13 @@ callers don't need to know the ledger lives inside develop-state.
 Returns STATE."
   (record-failure (develop-state-failure-ledger state) failure-record)
   state)
+
+(defun develop-state-record-runtime-vocab-fact (state fact)
+  "Push FACT onto STATE's runtime-vocabulary list. Returns STATE."
+  (push fact (%runtime-vocabulary state))
+  state)
+
+(defun develop-state-runtime-vocabulary (state)
+  "Return STATE's recorded runtime-vocab-facts in observation order
+(oldest first)."
+  (reverse (%runtime-vocabulary state)))
