@@ -12,72 +12,91 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-**v0.4.0**. Lifts cl-harness from "TDD-Green helper" to a
-runtime-native development harness: enriched plan-step schema,
-project inventory injection, a read-only explore phase, an
-abstraction-decision ledger, a static integration check, a
-top-down/bottom-up/mixed mode selector, and a 7-task greenfield
-benchmark suite. Builds on the v0.3.0 planner+orchestrator stack
-without breaking any existing `fix` / `bench` invariants.
+**v0.5.0**. Adds the **context-management refactor** on top of
+the v0.4 development harness: every observation the agent loop
+gathers is now a typed record on a central `develop-state`, and
+every LLM-facing prompt is built from a phase-appropriate,
+compressed view of that state rather than from raw transcript
+history. 10 phases (A → J) + 4 follow-ups. Public CLI surface
+(`fix` / `bench` / `develop`) is unchanged; v0.5 additions are
+opt-in.
 
-What's new since v0.3.0:
+What's new since v0.4.0:
 
-- **Enriched plan-step schema** (Phase 1) — plan-step now carries
-  `purpose`, `acceptance-criteria`, `investigation-targets`
-  (`{kind, name, intent}`), `risks`, and `needs-exploration`
-  (`:none` / `:lightweight` / `:deep`). All slots are optional so
-  v0.3 planner responses keep parsing.
-- **Project inventory injection** (Phase 2) — before each
-  `plan-development` call, the harness gathers a 5KB read-only
-  snapshot of `.asd` / `src/*.lisp` / `tests/*.lisp` heads and
-  prepends it to the planner's user prompt so the LLM builds on
-  existing vocabulary instead of inventing parallel structures.
-- **Explore phase** (Phase 3) — when a plan-step's
-  `needs-exploration` is `:lightweight` or `:deep`, an explore
-  sub-agent runs first under a new `:explore` tool policy
-  (read-only: `repl-eval`, `code-find`, `code-describe`,
-  `inspect-object`, `lisp-read-file`; all write tools denied). Its
-  one-paragraph memo is prepended to the implement step's issue.
-- **Abstraction ledger** (Phase 4) — explore memos are parsed for
-  `ADOPTED:` / `REJECTED:` / `DEFERRED:` markers (em-dash, en-dash,
-  colon, hyphen separators all accepted) and aggregated on
-  `develop-result-abstraction-ledger`. The new
-  `format-develop-report-markdown` renders adopted / rejected /
-  deferred sections, exploration notes, and per-step status.
-- **Integration check** (Phase 5) — after every step reaches
-  `:passed`, a static cross-package consistency check parses every
-  `.lisp` under `project-root`, builds a defpackage graph, and
-  flags `:unknown-package` and `:unexported-symbol` issues that
-  per-step verify alone cannot detect. Out-of-project deps
-  (`alexandria`, `rove`, ...) are skipped via a same-prefix
-  heuristic.
-- **Mode selector** (Phase 6) — `:mode` kwarg on
-  `cl-harness:develop` (and `--mode` on the shell CLI):
-  `:top-down` forces every step's needs-exploration to `:none`,
-  `:bottom-up` promotes `:none` / `nil` to `:lightweight`,
-  `:mixed` (default) leaves the planner's choice alone. The
-  planner also sees a `Mode: ...` line in its user prompt so the
-  LLM aligns its plan up-front; the orchestrator enforces the mode
-  mechanically as the second line of defence.
-- **Greenfield benchmark suite** (Phase 7) — `develop-benchmarks/`
-  grows from 2 to 7 fixtures (`102-counter-class`, `103-fizz-buzz`,
-  `104-cache-simple`, `105-validate-email`, `106-format-currency`).
-  New `develop-bench` loader (`load-develop-task`,
-  `discover-develop-tasks`, `prepare-develop-task-sandbox`) lets
-  multi-model bench scripts copy fixtures to clean tmpdirs without
-  polluting the in-repo seed.
-- **Greenfield executor prompt补强** (Phase 0, shipped in v0.3.1) —
-  `lisp-edit-form` `form_name` examples for `defpackage` /
-  `in-package` / `defun` / `defmethod`, and an explicit fallback
-  to `fs-write-file` after two consecutive `form_name` failures.
-  Required for greenfield work to converge on Qwen3-class models.
+- **Central `develop-state`** (Phase A) — single mutable
+  container threaded through one `develop` invocation. Phases B–J
+  extend it with seven new ledger slots without changing the
+  public construction shape.
+- **Three new ledgers** (Phase B) — `source-fact` (every
+  successful read tool with `mtime-at-read`), `patch-record`
+  (every successful source-mutating tool with diff summary), and
+  `failure-ledger` (active vs resolved partition over
+  `failure-record`s, with auto-resolve-on-disappear). All
+  populated automatically by the agent loop / orchestrator.
+- **Phase-specific context views** (Phase C) — `make-context-view`
+  builds a snapshot for `:planning` / `:exploration` /
+  `:implementation` and a `context-view->string` formatter renders
+  it for prompt insertion. The planner / explore / agent
+  prompt-builders all consume the view when a `develop-state` is
+  threaded; legacy ad-hoc string assembly remains for standalone
+  callers.
+- **Tool result compression + history compaction** (Phase D) —
+  seven cl-mcp tools' outputs (read / search / introspect)
+  truncate at 1500 chars with footer; `summarize-run-tests`
+  caps at 5 failures + footer; `compact-history` runs in the
+  agent loop's `step-turn` gated by `run-limits.max-context-tokens`
+  (default 50000).
+- **Structured markdown reporting** (Phase E) —
+  `format-develop-state-report` emits a markdown report from
+  develop-state's full ledger set; opt-in via the new
+  `format-develop-report-structured` wrapper.
+- **`[STALE]` annotation** (Phase F + G) — `:exploration`
+  formatter renders source-facts and runtime-vocab-facts whose
+  on-disk mtime exceeds the recorded baseline with a `[STALE]`
+  prefix at render time. Annotate-not-filter — stale facts still
+  render so the LLM stays aware.
+- **Runtime vocabulary ledger** (Phase G) —
+  `runtime-vocab-fact` records `code-find` / `code-describe` /
+  `code-find-references` results so the LLM sees a structured
+  view of what's been probed. `:planning` view shows a warm-start
+  summary; `:exploration` view shows current-step probes.
+- **REPL finding ledger** (Phase H) — structured `(hypothesis
+  probe finding decision)` 4-tuple records from
+  `{"type":"finding"}` action shape (new in the action parser).
+  `promoted-to-source-p` flag flipped automatically by the
+  orchestrator when a patch's diff matches the hypothesis. The
+  `:implementation` view shows ONLY unpromoted findings under
+  "Findings to implement (REPL-confirmed, not yet shipped)" —
+  enforces the §3.6 rule "REPL success ≠ implemented" at the
+  view layer.
+- **Project summary** (Phase I) — `gather-project-summary` wraps
+  the existing inventory builder into a structured record; the
+  agent loop's post-patch hook flips `dirty-p` when patches touch
+  `.asd` or `defpackage`. `:planning` view annotates the section
+  header `## [STALE] Project summary` when dirty.
+- **Subtask summaries + regression watch** (Phase J) —
+  `summarise-step-result` derives a `subtask-summary` from
+  develop-state's existing slots (no new state); the
+  `:implementation` view renders prior `:passed` steps as
+  compressed bullets and lists the most-recent N (default 3)
+  resolved failures as regression watch.
+- **4 follow-ups** — step-index threading across all 3 recorders
+  (cross-phase fix from Phase H final review); Phase C wiring
+  activated in production (orchestrator → planner-fn now passes
+  `:develop-state state`); `%vocab-facts-from-tool-result` shape
+  fix (code-describe path now records facts in production);
+  `develop-step-result` extracted into `src/step-result.lisp` to
+  break a load-time cycle structurally.
 
-All v0.3.0 entry points (`cl-harness:fix`, `cl-harness:bench`,
-`cl-harness:develop`, the shell binary) keep their kwarg / flag
-shapes; v0.4.0 additions are opt-in.
+All v0.4.0 entry points keep their kwarg / flag shapes; v0.5.0
+additions are opt-in via the existing `:develop-state` kwarg.
 
-184 unit tests pass on a clean worker; 12 fix/bench fixtures + 7
-greenfield develop fixtures. mallet clean.
+**357 unit tests** pass on a clean cl-mcp worker (v0.4.0: 184;
+delta = +173 across 10 phases + 4 follow-ups); 12 fix/bench
+fixtures + 7 greenfield develop fixtures. mallet clean. See
+`docs/release-notes/v0.5.0.md` for the per-phase rationale and
+`docs/context-management.md` for the requirements doc that
+drove the refactor.
 
 Single-trial pass-rate over the 12-task `fix` suite under
 `:generic-mcp` (carried from v0.3): **11/12 (91.7%)** on
@@ -284,50 +303,86 @@ Develop-level JSONL transcript at `--log-path` records
 `develop-start / plan / step-start / step-end / abstraction-decision /
 integration-check / develop-end`; each step's per-run-agent JSONL is
 referenced via `transcript_path` so a single develop-level file is
-enough to drill down to any sub-goal's detail. The structured
-markdown report is available via `cl-harness:format-develop-report-markdown`
-and includes adopted / rejected / deferred abstractions
-(`:abstraction-decision` events), exploration notes, per-step
-status, and the integration-check section. See
-`docs/notes/2026-05-06-planner-orchestrator.md` and
-`docs/notes/2026-05-06-v0.4-development-harness.md` for the design.
+enough to drill down to any sub-goal's detail. Two markdown report
+formatters are available:
+
+- `cl-harness:format-develop-report-markdown` (v0.4) — adopted /
+  rejected / deferred abstractions, exploration notes, per-step
+  status, integration-check section.
+- `cl-harness:format-develop-report-structured` (v0.5, opt-in) —
+  ledger-aware report from develop-state's full slot set: Goal /
+  Plan / Completed steps / Patches applied / Active failures /
+  Resolved failures / Integration issues / Source facts. Empty
+  sections elide.
+
+Per-ledger introspection is also possible via the develop-result's
+`develop-state` (v0.5):
+
+```lisp
+(let* ((result (cl-harness:develop ...))
+       (state  (cl-harness:develop-result-develop-state result)))
+  (cl-harness/src/state:develop-state-source-facts state)
+  (cl-harness/src/state:develop-state-patch-records state)
+  (cl-harness/src/state:develop-state-failure-ledger state)
+  (cl-harness/src/state:develop-state-runtime-vocabulary state)
+  (cl-harness/src/state:develop-state-repl-findings state)
+  (cl-harness/src/state:develop-state-project-summary state))
+```
+
+See `docs/notes/2026-05-06-planner-orchestrator.md` and
+`docs/notes/2026-05-06-v0.4-development-harness.md` for the v0.4
+design, and `docs/context-management.md` for the v0.5 refactor.
 
 ## Architecture
 
 ```
 cl-harness/
 ├── src/
-│   ├── abstraction.lisp   v0.4 P4: ADOPTED:/REJECTED:/DEFERRED: ledger
-│   ├── action.lisp        LLM JSON action parser (tool_call / finish)
-│   ├── agent.lisp         turn-based loop, system prompt, finalize
-│   ├── bench.lisp         fix benchmark runner (task, suite, trials, report)
-│   ├── cli.lisp           fix / bench / develop programmatic entry points
-│   ├── cli-main.lisp      clingon shell command for the binary build
-│   ├── compact.lisp       chat-history compaction helper (v0.3 Tier 4 C-3)
-│   ├── config.lisp        run-config + run-limits
-│   ├── develop-bench.lisp v0.4 P7: greenfield benchmark loader / sandbox
-│   ├── explore.lisp       v0.4 P3: read-only sub-agent + memo synthesis
-│   ├── integration.lisp   v0.4 P5: static cross-package consistency check
-│   ├── inventory.lisp     v0.4 P2: project vocabulary snapshot for planner
-│   ├── log.lisp           JSONL transcript writer
-│   ├── main.lisp          facade re-exports under nickname `cl-harness`
-│   ├── mcp.lisp           JSON-RPC 2.0 client + transport abstraction
-│   ├── mcp-stdio.lisp     stdio transport: spawns its own cl-mcp
-│   ├── mcp-resolve.lisp   picks HTTP vs stdio from kwargs / env
-│   ├── model.lisp         OpenAI-compatible chat client
-│   ├── orchestrator.lisp  develop loop: plan / explore / execute /
-│   │                        replan / mode-selector / integration check
-│   ├── planner.lisp       LLM-driven plan-step decomposer + mode nudge
-│   ├── policy.lisp        tool allow-list per condition (incl. :explore)
-│   └── verify.lisp        incremental + clean verification
-├── tests/                 rove unit tests, mostly stub-driven (no LLM)
-├── benchmarks/            12 deliberately broken mini ASDF projects (fix/bench)
-├── develop-benchmarks/    7 greenfield fixtures for cl-harness:develop
-├── prompts/               system prompts (planner + REPL-driven dev)
+│   ├── abstraction.lisp        v0.4 P4: ADOPTED:/REJECTED:/DEFERRED: ledger
+│   ├── action.lisp             LLM JSON action parser (tool_call / finish / finding)
+│   ├── agent.lisp              turn-based loop, system prompt, finalize, recorders
+│   ├── bench.lisp              fix benchmark runner (task, suite, trials, report)
+│   ├── cli.lisp                fix / bench / develop programmatic entry points
+│   ├── cli-main.lisp           clingon shell command for the binary build
+│   ├── compact.lisp            chat-history compaction helper (v0.3 Tier 4 C-3)
+│   ├── config.lisp             run-config + run-limits
+│   ├── context-view.lisp       v0.5 C: per-phase context-view formatter
+│   ├── develop-bench.lisp      v0.4 P7: greenfield benchmark loader / sandbox
+│   ├── explore.lisp            v0.4 P3: read-only sub-agent; v0.5 H: persists findings
+│   ├── failure-ledger.lisp     v0.5 B: active/resolved failure partition
+│   ├── integration.lisp        v0.4 P5: static cross-package consistency check
+│   ├── inventory.lisp          v0.4 P2: project vocabulary snapshot for planner
+│   ├── log.lisp                JSONL transcript writer
+│   ├── main.lisp               facade re-exports under nickname `cl-harness`
+│   ├── mcp.lisp                JSON-RPC 2.0 client + transport abstraction
+│   ├── mcp-stdio.lisp          stdio transport: spawns its own cl-mcp
+│   ├── mcp-resolve.lisp        picks HTTP vs stdio from kwargs / env
+│   ├── model.lisp              OpenAI-compatible chat client
+│   ├── orchestrator.lisp       develop loop: plan / explore / execute / replan /
+│   │                             mode-selector / integration / promotion-linkage
+│   ├── patch-record.lisp       v0.5 B: source-mutating-tool record + verify-status
+│   ├── planner.lisp            LLM-driven plan-step decomposer + mode nudge
+│   ├── policy.lisp             tool allow-list per condition (incl. :explore)
+│   ├── project-summary.lisp    v0.5 I: structured project-context record + dirty flag
+│   ├── repl-finding.lisp       v0.5 H: (hypothesis probe finding decision) ledger
+│   ├── report.lisp             v0.5 E: format-develop-state-report (markdown)
+│   ├── runtime-vocabulary.lisp v0.5 G: runtime-vocab-fact ledger
+│   ├── source-fact.lisp        v0.5 B: read-tool record + mtime-at-read
+│   ├── state.lisp              v0.5 A: central develop-state class (7 ledger slots)
+│   ├── step-result.lisp        v0.5 follow-up: develop-step-result class (extracted)
+│   ├── subtask-summary.lisp    v0.5 J: derived subtask-summary + summarise-step-result
+│   └── verify.lisp             incremental + clean verification
+├── tests/                      rove unit tests, mostly stub-driven (no LLM)
+├── benchmarks/                 12 deliberately broken mini ASDF projects (fix/bench)
+├── develop-benchmarks/         7 greenfield fixtures for cl-harness:develop
+├── prompts/                    system prompts (planner + REPL-driven dev)
 └── docs/
     ├── cl-harness-prd.md
-    ├── notes/             stdio / qwen / planner / v0.4-harness notes
-    └── benchmarks/        per-run results
+    ├── context-management.md   v0.5 requirements doc + §14 phase status table
+    ├── notes/                  stdio / qwen / planner / v0.4-harness notes
+    ├── plans/                  per-phase implementation plans (Phases A–J + follow-ups)
+    ├── release-notes/          per-version release notes
+    └── benchmarks/             per-run results
 ```
 
 Conditions (PRD §8.5) gate which cl-mcp tools the LLM can invoke:
@@ -361,6 +416,16 @@ itself is developed under (REPL-driven, TDD-first).
 ## Documentation
 
 - `docs/cl-harness-prd.md` — full product requirements (Japanese).
+- `docs/context-management.md` — v0.5 requirements doc; §14
+  implementation-status table maps every section to the phase
+  that delivered it.
+- `docs/release-notes/v0.5.0.md` — v0.5 release notes (10 phases
+  + 4 follow-ups, per-phase rationale, migration notes).
+- `docs/release-notes/v0.4.0.md` — v0.4 release notes (development
+  harness foundation: explore phase, abstraction ledger,
+  integration check, mode selector, greenfield benchmark suite).
+- `docs/plans/` — per-phase implementation plans (Phases A–J plus
+  the four follow-ups).
 - `docs/benchmarks/results-2026-05-05*.md` — Phase 5.0 / 5.1 / 5.2
   benchmark reports, including the variance demo and the explicit
   list of v0.2 follow-ups.
