@@ -14,6 +14,8 @@
                 #:failure-ledger
                 #:make-failure-ledger
                 #:record-failure)
+  (:import-from #:cl-harness/src/project-summary
+                #:project-summary-mark-dirty)
   (:export #:develop-state
            #:make-develop-state
            #:develop-state-goal
@@ -23,6 +25,9 @@
            #:develop-state-condition
            #:develop-state-run-limits
            #:develop-state-project-inventory
+           #:develop-state-project-summary
+           #:develop-state-set-project-summary
+           #:develop-state-mark-project-summary-dirty
            #:develop-state-mode
            #:develop-state-current-plan
            #:develop-state-current-step-index
@@ -142,7 +147,12 @@ DEVELOP-STATE-RUNTIME-VOCABULARY.")
    (repl-findings :initform nil :accessor %repl-findings
                   :documentation "Reverse-chronological list of
 REPL-FINDING instances. Internal; public reader is
-DEVELOP-STATE-REPL-FINDINGS."))
+DEVELOP-STATE-REPL-FINDINGS.")
+   (project-summary :initform nil :accessor develop-state-project-summary
+                    :documentation "Optional PROJECT-SUMMARY instance
+holding the structured cold-start project context (Phase I, §3.3).
+Replaced wholesale via DEVELOP-STATE-SET-PROJECT-SUMMARY; mutated
+in-place only via DEVELOP-STATE-MARK-PROJECT-SUMMARY-DIRTY."))
   (:documentation
    "Central state for one DEVELOP invocation. Aggregates the goal,
 project context, current plan, step outcomes across replan rounds,
@@ -252,3 +262,17 @@ Returns STATE."
   "Return STATE's recorded repl-findings in observation order
 (oldest first)."
   (reverse (%repl-findings state)))
+
+(defun develop-state-set-project-summary (state summary)
+  "Replace STATE's project-summary slot with SUMMARY (a
+PROJECT-SUMMARY instance, or NIL to clear). Returns STATE."
+  (setf (slot-value state 'project-summary) summary)
+  state)
+
+(defun develop-state-mark-project-summary-dirty (state)
+  "Flip STATE's project-summary dirty flag to T. No-op when the slot
+is NIL (caller hasn't gathered a summary yet). Returns STATE."
+  (let ((summary (develop-state-project-summary state)))
+    (when summary
+      (project-summary-mark-dirty summary)))
+  state)
