@@ -1425,3 +1425,47 @@ success result with one text content block."
               :test 'equal)))
     (let ((out (cl-harness/src/agent::summarize-tool-result "run-tests" tr)))
       (ok (not (search "more failure" out))))))
+
+(deftest patch-on-asd-marks-project-summary-dirty
+  (let ((dstate (cl-harness/src/state:make-develop-state
+                 :goal "g" :project-root "/tmp/p"
+                 :system "x" :test-system "x/tests"))
+        (sum (cl-harness/src/project-summary:make-project-summary
+              :project-root "/tmp/p/" :system "x"
+              :test-system "x/tests"))
+        (record (cl-harness/src/patch-record:make-patch-record
+                 :path "foo.asd" :via-tool "fs-write-file"
+                 :turn 1)))
+    (cl-harness/src/state:develop-state-set-project-summary dstate sum)
+    (cl-harness/src/agent::%maybe-mark-summary-dirty dstate record)
+    (ok (eq t (cl-harness/src/project-summary:project-summary-dirty-p sum)))))
+
+(deftest patch-on-defpackage-form-marks-project-summary-dirty
+  (let ((dstate (cl-harness/src/state:make-develop-state
+                 :goal "g" :project-root "/tmp/p"
+                 :system "x" :test-system "x/tests"))
+        (sum (cl-harness/src/project-summary:make-project-summary
+              :project-root "/tmp/p/" :system "x"
+              :test-system "x/tests"))
+        (record (cl-harness/src/patch-record:make-patch-record
+                 :path "src/foo.lisp" :via-tool "lisp-edit-form"
+                 :form-type "defpackage" :form-name "my-pkg"
+                 :turn 1)))
+    (cl-harness/src/state:develop-state-set-project-summary dstate sum)
+    (cl-harness/src/agent::%maybe-mark-summary-dirty dstate record)
+    (ok (eq t (cl-harness/src/project-summary:project-summary-dirty-p sum)))))
+
+(deftest patch-on-defun-leaves-project-summary-clean
+  (let ((dstate (cl-harness/src/state:make-develop-state
+                 :goal "g" :project-root "/tmp/p"
+                 :system "x" :test-system "x/tests"))
+        (sum (cl-harness/src/project-summary:make-project-summary
+              :project-root "/tmp/p/" :system "x"
+              :test-system "x/tests"))
+        (record (cl-harness/src/patch-record:make-patch-record
+                 :path "src/foo.lisp" :via-tool "lisp-edit-form"
+                 :form-type "defun" :form-name "bar"
+                 :turn 1)))
+    (cl-harness/src/state:develop-state-set-project-summary dstate sum)
+    (cl-harness/src/agent::%maybe-mark-summary-dirty dstate record)
+    (ok (null (cl-harness/src/project-summary:project-summary-dirty-p sum)))))
