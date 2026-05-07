@@ -23,7 +23,8 @@
                 #:develop-state-failure-ledger
                 #:develop-state-runtime-vocabulary
                 #:develop-state-repl-findings
-                #:develop-state-project-summary)
+                #:develop-state-project-summary
+                #:develop-state-step-results)
   (:import-from #:cl-harness/src/project-summary
                 #:project-summary-asd-files
                 #:project-summary-source-files
@@ -60,9 +61,18 @@
                 #:patch-record-form-name)
   (:import-from #:cl-harness/src/failure-ledger
                 #:failure-ledger-active
+                #:failure-ledger-resolved
                 #:failure-record-test-name
                 #:failure-record-description
-                #:failure-record-reason)
+                #:failure-record-reason
+                #:failure-record-resolved-by-patch)
+  (:import-from #:cl-harness/src/subtask-summary
+                #:summarise-step-result
+                #:subtask-summary-step-index
+                #:subtask-summary-test-name
+                #:subtask-summary-what-changed
+                #:subtask-summary-verification
+                #:subtask-summary-design-impact)
   (:export #:context-view
            #:make-context-view
            #:context-view-phase
@@ -80,6 +90,8 @@
            #:context-view-failure-context
            #:context-view-project-inventory
            #:context-view-project-summary
+           #:context-view-completed-subtask-summaries
+           #:context-view-recently-resolved-failures
            #:context-view->string
            #:+supported-phases+))
 
@@ -91,6 +103,11 @@
 defined. Mirrors a subset of docs/context-management.md §4.2:
 testing folds into implementation (cl-harness's run-agent runs
 both); integration is deferred to Phase E.")
+
+(defparameter +resolved-failures-context-limit+ 3
+  "How many recently-resolved failures the :IMPLEMENTATION view
+includes as regression watch entries. Configurable so a tuning pass
+can adjust without touching consumer code.")
 
 (defclass context-view ()
   ((phase :initarg :phase :reader context-view-phase
@@ -168,7 +185,20 @@ has no summary yet. Phase I (§3.3): structured cold-start project
 context with a dirty flag for staleness annotation. The formatter
 calls PROJECT-SUMMARY-DIRTY-P at render time to decide whether to
 prefix the section header with [STALE]; MAKE-CONTEXT-VIEW does not
-read the flag (Phase F render-time contract)."))
+read the flag (Phase F render-time contract).")
+   (completed-subtask-summaries
+    :initarg :completed-subtask-summaries :initform nil
+    :reader context-view-completed-subtask-summaries
+    :documentation "List of SUBTASK-SUMMARY records for prior
+completed (status :passed) steps, oldest-first. Populated for
+:IMPLEMENTATION; NIL for other phases. Derived at construction time
+via SUMMARISE-STEP-RESULT — Phase J §6.4 (Completed Subtasks).")
+   (recently-resolved-failures
+    :initarg :recently-resolved-failures :initform nil
+    :reader context-view-recently-resolved-failures
+    :documentation "Most-recent +RESOLVED-FAILURES-CONTEXT-LIMIT+
+resolved FAILURE-RECORDs, newest-first. Populated for :IMPLEMENTATION
+as regression watch — Phase J §6.5 (Resolved Failures references)."))
   (:documentation
    "A snapshot of DEVELOP-STATE filtered for one phase. Pure data;
 no behaviour beyond construction and the CONTEXT-VIEW->STRING
@@ -216,6 +246,31 @@ is NIL (no current step, no items match)."
 (defun %active-failures (state)
   (let ((ledger (develop-state-failure-ledger state)))
     (and ledger (failure-ledger-active ledger))))
+
+(defun %completed-subtask-summaries (state)
+  "Return SUBTASK-SUMMARY records for STATE's prior steps whose
+verification status is :PASSED, oldest-first. Returns NIL when
+STATE is NIL or has no passed steps. Filters AFTER summarising so
+context-view stays decoupled from the orchestrator package (which
+defines the underlying step-result class)."
+  (and state
+       (remove-if-not
+        (lambda (sum) (eq :passed (subtask-summary-verification sum)))
+        (mapcar (lambda (r) (summarise-step-result r state))
+                (develop-state-step-results state)))))
+
+(defun %recently-resolved-failures (state)
+  "Return up to +RESOLVED-FAILURES-CONTEXT-LIMIT+ most-recently
+resolved FAILURE-RECORDs from STATE's failure-ledger, newest-first.
+FAILURE-LEDGER-RESOLVED returns oldest-first; reversing yields
+newest-first. Returns NIL when STATE is NIL or no failures resolved."
+  (and state
+       (let* ((ledger (develop-state-failure-ledger state))
+              (all (and ledger (failure-ledger-resolved ledger))))
+         (and all
+              (subseq (reverse all) 0
+                      (min (length all)
+                           +resolved-failures-context-limit+))))))
 
 (defun make-context-view (state &key phase step prior-plan failure-context)
   "Build a CONTEXT-VIEW snapshot from STATE for PHASE. STEP is the
@@ -271,7 +326,11 @@ mutations do not propagate."
                                                state step-index)
                       :active-failures (%active-failures state)
                       :relevant-unpromoted-findings
-                      (%filter-unpromoted-findings state step-index))))))
+                      (%filter-unpromoted-findings state step-index)
+                      :completed-subtask-summaries
+                      (%completed-subtask-summaries state)
+                      :recently-resolved-failures
+                      (%recently-resolved-failures state))))))
 
 (defgeneric context-view->string (view phase)
   (:documentation
@@ -432,4 +491,30 @@ later phases that need it."
         (dolist (f findings)
           (format s "- ~A => ~A~%"
                   (repl-finding-hypothesis f)
-                  (repl-finding-decision f)))))))
+                  (repl-finding-decision f)))))
+    (let ((summaries (context-view-completed-subtask-summaries view)))
+      (when summaries
+        (format s "~%## Completed subtask summaries~%")
+        (dolist (sum summaries)
+          (format s "- step ~A (~A): ~(~A~)~%"
+                  (subtask-summary-step-index sum)
+                  (subtask-summary-test-name sum)
+                  (subtask-summary-verification sum))
+          (dolist (entry (subtask-summary-what-changed sum))
+            (format s "    - changed: ~A~%" entry))
+          (when (subtask-summary-design-impact sum)
+            (format s "    - design: ~A~%"
+                    (subtask-summary-design-impact sum))))))
+    (let ((resolved (context-view-recently-resolved-failures view)))
+      (when resolved
+        (format s "~%## Recently resolved failures (regression watch)~%")
+        (dolist (f resolved)
+          (format s "- ~A: ~A~A~%"
+                  (or (failure-record-test-name f) "(unnamed)")
+                  (failure-record-description f)
+                  (if (failure-record-resolved-by-patch f)
+                      (format nil " (resolved by patch on ~A)"
+                              (namestring
+                               (patch-record-path
+                                (failure-record-resolved-by-patch f))))
+                      "")))))))
