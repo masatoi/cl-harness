@@ -31,6 +31,7 @@
                "cl-harness/tests/bench-test"
                "cl-harness/tests/planner-test"
                "cl-harness/tests/orchestrator-test"
+               "cl-harness/tests/explore-test"
                "cl-harness/tests/compact-test"
                "cl-harness/tests/inventory-test"
                "cl-harness/tests/abstraction-test"

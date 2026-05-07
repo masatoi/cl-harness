@@ -41,8 +41,16 @@
                 #:agent-action-tool
                 #:agent-action-arguments
                 #:agent-action-summary
+                #:agent-action-hypothesis
+                #:agent-action-probe
+                #:agent-action-finding
+                #:agent-action-decision
                 #:action-parse-error
                 #:action-parse-error-message)
+  (:import-from #:cl-harness/src/repl-finding
+                #:make-repl-finding)
+  (:import-from #:cl-harness/src/state
+                #:develop-state-record-repl-finding)
   (:import-from #:cl-harness/src/policy
                 #:policy-allowed-tools
                 #:allowed-tool-p)
@@ -208,6 +216,20 @@ preserved verbatim."
          (text (subseq text 0 (min 600 (length text))))
          (t (with-output-to-string (s) (yason:encode result s))))))))
 
+(defun %record-finding-from-action (action develop-state)
+  "Persist a REPL-FINDING built from ACTION's :FINDING sub-fields onto
+DEVELOP-STATE. The action parser already validated the four required
+fields are non-empty strings (src/action.lisp). Returns the
+constructed finding, or NIL when DEVELOP-STATE is NIL."
+  (when develop-state
+    (let ((finding (make-repl-finding
+                    :hypothesis (agent-action-hypothesis action)
+                    :probe (agent-action-probe action)
+                    :finding (agent-action-finding action)
+                    :decision (agent-action-decision action))))
+      (develop-state-record-repl-finding develop-state finding)
+      finding)))
+
 (defun run-explore-agent (config provider mcp-client policy logger
                           &key (max-turns 8)
                                plan-step
@@ -285,6 +307,23 @@ that (3-6 sentence memo); MAX-TURNS just bounds the worst case."
                           (setf final-status :reported
                                 final-memo (or (agent-action-summary action) ""))
                           (return-from run-loop))
+                         (:finding
+                          (%record-finding-from-action action develop-state)
+                          (log-event logger :explore-finding
+                                     (alist-hash-table
+                                      `(("turn" . ,turn)
+                                        ("hypothesis"
+                                         . ,(agent-action-hypothesis action))
+                                        ("decision"
+                                         . ,(agent-action-decision action)))
+                                      :test 'equal))
+                          (setf messages
+                                (%append-message
+                                 messages "assistant" (or text "")))
+                          (setf messages
+                                (%append-message
+                                 messages "user"
+                                 "Finding recorded. Continue exploring or emit a finish action.")))
                          (:tool-call
                           (let ((tool (agent-action-tool action))
                                 (args (or (agent-action-arguments action)
