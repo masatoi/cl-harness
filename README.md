@@ -12,14 +12,22 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-**v0.5.0**. Adds the **context-management refactor** on top of
-the v0.4 development harness: every observation the agent loop
-gathers is now a typed record on a central `develop-state`, and
-every LLM-facing prompt is built from a phase-appropriate,
-compressed view of that state rather than from raw transcript
-history. 10 phases (A → J) + 4 follow-ups. Public CLI surface
-(`fix` / `bench` / `develop`) is unchanged; v0.5 additions are
-opt-in.
+**v0.5.1**. Patch release on top of v0.5.0's context-management
+refactor: dexador read-timeout 10s → 600s (so reasoning models like
+Qwen3.6 don't crash on the first planner LLM call), Phase G/H/I
+prompt-side wiring (LLM is now told about runtime introspection
+tools and the `finding` action shape; orchestrator auto-gathers
+project-summary on every `develop` run), live-verified end-to-end
+against Qwen/Qwen3.6-35B-A3B. See
+[docs/release-notes/v0.5.1.md](docs/release-notes/v0.5.1.md).
+
+v0.5.0 added the **context-management refactor**: every observation
+the agent loop gathers is now a typed record on a central
+`develop-state`, and every LLM-facing prompt is built from a
+phase-appropriate, compressed view of that state rather than from
+raw transcript history. 10 phases (A → J) + 4 follow-ups. Public
+CLI surface (`fix` / `bench` / `develop`) is unchanged; v0.5
+additions are opt-in.
 
 What's new since v0.4.0:
 
@@ -419,6 +427,9 @@ itself is developed under (REPL-driven, TDD-first).
 - `docs/context-management.md` — v0.5 requirements doc; §14
   implementation-status table maps every section to the phase
   that delivered it.
+- `docs/release-notes/v0.5.1.md` — v0.5.1 patch release (dexador
+  timeout fix + Phase G/H/I prompt enrichment, with live
+  verification numbers from Qwen/Qwen3.6-35B-A3B).
 - `docs/release-notes/v0.5.0.md` — v0.5 release notes (10 phases
   + 4 follow-ups, per-phase rationale, migration notes).
 - `docs/release-notes/v0.4.0.md` — v0.4 release notes (development
