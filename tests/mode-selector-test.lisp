@@ -117,10 +117,10 @@
   "Hand back PLAN unchanged on every planner call."
   (lambda (goal &key project-root system test-system provider
                      prior-plan failure-context system-prompt
-                     project-inventory mode)
+                     project-inventory mode develop-state)
     (declare (ignore goal project-root system test-system provider
                      prior-plan failure-context system-prompt
-                     project-inventory mode))
+                     project-inventory mode develop-state))
     plan))
 
 (defun %recording-runner ()

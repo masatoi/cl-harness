@@ -338,16 +338,63 @@ plan (so a stuck loop test can keep getting the same response)."
   (let ((remaining plans))
     (lambda (goal &key project-root system test-system provider
                        prior-plan failure-context system-prompt
-                       project-inventory mode)
+                       project-inventory mode develop-state)
       (declare (ignore goal project-root system test-system provider
                        prior-plan failure-context system-prompt
-                       project-inventory mode))
+                       project-inventory mode develop-state))
       (cond
         ((null remaining)
          (error "canned-planner exhausted"))
         ((null (cdr remaining))
          (car remaining))
         (t (pop remaining))))))
+
+(deftest develop-threads-develop-state-into-planner-fn
+  ;; Phase C wiring follow-up: %execute-plan must thread its
+  ;; develop-state through to planner-fn so the planner's user
+  ;; prompt is built via the :planning context-view formatter
+  ;; instead of the legacy ad-hoc string assembly. The test stub
+  ;; captures the develop-state it receives; the test asserts it
+  ;; is non-NIL on both the initial-plan call and the replan call.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-c-wire"))
+         (plan-1 (list (%make-step :index 0 :test-name "alpha"
+                                   :test-source "(deftest alpha (ok t))")))
+         (plan-2 (list (%make-step :index 0 :test-name "beta"
+                                   :test-source "(deftest beta (ok t))")))
+         (captured-states (cons '() nil))
+         (planner-fn
+          (let ((remaining (list plan-1 plan-2)))
+            (lambda (goal &key develop-state &allow-other-keys)
+              (declare (ignore goal))
+              (push develop-state (car captured-states))
+              (cond ((null remaining) (error "exhausted"))
+                    ((null (cdr remaining)) (car remaining))
+                    (t (pop remaining))))))
+         (outcomes (cons (list :give-up :passed) nil))
+         (runner (%fake-runner (cons '() nil) outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (develop "thread state through planner"
+                    :project-root (namestring project-root)
+                    :system "demo"
+                    :test-system "demo/tests"
+                    :test-file test-file
+                    :log-path log-path
+                    :planner-fn planner-fn
+                    :run-fn runner)
+           (let ((calls (reverse (car captured-states))))
+             (ok (= 2 (length calls)))
+             (ok (every (lambda (s)
+                          (typep s 'cl-harness/src/state:develop-state))
+                        calls))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
 
 (deftest develop-passes-on-first-attempt-when-plan-passes
   (let* ((project-root (uiop:temporary-directory))
