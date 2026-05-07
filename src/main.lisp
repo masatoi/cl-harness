@@ -23,7 +23,8 @@
                 #:bench
                 #:develop
                 #:format-develop-report
-                #:format-develop-report-markdown)
+                #:format-develop-report-markdown
+                #:format-develop-report-structured)
   (:import-from #:cl-harness/src/abstraction
                 #:abstraction-decision
                 #:abstraction-decision-kind
@@ -140,6 +141,7 @@
                 #:develop-step-result-abstraction-decisions
                 #:develop-result
                 #:develop-result-status
+                #:develop-result-develop-state
                 #:develop-result-final-plan
                 #:develop-result-step-results
                 #:develop-result-replan-count
@@ -196,6 +198,7 @@
            #:develop
            #:format-develop-report
            #:format-develop-report-markdown
+           #:format-develop-report-structured
            #:abstraction-decision
            #:abstraction-decision-kind
            #:abstraction-decision-name
@@ -291,6 +294,7 @@
            #:develop-step-result-abstraction-decisions
            #:develop-result
            #:develop-result-status
+           #:develop-result-develop-state
            #:develop-result-final-plan
            #:develop-result-step-results
            #:develop-result-replan-count

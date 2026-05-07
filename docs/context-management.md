@@ -725,7 +725,7 @@ clean runtimeで検証されたこと
 | B (runtime-vocabulary) | 構造化 packages / exports / classes / generic functions / conditions / ASDF systems (REPL introspection 経由) | not started | TBD |
 | C | `make-context-view` による phase/subtask ごとの圧縮 view 生成 (planning / exploration / implementation の 3 phase + planner / explore / agent prompt-builder への opt-in 配線) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-c-context-view.md` |
 | D | tool 結果圧縮 (run-tests / fs-read-file / lisp-read-file / clgrep-search 等の summarizer 強化) + `compact-history` の agent loop 配線 (per-LLM-call、閾値 `run-limits.max-context-tokens` 既定 50000) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-d-tool-result-compression.md` |
-| E | staleness 管理、構造化 reporting | not started | TBD |
+| E | 構造化 reporting (`format-develop-state-report` で develop-state 全 ledger を markdown 化) + `source-fact-stale-p` 述語 (staleness foundation) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-e-structured-reporting.md` |
 
 Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
 §3.9 (Verification) の保持先として機能する土台。Phase B は §3.5 (Source) /
@@ -747,7 +747,17 @@ Phase D は §6 (圧縮) のうち §6.1 (Tool 結果) と §6.3 (File content) 
 `step-turn` の `complete-chat` 直前で閾値超過時のみ起動する。
 §6.2 (REPL transcript → finding 化) は Phase B の `ADOPTED:/REJECTED:/
 DEFERRED:` マーカー parse (`parse-abstraction-decisions`) で部分カバー、
-完全な `(hypothesis probe finding decision)` 構造化は Phase E。
+完全な `(hypothesis probe finding decision)` 構造化は Phase F。
+
+Phase E は §10 (Reporting) を実装した — `format-develop-state-report`
+が `develop-state` から markdown レポートを生成し (sections: Goal /
+Plan / Completed steps / Patches applied / Active failures /
+Resolved failures / Integration issues / Source facts)、空セクションは
+elide される。CLI は新 `format-develop-report-structured` wrapper を
+opt-in で公開し、既存 `format-develop-report` を置き換えない。
+`source-fact-stale-p` 述語が staleness の foundation として導入され、
+レポート内では集計 (`N stale detected`) として消費される — context-view
+への filter 統合は Phase F に分離。
 §3.3 (Project) / §3.4 (Runtime Vocabulary) / §3.6 (Exploration) /
 §6.4 (完了 subtask summary) / §6.5 (resolved failures 参照) /
 §9 (Staleness) / §10 (Reporting) は後続 phase で実装する。

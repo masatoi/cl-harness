@@ -17,7 +17,8 @@
                 #:source-fact-read-at
                 #:source-fact-mtime-at-read
                 #:source-fact-related-step-index
-                #:source-fact-via-tool))
+                #:source-fact-via-tool
+                #:source-fact-stale-p))
 
 (in-package #:cl-harness/tests/source-fact-test)
 
@@ -67,3 +68,49 @@
                              :via-tool "lisp-read-file")))
     (ok (pathnamep (source-fact-path s)))
     (ok (equal #P"/tmp/demo/src/greet.lisp" (source-fact-path s)))))
+
+(deftest source-fact-stale-p-returns-nil-when-mtime-not-recorded
+  ;; When mtime-at-read is explicitly NIL (the recorder declined to
+  ;; stat at read time), there's no baseline to compare against.
+  ;; Predicate returns NIL — "no staleness signal".
+  (let ((s (make-source-fact :path "/tmp/cl-harness-stale-test.lisp"
+                             :via-tool "lisp-read-file"
+                             :mtime-at-read nil)))
+    (ok (null (source-fact-stale-p s)))))
+
+(deftest source-fact-stale-p-returns-nil-when-file-missing
+  ;; If the file no longer exists, file-write-date errors. The
+  ;; predicate must not propagate; it returns NIL (no baseline match
+  ;; → no signal). Phase F may upgrade to a dedicated :missing state.
+  (let ((s (make-source-fact :path "/tmp/cl-harness-stale-no-such-file.lisp"
+                             :via-tool "lisp-read-file"
+                             :mtime-at-read 100)))
+    (ok (null (source-fact-stale-p s)))))
+
+(deftest source-fact-stale-p-returns-t-when-file-newer
+  ;; Construct a fact with an old mtime, then write the file with a
+  ;; current timestamp; predicate should report stale.
+  (let ((path #P"/tmp/cl-harness-stale-newer.lisp"))
+    (with-open-file (out path :direction :output :if-exists :supersede
+                              :if-does-not-exist :create)
+      (write-string "(defun greet () 1)" out))
+    (unwind-protect
+         (let ((s (make-source-fact :path path
+                                    :via-tool "lisp-read-file"
+                                    :mtime-at-read 100)))
+           (ok (source-fact-stale-p s)))
+      (when (probe-file path) (delete-file path)))))
+
+(deftest source-fact-stale-p-returns-nil-when-mtime-equal
+  ;; Construct a fact whose recorded mtime EQUALS the current file's
+  ;; mtime. No staleness.
+  (let ((path #P"/tmp/cl-harness-stale-equal.lisp"))
+    (with-open-file (out path :direction :output :if-exists :supersede
+                              :if-does-not-exist :create)
+      (write-string "(defun greet () 1)" out))
+    (unwind-protect
+         (let ((s (make-source-fact :path path
+                                    :via-tool "lisp-read-file"
+                                    :mtime-at-read (file-write-date path))))
+           (ok (null (source-fact-stale-p s))))
+      (when (probe-file path) (delete-file path)))))

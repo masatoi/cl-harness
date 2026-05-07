@@ -30,7 +30,10 @@
                 #:develop-result-replan-count
                 #:develop-result-step-results
                 #:develop-result-limit-hit
-                #:develop-result-integration-issues)
+                #:develop-result-integration-issues
+                #:develop-result-develop-state)
+  (:import-from #:cl-harness/src/report
+                #:format-develop-state-report)
   (:import-from #:cl-harness/src/integration
                 #:format-integration-issues-markdown)
   (:import-from #:cl-harness/src/inventory
@@ -40,6 +43,7 @@
            #:develop
            #:format-develop-report
            #:format-develop-report-markdown
+           #:format-develop-report-structured
            #:not-implemented-error))
 
 (in-package #:cl-harness/src/cli)
@@ -233,6 +237,20 @@ mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
                     (format nil "~D issue(s)" (length issues))
                     "clean"))))
     (when log-path (format s "Develop log:      ~A~%" log-path))))
+
+(defun format-develop-report-structured (result)
+  "Render a DEVELOP-RESULT's underlying DEVELOP-STATE as a
+structured markdown report via CL-HARNESS/SRC/REPORT:
+FORMAT-DEVELOP-STATE-REPORT. Returns the report string when
+the result carries a non-NIL develop-state; returns NIL when
+the back-reference was not populated (legacy callers, test
+stubs).
+
+This is the opt-in path; the CLI's default report formatter
+(FORMAT-DEVELOP-REPORT) remains unchanged."
+  (let ((state (develop-result-develop-state result)))
+    (when state
+      (format-develop-state-report state))))
 
 (defun format-develop-report-markdown (result &key goal log-path)
   "Render DEVELOP-RESULT as a structured markdown report

@@ -25,6 +25,7 @@
                 #:develop-step-result-step-index
                 #:develop-step-result-explore-result
                 #:develop-result
+                #:develop-result-develop-state
                 #:develop-result-status
                 #:develop-result-step-results
                 #:develop-result-replan-count
@@ -731,3 +732,25 @@ plan (so a stuck loop test can keep getting the same response)."
                      "resolved record names step-one")))))
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest develop-result-develop-state-defaults-to-nil
+  ;; The new optional slot defaults to NIL for backward compat
+  ;; with constructors that don't pass it.
+  (let ((r (make-instance 'cl-harness/src/orchestrator:develop-result
+                          :status :passed
+                          :final-plan nil
+                          :step-results nil)))
+    (ok (null (cl-harness/src/orchestrator:develop-result-develop-state r)))))
+
+(deftest develop-result-develop-state-accepts-back-ref
+  ;; When the orchestrator constructs a develop-result, it now
+  ;; passes the in-memory develop-state via :develop-state.
+  (let* ((s (cl-harness/src/state:make-develop-state
+             :goal "g" :project-root "/tmp/" :system "demo"
+             :test-system "demo/tests"))
+         (r (make-instance 'cl-harness/src/orchestrator:develop-result
+                           :status :passed
+                           :final-plan nil
+                           :step-results nil
+                           :develop-state s)))
+    (ok (eq s (cl-harness/src/orchestrator:develop-result-develop-state r)))))
