@@ -98,6 +98,7 @@
            #:develop-result-step-results
            #:develop-result-replan-count
            #:develop-result-limit-hit
+           #:develop-result-develop-state
            #:develop-result-abstraction-ledger
            #:develop-result-integration-issues
            #:validate-test-source
@@ -550,7 +551,16 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
               :reader develop-result-limit-hit)
    (integration-issues :initarg :integration-issues
                        :initform nil
-                       :reader develop-result-integration-issues))
+                       :reader develop-result-integration-issues)
+   (develop-state :initarg :develop-state
+                  :initform nil
+                  :reader develop-result-develop-state
+                  :documentation "Optional back-reference to the
+DEVELOP-STATE that produced this result. Populated by the
+orchestrator's DEVELOP function for downstream consumers
+(structured reporting via FORMAT-DEVELOP-STATE-REPORT, etc.).
+NIL when the develop-result was constructed by something other
+than the orchestrator (e.g. unit-test stubs)."))
   (:documentation
    "Outcome of a DEVELOP run.
 STATUS is :PASSED on a fully-passing plan, :STUCK when the
@@ -798,4 +808,5 @@ MODE (v0.4 Phase 6) selects the development style:
                    :replan-count (develop-state-replan-count state)
                    :limit-hit (develop-state-limit-hit state)
                    :integration-issues
-                   (develop-state-integration-issues state))))
+                   (develop-state-integration-issues state)
+                   :develop-state state)))
