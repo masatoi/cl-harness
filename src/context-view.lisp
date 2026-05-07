@@ -20,7 +20,14 @@
                 #:develop-state-current-step-index
                 #:develop-state-source-facts
                 #:develop-state-patch-records
-                #:develop-state-failure-ledger)
+                #:develop-state-failure-ledger
+                #:develop-state-runtime-vocabulary)
+  (:import-from #:cl-harness/src/runtime-vocabulary
+                #:runtime-vocab-fact-kind
+                #:runtime-vocab-fact-name
+                #:runtime-vocab-fact-package
+                #:runtime-vocab-fact-related-step-index
+                #:runtime-vocab-fact-stale-p)
   (:import-from #:cl-harness/src/source-fact
                 #:source-fact-related-step-index
                 #:source-fact-path
@@ -51,6 +58,8 @@
            #:context-view-current-step
            #:context-view-current-plan
            #:context-view-relevant-source-facts
+           #:context-view-relevant-runtime-vocab
+           #:context-view-runtime-vocab
            #:context-view-relevant-patch-records
            #:context-view-active-failures
            #:context-view-prior-plan
@@ -112,7 +121,17 @@ mode (caller passes :prior-plan).")
                     :reader context-view-failure-context
                     :documentation "Human-readable failure summary
 from the failed prior round, or NIL on initial planning. Populated
-for :PLANNING in replan mode (caller passes :failure-context)."))
+for :PLANNING in replan mode (caller passes :failure-context).")
+   (relevant-runtime-vocab :initarg :relevant-runtime-vocab :initform nil
+                           :reader context-view-relevant-runtime-vocab
+                           :documentation "RUNTIME-VOCAB-FACTs filtered
+to the current step. Populated for :EXPLORATION.")
+   (runtime-vocab :initarg :runtime-vocab :initform nil
+                  :reader context-view-runtime-vocab
+                  :documentation "Full RUNTIME-VOCAB-FACT list — all
+observations across the run, oldest-first. Populated for :PLANNING
+so the planner sees what the agent has already probed (warm-start
+context). NIL when the develop-state has no runtime-vocabulary."))
   (:documentation
    "A snapshot of DEVELOP-STATE filtered for one phase. Pure data;
 no behaviour beyond construction and the CONTEXT-VIEW->STRING
@@ -138,6 +157,13 @@ is NIL (no current step, no items match)."
         (lambda (p) (%related-to-step-p p step-index
                                         #'patch-record-related-step-index))
         (develop-state-patch-records state))))
+
+(defun %filter-runtime-vocab (state step-index)
+  (and step-index
+       (remove-if-not
+        (lambda (f) (%related-to-step-p
+                     f step-index #'runtime-vocab-fact-related-step-index))
+        (develop-state-runtime-vocabulary state))))
 
 (defun %active-failures (state)
   (let ((ledger (develop-state-failure-ledger state)))
@@ -166,14 +192,19 @@ mutations do not propagate."
                       :current-plan (and state
                                          (develop-state-current-plan state))
                       :prior-plan prior-plan
-                      :failure-context failure-context))
+                      :failure-context failure-context
+                      :runtime-vocab (and state
+                                          (develop-state-runtime-vocabulary
+                                           state))))
       (:exploration
        (make-instance 'context-view
                       :phase :exploration
                       :goal (and state (develop-state-goal state))
                       :current-step step
                       :relevant-source-facts (%filter-source-facts
-                                              state step-index)))
+                                              state step-index)
+                      :relevant-runtime-vocab (%filter-runtime-vocab
+                                               state step-index)))
       (:implementation
        (make-instance 'context-view
                       :phase :implementation
@@ -217,7 +248,17 @@ current ad-hoc inventory + goal + replan block."
               (context-view-prior-plan view)))
     (when (context-view-failure-context view)
       (format s "~%## Prior failure context~%~A~%"
-              (context-view-failure-context view)))))
+              (context-view-failure-context view)))
+    (let ((vocab (context-view-runtime-vocab view)))
+      (when vocab
+        (format s "~%## Runtime vocabulary observed so far~%")
+        (dolist (fact vocab)
+          (format s "- [~(~A~)] ~A~A~%"
+                  (runtime-vocab-fact-kind fact)
+                  (if (runtime-vocab-fact-package fact)
+                      (format nil "~A:" (runtime-vocab-fact-package fact))
+                      "")
+                  (runtime-vocab-fact-name fact)))))))
 
 (defmethod context-view->string ((view context-view)
                                   (phase (eql :exploration)))
@@ -253,7 +294,18 @@ targets (if any), and a one-line summary of relevant source-facts
                       (format nil " :: ~A ~A"
                               (or (source-fact-form-type fact) "")
                               (source-fact-form-name fact))
-                      "")))))))
+                      "")))))
+    (let ((vocab (context-view-relevant-runtime-vocab view)))
+      (when vocab
+        (format s "~%## Runtime vocabulary probed in this step~%")
+        (dolist (fact vocab)
+          (format s "- ~A[~(~A~)] ~A~A~%"
+                  (if (runtime-vocab-fact-stale-p fact) "[STALE] " "")
+                  (runtime-vocab-fact-kind fact)
+                  (if (runtime-vocab-fact-package fact)
+                      (format nil "~A:" (runtime-vocab-fact-package fact))
+                      "")
+                  (runtime-vocab-fact-name fact)))))))
 
 (defmethod context-view->string ((view context-view)
                                   (phase (eql :implementation)))
