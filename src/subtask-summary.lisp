@@ -14,13 +14,11 @@
 
 (defpackage #:cl-harness/src/subtask-summary
   (:use #:cl)
-  ;; Note: we deliberately do NOT (:import-from
-  ;; #:cl-harness/src/orchestrator ...) here. ORCHESTRATOR depends
-  ;; (transitively, via EXPLORE) on CONTEXT-VIEW, and CONTEXT-VIEW
-  ;; imports SUBTASK-SUMMARY readers — declaring ORCHESTRATOR as a
-  ;; defpackage dep would close that cycle and break ASDF load.
-  ;; SUMMARISE-STEP-RESULT instead reads STEP-RESULT slots via
-  ;; SLOT-VALUE with slot-name symbols looked up at runtime.
+  (:import-from #:cl-harness/src/step-result
+                #:develop-step-result-step-index
+                #:develop-step-result-test-name
+                #:develop-step-result-status
+                #:develop-step-result-abstraction-decisions)
   (:import-from #:cl-harness/src/state
                 #:develop-state-patch-records)
   (:import-from #:cl-harness/src/patch-record
@@ -108,33 +106,22 @@ string."
           (abstraction-decision-kind decision)
           (abstraction-decision-name decision)))
 
-(defun %step-result-slot (step-result slot-name-string)
-  "Read SLOT-NAME-STRING (e.g. \"STEP-INDEX\") from STEP-RESULT.
-The slot-name symbol is looked up in CL-HARNESS/SRC/ORCHESTRATOR at
-call time; we avoid an :import-from on orchestrator to break a
-defpackage-level cycle (see this file's defpackage comment)."
-  (let ((sym (find-symbol slot-name-string '#:cl-harness/src/orchestrator)))
-    (unless sym
-      (error "subtask-summary: slot ~S not found in orchestrator package"
-             slot-name-string))
-    (slot-value step-result sym)))
-
 (defun summarise-step-result (step-result state)
   "Build a SUBTASK-SUMMARY from STEP-RESULT (a DEVELOP-STEP-RESULT)
 and STATE (a DEVELOP-STATE). What-changed is derived from STATE's
 patch-records filtered by step-index; tests-added is the step's own
 test-name; design-impact is the step's abstraction-decisions joined
 with '; '."
-  (let* ((step-index (%step-result-slot step-result "STEP-INDEX"))
-         (test-name (or (%step-result-slot step-result "TEST-NAME")
+  (let* ((step-index (develop-step-result-step-index step-result))
+         (test-name (or (develop-step-result-test-name step-result)
                         "(no test name)"))
-         (status (%step-result-slot step-result "STATUS"))
+         (status (develop-step-result-status step-result))
          (patches
            (remove-if-not
             (lambda (p)
               (eql step-index (patch-record-related-step-index p)))
             (develop-state-patch-records state)))
-         (decisions (%step-result-slot step-result "ABSTRACTION-DECISIONS")))
+         (decisions (develop-step-result-abstraction-decisions step-result)))
     (make-subtask-summary
      :step-index step-index
      :test-name test-name
