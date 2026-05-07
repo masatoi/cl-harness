@@ -1130,3 +1130,46 @@ order. Helper for tests that assert against the on-disk transcript."
           "context-view :implementation Current step heading present")
       (ok (and content (search "[IMPLEMENTATION-MARKER]" content))
           "plan-step issue text appears in user prompt"))))
+
+(deftest maybe-compact-messages-fires-over-threshold
+  ;; Phase D.2: when the messages list's approximate token estimate
+  ;; exceeds RUN-LIMITS-MAX-CONTEXT-TOKENS, %MAYBE-COMPACT-MESSAGES
+  ;; returns the compacted form (shorter than input).
+  (let* ((messages (loop for i from 0 below 200
+                         collect (cl-harness/src/model:make-chat-message
+                                  "user"
+                                  (format nil "padding message ~A xxxxxxx" i))))
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 1
+                                :max-tool-calls 1
+                                :max-patches 1
+                                :max-read-files 1
+                                :max-repl-evals 1
+                                :max-wall-clock-seconds 1
+                                :max-action-parse-errors 1
+                                :max-context-tokens 1000))
+         (result (cl-harness/src/agent::%maybe-compact-messages
+                  messages limits)))
+    (ok (< (length result) (length messages)))))
+
+(deftest maybe-compact-messages-skips-under-threshold
+  ;; Phase D.2: under the threshold, %MAYBE-COMPACT-MESSAGES returns
+  ;; the original list verbatim — no compaction overhead, no behavior
+  ;; change for short conversations.
+  (let* ((messages (loop for i from 0 below 5
+                         collect (cl-harness/src/model:make-chat-message
+                                  "user" (format nil "msg ~A" i))))
+         (limits (make-default-limits))
+         (result (cl-harness/src/agent::%maybe-compact-messages
+                  messages limits)))
+    (ok (eql (length result) (length messages)))
+    (ok (equal messages result))))
+
+(deftest maybe-compact-messages-handles-nil-limits
+  ;; Phase D.2: a NIL run-limits (defensive guard) short-circuits the
+  ;; helper and returns MESSAGES unchanged. Same identity, no copy.
+  (let ((messages (loop for i from 0 below 5
+                        collect (cl-harness/src/model:make-chat-message
+                                 "user" (format nil "m ~A" i)))))
+    (ok (eq messages
+            (cl-harness/src/agent::%maybe-compact-messages messages nil)))))

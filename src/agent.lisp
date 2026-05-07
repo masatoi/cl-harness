@@ -33,7 +33,11 @@
                 #:run-limits-max-read-files
                 #:run-limits-max-repl-evals
                 #:run-limits-max-wall-clock-seconds
-                #:run-limits-max-action-parse-errors)
+                #:run-limits-max-action-parse-errors
+                #:run-limits-max-context-tokens)
+  (:import-from #:cl-harness/src/compact
+                #:compact-history
+                #:approximate-history-tokens)
   (:import-from #:local-time
                 #:now
                 #:timestamp-difference)
@@ -894,6 +898,27 @@ step since no real patch was applied."
                                  nil nil nil)))))))
              (t (values next nil nil nil)))))))))
 
+(defun %maybe-compact-messages (messages run-limits)
+  "When the approximate token estimate of MESSAGES exceeds
+RUN-LIMITS-MAX-CONTEXT-TOKENS, return the result of COMPACT-HISTORY;
+otherwise return MESSAGES unchanged. Returns MESSAGES unchanged when
+RUN-LIMITS is NIL.
+
+The threshold is approximate (chars/4 heuristic via
+APPROXIMATE-HISTORY-TOKENS); fine-grained accuracy is not the goal —
+keeping the context window from blowing during long agent runs is.
+
+The compaction is per-call and does not mutate MESSAGES. Callers pass
+the compacted result to COMPLETE-CHAT; the agent loop's own message
+threading is left alone so the JSONL transcript still records the full
+conversation."
+  (let ((threshold (and run-limits
+                        (run-limits-max-context-tokens run-limits))))
+    (if (and threshold
+             (> (approximate-history-tokens messages) threshold))
+        (compact-history messages)
+        messages)))
+
 (defun step-turn (turn state config provider mcp-client policy logger messages
                   &key dry-run-p)
   "Run one turn of the agent loop.
@@ -901,7 +926,10 @@ step since no real patch was applied."
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
 the loop should continue, otherwise a terminal status keyword
 (:PASSED / :GIVE-UP)."
-  (let* ((chat (complete-chat provider messages))
+  (let* ((effective-messages
+          (%maybe-compact-messages messages
+                                   (run-config-limits config)))
+         (chat (complete-chat provider effective-messages))
          (text (chat-response-content chat)))
     (incf (agent-state-token-total state)
           (or (chat-response-total-tokens chat) 0))
