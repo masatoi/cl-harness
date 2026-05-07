@@ -256,3 +256,92 @@
                                  :step (%step :index 0))))
     (ok (not (search "Active failures" (context-view->string
                                         v :implementation))))))
+
+(deftest exploration-formatter-renders-stale-prefix-on-stale-fact
+  ;; Construct a temp file, record a source-fact with an OLDER baseline
+  ;; mtime, then generate the :exploration view and verify the bullet
+  ;; for that fact has the [STALE] prefix.
+  (let* ((path #P"/tmp/cl-harness-cv-stale-test.lisp")
+         (s (%state)))
+    (with-open-file (out path :direction :output :if-exists :supersede
+                              :if-does-not-exist :create)
+      (write-string "(defun greet () 1)" out))
+    (unwind-protect
+         (progn
+           (cl-harness/src/state:develop-state-record-source-fact
+            s (cl-harness/src/source-fact:make-source-fact
+               :path path
+               :via-tool "lisp-read-file"
+               :related-step-index 0
+               :mtime-at-read 100))
+           (let* ((v (make-context-view s :phase :exploration
+                                          :step (%step :index 0)))
+                  (out-str (context-view->string v :exploration)))
+             (ok (search "[STALE]" out-str))
+             (ok (search (namestring path) out-str))))
+      (when (probe-file path) (delete-file path)))))
+
+(deftest exploration-formatter-omits-stale-prefix-on-fresh-fact
+  ;; Construct a temp file, record a source-fact whose mtime-at-read
+  ;; equals the current file mtime (fresh); verify [STALE] is absent.
+  (let* ((path #P"/tmp/cl-harness-cv-fresh-test.lisp")
+         (s (%state)))
+    (with-open-file (out path :direction :output :if-exists :supersede
+                              :if-does-not-exist :create)
+      (write-string "(defun greet () 1)" out))
+    (unwind-protect
+         (progn
+           (cl-harness/src/state:develop-state-record-source-fact
+            s (cl-harness/src/source-fact:make-source-fact
+               :path path
+               :via-tool "lisp-read-file"
+               :related-step-index 0
+               :mtime-at-read (file-write-date path)))
+           (let* ((v (make-context-view s :phase :exploration
+                                          :step (%step :index 0)))
+                  (out-str (context-view->string v :exploration)))
+             (ok (search (namestring path) out-str))
+             (ok (not (search "[STALE]" out-str)))))
+      (when (probe-file path) (delete-file path)))))
+
+(deftest exploration-formatter-renders-mixed-stale-and-fresh
+  ;; Two facts on different files: one stale, one fresh. Both render,
+  ;; but only the stale one has the [STALE] prefix.
+  (let* ((stale-path #P"/tmp/cl-harness-cv-mix-stale.lisp")
+         (fresh-path #P"/tmp/cl-harness-cv-mix-fresh.lisp")
+         (s (%state)))
+    (with-open-file (out stale-path :direction :output :if-exists :supersede
+                                    :if-does-not-exist :create)
+      (write-string "(defun a () 1)" out))
+    (with-open-file (out fresh-path :direction :output :if-exists :supersede
+                                    :if-does-not-exist :create)
+      (write-string "(defun b () 2)" out))
+    (unwind-protect
+         (progn
+           (cl-harness/src/state:develop-state-record-source-fact
+            s (cl-harness/src/source-fact:make-source-fact
+               :path stale-path :via-tool "lisp-read-file"
+               :related-step-index 0
+               :mtime-at-read 100))
+           (cl-harness/src/state:develop-state-record-source-fact
+            s (cl-harness/src/source-fact:make-source-fact
+               :path fresh-path :via-tool "lisp-read-file"
+               :related-step-index 0
+               :mtime-at-read (file-write-date fresh-path)))
+           (let* ((v (make-context-view s :phase :exploration
+                                          :step (%step :index 0)))
+                  (out-str (context-view->string v :exploration)))
+             ;; Stale fact gets the prefix; fresh fact does not.
+             (ok (search (format nil "[STALE] ~A" (namestring stale-path))
+                         out-str))
+             (ok (search (namestring fresh-path) out-str))
+             ;; The fresh fact's bullet should not be preceded by [STALE]
+             ;; (within ~10 chars of its path occurrence).
+             (let ((fresh-pos (search (namestring fresh-path) out-str)))
+               (ok (or (not fresh-pos)
+                       (not (search "[STALE]"
+                                    (subseq out-str
+                                            (max 0 (- fresh-pos 10))
+                                            fresh-pos))))))))
+      (when (probe-file stale-path) (delete-file stale-path))
+      (when (probe-file fresh-path) (delete-file fresh-path)))))
