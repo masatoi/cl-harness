@@ -12,8 +12,7 @@
                 #:make-develop-state
                 #:develop-state-record-step-result
                 #:develop-state-record-patch-record
-                #:develop-state-record-failure
-                #:develop-state-current-step-index)
+                #:develop-state-record-failure)
   (:import-from #:cl-harness/src/orchestrator
                 #:develop-step-result)
   (:import-from #:cl-harness/src/planner

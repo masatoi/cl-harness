@@ -18,7 +18,6 @@
                 #:develop-step-result-test-name
                 #:develop-step-result-status)
   (:import-from #:cl-harness/src/state
-                #:develop-state
                 #:develop-state-goal
                 #:develop-state-current-plan
                 #:develop-state-step-results
@@ -75,7 +74,7 @@ description is always emitted."
     (when plan
       (%render-section-header stream "Plan")
       (loop for step in plan
-            for i from 0
+            for i from 1
             do (format stream "~D. ~A — ~A~%"
                        i
                        (or (plan-step-test-name step) "(no test name)")

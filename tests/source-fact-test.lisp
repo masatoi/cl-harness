@@ -90,7 +90,7 @@
 (deftest source-fact-stale-p-returns-t-when-file-newer
   ;; Construct a fact with an old mtime, then write the file with a
   ;; current timestamp; predicate should report stale.
-  (let* ((path #P"/tmp/cl-harness-stale-newer.lisp"))
+  (let ((path #P"/tmp/cl-harness-stale-newer.lisp"))
     (with-open-file (out path :direction :output :if-exists :supersede
                               :if-does-not-exist :create)
       (write-string "(defun greet () 1)" out))
@@ -104,7 +104,7 @@
 (deftest source-fact-stale-p-returns-nil-when-mtime-equal
   ;; Construct a fact whose recorded mtime EQUALS the current file's
   ;; mtime. No staleness.
-  (let* ((path #P"/tmp/cl-harness-stale-equal.lisp"))
+  (let ((path #P"/tmp/cl-harness-stale-equal.lisp"))
     (with-open-file (out path :direction :output :if-exists :supersede
                               :if-does-not-exist :create)
       (write-string "(defun greet () 1)" out))
