@@ -216,20 +216,27 @@ Best-effort: never raises."
             (error () nil)))))))
 
 (defun %vocab-facts-from-tool-result (tool result &key related-step-index)
-  "List variant: code-find returns a {\"results\": [...]} shape.
-Returns a list of facts (possibly empty); never raises. Falls back to
-%VOCAB-FACT-FROM-TOOL-RESULT when the result has no list section."
+  "Plural variant. CODE-FIND returns a {\"results\": [...]} shape;
+CODE-DESCRIBE returns a flat hash-table with no \"results\" key.
+Returns a list of facts (possibly empty); never raises.
+
+Detects shape via the second return value of GETHASH so that an
+ABSENT \"results\" key falls through to single-fact extraction on
+the outer hash (CODE-DESCRIBE path), while a PRESENT \"results\"
+key with an empty list iterates zero entries (CODE-FIND on no
+matches)."
   (when (and (hash-table-p result)
              (not (gethash "isError" result)))
-    (let ((entries (gethash "results" result)))
+    (multiple-value-bind (entries present-p) (gethash "results" result)
       (cond
-        ((listp entries)
-         (loop for entry in entries
-               for fact = (and (hash-table-p entry)
-                               (%vocab-fact-from-tool-result
-                                tool entry
-                                :related-step-index related-step-index))
-               when fact collect fact))
+        (present-p
+         (when (listp entries)
+           (loop for entry in entries
+                 for fact = (and (hash-table-p entry)
+                                 (%vocab-fact-from-tool-result
+                                  tool entry
+                                  :related-step-index related-step-index))
+                 when fact collect fact)))
         (t
          (let ((single (%vocab-fact-from-tool-result
                         tool result

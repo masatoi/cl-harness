@@ -864,10 +864,10 @@ orchestrator` の load-time 循環を生むことが判明したため、
 
 これで context-management refactor の `docs/context-management.md`
 で identify した sections (§3.1-3.9 / §4 / §5 / §6 / §8 / §9 /
-§10) は **すべて MVP 実装が landed** した。残るのは Phase G の
-`%vocab-facts-from-tool-result` input shape bug (yason の vector
-parsing と不整合) と `develop-step-result` 切り出しの 2 つの
-クリーンアップ phase のみ。
+§10) は **すべて MVP 実装が landed** した。残るのは
+`develop-step-result` 切り出しの 1 つのクリーンアップ phase のみ
+(Phase J Task 2 で導入した `find-symbol` + `slot-value` の runtime
+解決を compile-time import に戻すリファクタ)。
 
 Phase C wiring follow-up (landed 2026-05-08): 上記の §14 表外と
 して個別行を起こさず、Phase C 行と本パラグラフを参照。具体的には
@@ -883,3 +883,19 @@ planner-fn callback 用に保持)。section 順序は legacy と微妙に
 同じ。`develop-threads-develop-state-into-planner-fn` deftest が
 両 call site で `develop-state` インスタンスが渡されていることを
 assert する。
+
+Vocab-facts shape fix (landed 2026-05-08): Phase G の
+`%vocab-facts-from-tool-result` (`src/agent.lisp`) が「`code-describe`
+の result には `"results"` キーが無い」場合に空リストを返してしまう
+バグを修正。原因は `(gethash "results" result)` が NIL を返した時に
+`(listp NIL)` が T になり、`t` フォールバック branch (単発 fact 抽出
+を outer hash に対して実行) が unreachable だったこと (Phase J 当時
+の merge commit メッセージは「yason vector parsing」と記述したが
+これは誤診; 検証の結果 yason は JSON array を list として返す)。
+修正は `gethash` の 2 値返却 `present-p` で **キー有無** を判定する
+形に変更: `:results` キー有 → イテレート、無 → outer に対する単発
+fact 抽出にフォールバック。これで `code-describe` 経由の runtime-
+vocab 観測も production で実際に記録されるようになった。テスト
+`agent-records-runtime-vocab-fact-on-code-describe-via-plural-helper`
+と `agent-records-runtime-vocab-empty-results-yields-no-facts` が
+2 つの分岐を assert する。

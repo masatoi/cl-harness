@@ -1073,6 +1073,42 @@ order. Helper for tests that assert against the on-disk transcript."
             (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-kind
              (second facts))))))
 
+(deftest agent-records-runtime-vocab-fact-on-code-describe-via-plural-helper
+  ;; %vocab-facts-from-tool-result is the plural helper called by the
+  ;; agent loop's recorder integration. code-describe results have NO
+  ;; "results" key, so the helper must fall back to single-fact
+  ;; extraction on the outer hash. Pre-fix this returned nil because
+  ;; (listp NIL) wrongly classified an absent key as an empty list.
+  (let* ((result (alexandria:plist-hash-table
+                  (list "kind" "function"
+                        "name" "foo"
+                        "package" "CL-USER")
+                  :test 'equal))
+         (facts (cl-harness/src/agent::%vocab-facts-from-tool-result
+                 "code-describe" result)))
+    (ok (= 1 (length facts)))
+    (ok (eq :function
+            (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-kind
+             (first facts))))
+    (ok (string= "foo"
+                 (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-name
+                  (first facts))))))
+
+(deftest agent-records-runtime-vocab-empty-results-yields-no-facts
+  ;; code-find with no matches returns {"results": []}. The helper
+  ;; must distinguish "key present, list empty" (iterate zero
+  ;; entries, return nil) from "key absent" (fall back to outer
+  ;; single-fact). With a present-but-empty results list AND no
+  ;; outer kind/name, the answer is correctly the empty list — NOT
+  ;; a spurious fall-through that would try to coerce the outer
+  ;; hash into a fact.
+  (let* ((result (alexandria:plist-hash-table
+                  (list "results" '())
+                  :test 'equal))
+         (facts (cl-harness/src/agent::%vocab-facts-from-tool-result
+                 "code-find" result)))
+    (ok (null facts))))
+
 (deftest record-source-fact-threads-current-step-index
   ;; Drive run-agent with a develop-state whose CURRENT-STEP-INDEX is
   ;; pre-set; the recorder for source-facts must persist that index on
