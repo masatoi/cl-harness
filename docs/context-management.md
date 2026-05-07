@@ -722,11 +722,11 @@ clean runtimeで検証されたこと
 |---|---|---|---|
 | A | 中央 `develop-state` クラスの導入と `develop` の thread 化 | landed (2026-05-06) | `docs/plans/2026-05-06-phase-a-develop-state.md` |
 | B (source/patch/failure) | `source-fact` / `patch-record` / `failure-ledger` の追加とインストルメント | landed (2026-05-07) | `docs/plans/2026-05-07-phase-b-source-patch-failure.md` |
-| B (runtime-vocabulary) | 構造化 packages / exports / classes / generic functions / conditions / ASDF systems (REPL introspection 経由) | not started | TBD |
 | C | `make-context-view` による phase/subtask ごとの圧縮 view 生成 (planning / exploration / implementation の 3 phase + planner / explore / agent prompt-builder への opt-in 配線) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-c-context-view.md` |
 | D | tool 結果圧縮 (run-tests / fs-read-file / lisp-read-file / clgrep-search 等の summarizer 強化) + `compact-history` の agent loop 配線 (per-LLM-call、閾値 `run-limits.max-context-tokens` 既定 50000) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-d-tool-result-compression.md` |
 | E | 構造化 reporting (`format-develop-state-report` で develop-state 全 ledger を markdown 化) + `source-fact-stale-p` 述語 (staleness foundation) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-e-structured-reporting.md` |
 | F | `source-fact-stale-p` の context-view 配線 (`:exploration` formatter で `[STALE]` prefix を render-time 付与) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-f-staleness-annotation.md` |
+| G | runtime-vocabulary ledger (`runtime-vocab-fact` + `develop-state-runtime-vocabulary`); agent loop が `code-find` / `code-describe` / `code-find-references` 結果から best-effort 抽出して push、`:exploration` view は `[STALE] [kind] PKG:name` で render-time 注釈、`:planning` view は warm-start vocabulary summary を `project-inventory` テキストと併存表示 | landed (2026-05-07) | `docs/plans/2026-05-07-phase-g-runtime-vocabulary.md` |
 
 Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
 §3.9 (Verification) の保持先として機能する土台。Phase B は §3.5 (Source) /
@@ -765,9 +765,21 @@ Phase F は §9 (Staleness) を source-fact について実装した —
 評価し、stale な fact のパス先頭に `[STALE]` prefix を付与する
 (annotate-not-filter 方針)。`make-context-view` 構築時には
 staleness を判定せず、`:implementation` formatter は意図的に
-変更していない (resolution は別 ledger で扱う)。runtime-vocabulary
-の staleness は Phase B' / G で同じパターンを適用する。
-§3.3 (Project) / §3.4 (Runtime Vocabulary) / §3.6 (Exploration) /
+変更していない (resolution は別 ledger で扱う)。
+
+Phase G は §3.4 (Runtime Vocabulary) を実装した — `runtime-vocab-fact`
+record (kind / name / package / source-file / summary / via-tool /
+probed-at / related-step-index) + `develop-state-runtime-vocabulary`
+slot + `runtime-vocab-fact-stale-p` 述語を導入し、agent loop が
+`code-find` / `code-describe` / `code-find-references` の tool 結果を
+best-effort で観測駆動で push する (malformed result は無音 skip、
+`%vocab-kind-from-string` は `find-symbol` 経由で keyword pollution を
+回避)。`:exploration` view は Phase F 同パターンで `[STALE] [kind]
+PKG:name` を render-time 注釈、`:planning` view は run 全体で観測した
+warm-start vocabulary summary を既存の `project-inventory` テキストと
+併存させる。受動的な REPL 出力パースや能動的な image-walking は別
+phase に分離。
+§3.3 (Project) / §3.6 (Exploration finding 構造化) /
 §6.4 (完了 subtask summary) / §6.5 (resolved failures 参照) は
 後続 phase で実装する。
 
