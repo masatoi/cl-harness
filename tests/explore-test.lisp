@@ -9,7 +9,8 @@
                 #:repl-finding-hypothesis
                 #:repl-finding-probe
                 #:repl-finding-finding
-                #:repl-finding-decision)
+                #:repl-finding-decision
+                #:repl-finding-related-step-index)
   (:import-from #:cl-harness/src/state
                 #:make-develop-state
                 #:develop-state-repl-findings))
@@ -35,7 +36,7 @@
 (deftest record-finding-from-action-persists-on-develop-state
   (let ((action (%make-finding-action))
         (state (%make-state)))
-    (cl-harness/src/explore::%record-finding-from-action action state)
+    (cl-harness/src/explore::%record-finding-from-action action state nil)
     (let ((findings (develop-state-repl-findings state)))
       (ok (= 1 (length findings)))
       (let ((f (first findings)))
@@ -53,7 +54,7 @@
   (let* ((action (%make-finding-action))
          (state (%make-state))
          (returned (cl-harness/src/explore::%record-finding-from-action
-                    action state)))
+                    action state nil)))
     (ok (typep returned 'repl-finding))
     (ok (eq returned (first (develop-state-repl-findings state))))))
 
@@ -62,4 +63,25 @@
   ;; NIL and signals nothing. The action is still well-formed.
   (let ((action (%make-finding-action)))
     (ok (null (cl-harness/src/explore::%record-finding-from-action
-               action nil)))))
+               action nil nil)))))
+
+(deftest record-finding-from-action-threads-step-index-from-plan-step
+  (let* ((state (cl-harness/src/state:make-develop-state
+                 :goal "g" :project-root "/tmp/p"
+                 :system "x" :test-system "x/tests"))
+         (step (make-instance 'cl-harness/src/planner:plan-step
+                              :index 7
+                              :test-name "t"
+                              :test-source "(deftest t)"
+                              :issue "explore"))
+         (action (make-instance 'cl-harness/src/action:agent-action
+                                :type :finding
+                                :hypothesis "h"
+                                :probe "p"
+                                :finding "f"
+                                :decision "d"))
+         (finding (cl-harness/src/explore::%record-finding-from-action
+                   action state step)))
+    (ok (eql 7 (repl-finding-related-step-index finding)))
+    (ok (eql 7 (repl-finding-related-step-index
+                (first (develop-state-repl-findings state)))))))
