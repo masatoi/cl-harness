@@ -24,7 +24,8 @@
                 #:make-failure-record)
   (:import-from #:cl-harness/src/report
                 #:summarise-completed-step
-                #:summarise-failure-record))
+                #:summarise-failure-record
+                #:format-develop-state-report))
 
 (in-package #:cl-harness/tests/report-test)
 
@@ -73,3 +74,76 @@
          (s (summarise-failure-record f)))
     (ok (search "load-failed" s))
     (ok (search "package error" s))))
+
+(defun %report (state)
+  (cl-harness/src/report:format-develop-state-report state))
+
+(deftest format-develop-state-report-includes-goal
+  (let ((s (make-develop-state :goal "implement greet"
+                               :project-root "/tmp/" :system "demo"
+                               :test-system "demo/tests")))
+    (let ((out (%report s)))
+      (ok (search "# Goal" out))
+      (ok (search "implement greet" out)))))
+
+(deftest format-develop-state-report-renders-completed-steps
+  (let ((s (make-develop-state :goal "g"
+                               :project-root "/tmp/" :system "demo"
+                               :test-system "demo/tests")))
+    (develop-state-record-step-result s (%step-result :step-index 0
+                                                      :status :passed))
+    (develop-state-record-step-result s (%step-result :step-index 1
+                                                      :status :give-up))
+    (let ((out (%report s)))
+      (ok (search "## Completed steps" out))
+      (ok (search "step 0" out))
+      (ok (search "step 1" out)))))
+
+(deftest format-develop-state-report-renders-patches
+  (let ((s (make-develop-state :goal "g"
+                               :project-root "/tmp/" :system "demo"
+                               :test-system "demo/tests")))
+    (develop-state-record-patch-record
+     s (make-patch-record :path "/tmp/x.lisp"
+                          :via-tool "lisp-edit-form"
+                          :form-name "greet"
+                          :turn 1))
+    (let ((out (%report s)))
+      (ok (search "## Patches applied" out))
+      (ok (search "x.lisp" out))
+      (ok (search "lisp-edit-form" out)))))
+
+(deftest format-develop-state-report-omits-empty-sections
+  ;; A pristine state with no steps / patches / failures should
+  ;; emit Goal, but skip the per-ledger sections.
+  (let ((s (make-develop-state :goal "g"
+                               :project-root "/tmp/" :system "demo"
+                               :test-system "demo/tests")))
+    (let ((out (%report s)))
+      (ok (search "# Goal" out))
+      (ok (not (search "## Patches applied" out)))
+      (ok (not (search "## Active failures" out)))
+      (ok (not (search "## Resolved failures" out))))))
+
+(deftest format-develop-state-report-renders-active-failures
+  (let ((s (make-develop-state :goal "g"
+                               :project-root "/tmp/" :system "demo"
+                               :test-system "demo/tests")))
+    (develop-state-record-failure
+     s (make-failure-record :kind :test-failed
+                            :description "greet wrong"
+                            :test-name "greet-returns-hello"
+                            :verify-source :incremental))
+    (let ((out (%report s)))
+      (ok (search "## Active failures" out))
+      (ok (search "greet-returns-hello" out)))))
+
+(deftest format-develop-state-report-supports-stream-arg
+  (let ((s (make-develop-state :goal "g"
+                               :project-root "/tmp/" :system "demo"
+                               :test-system "demo/tests")))
+    (let ((written
+            (with-output-to-string (out)
+              (cl-harness/src/report:format-develop-state-report
+               s :stream out))))
+      (ok (search "# Goal" written)))))
