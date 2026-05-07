@@ -1505,3 +1505,16 @@ success result with one text content block."
     (cl-harness/src/state:develop-state-set-project-summary dstate sum)
     (cl-harness/src/agent::%maybe-mark-summary-dirty dstate record)
     (ok (null (cl-harness/src/project-summary:project-summary-dirty-p sum)))))
+
+(deftest runtime-native-system-prompt-encourages-code-introspection
+  ;; Phase G prompt enrichment: the runtime-native system prompt
+  ;; should explicitly call out code-find / code-describe /
+  ;; code-find-references as the probe-of-choice for vocabulary
+  ;; questions, so the LLM populates the runtime-vocabulary ledger
+  ;; in production.
+  (let* ((policy (make-tool-policy :runtime-native))
+         (prompt (cl-harness/src/agent::system-prompt policy)))
+    (ok (search "code-find" prompt))
+    (ok (search "code-describe" prompt))
+    (ok (search "code-find-references" prompt))
+    (ok (search "vocabulary" prompt))))

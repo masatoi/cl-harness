@@ -85,3 +85,23 @@
     (ok (eql 7 (repl-finding-related-step-index finding)))
     (ok (eql 7 (repl-finding-related-step-index
                 (first (develop-state-repl-findings state)))))))
+
+(deftest explore-system-prompt-lists-finding-action
+  ;; Phase H prompt enrichment: the explore prompt must list the
+  ;; finding action shape alongside tool_call / finish so the LLM
+  ;; can emit structured (hypothesis probe finding decision)
+  ;; tuples.
+  (let ((prompt (cl-harness/src/explore:explore-system-prompt
+                 (cl-harness/src/policy:make-tool-policy :explore))))
+    (ok (search "\"type\":\"finding\"" prompt))
+    (ok (search "hypothesis" prompt))
+    (ok (search "probe" prompt))
+    (ok (search "decision" prompt))))
+
+(deftest explore-system-prompt-explains-when-to-emit-finding
+  ;; A weaker readability assertion: the prompt should give a hint
+  ;; about WHEN to emit a finding (not just what its shape is).
+  (let ((prompt (cl-harness/src/explore:explore-system-prompt
+                 (cl-harness/src/policy:make-tool-policy :explore))))
+    (ok (search "REPL" prompt))
+    (ok (search "promote" prompt))))

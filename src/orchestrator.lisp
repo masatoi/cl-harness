@@ -62,7 +62,10 @@
                 #:develop-state-record-failure
                 #:develop-state-failure-ledger
                 #:develop-state-patch-records
-                #:develop-state-repl-findings)
+                #:develop-state-repl-findings
+                #:develop-state-set-project-summary)
+  (:import-from #:cl-harness/src/project-summary
+                #:gather-project-summary)
   (:import-from #:cl-harness/src/failure-ledger
                 #:parse-failure-records-from-test-result
                 #:failure-ledger-active
@@ -718,6 +721,18 @@ MODE (v0.4 Phase 6) selects the development style:
                                    :run-limits run-limits
                                    :project-inventory project-inventory
                                    :mode mode)))
+    ;; Phase I auto-gather: populate the structured project-summary
+    ;; slot from disk so the :planning view sees it alongside the
+    ;; legacy project-inventory text. Best-effort -- a malformed
+    ;; project tree returns NIL and the develop loop continues with
+    ;; the inventory text alone.
+    (handler-case
+        (develop-state-set-project-summary
+         state
+         (gather-project-summary :project-root project-root
+                                 :system system
+                                 :test-system test-system))
+      (error () nil))
     (setf (develop-state-current-plan state)
           (%apply-mode-to-plan
            ;; Phase C wiring (active since the Phase C wiring follow-up):

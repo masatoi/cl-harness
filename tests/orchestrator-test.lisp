@@ -396,6 +396,40 @@ plan (so a stuck loop test can keep getting the same response)."
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 
+(deftest develop-auto-gathers-project-summary
+  ;; Phase I auto-gather: cl-harness:develop should populate
+  ;; develop-state-project-summary by calling gather-project-summary
+  ;; against the live project-root, so the :planning view sees the
+  ;; structured summary alongside the existing project-inventory text.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-i-gather"))
+         (plan-1 (list (%make-step :index 0 :test-name "alpha"
+                                   :test-source "(deftest alpha (ok t))")))
+         (planner-fn (%canned-planner (list plan-1)))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner (cons '() nil) outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let* ((result (develop "auto-gather smoke"
+                                   :project-root (namestring project-root)
+                                   :system "demo"
+                                   :test-system "demo/tests"
+                                   :test-file test-file
+                                   :log-path log-path
+                                   :planner-fn planner-fn
+                                   :run-fn runner))
+                  (state (cl-harness/src/orchestrator:develop-result-develop-state
+                          result)))
+             (ok (cl-harness/src/state:develop-state-project-summary state)
+                 "develop populated project-summary slot via gather-project-summary")))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
 (deftest develop-passes-on-first-attempt-when-plan-passes
   (let* ((project-root (uiop:temporary-directory))
          (test-file (merge-pathnames

@@ -913,3 +913,26 @@ qualified で書いていた既存 caller (`src/cli.lisp` /
 これにより slot 名 typo は compile-time エラーとして surface する
 ようになり、Phase J Task 2 で reviewer が懸念した "static safety
 の欠如" が解消した。public API 不変、テスト数も不変。
+
+Phase G/H/I prompt enrichment follow-up (landed 2026-05-08):
+v0.5.0 のライブ verification (Qwen/Qwen3.6-35B-A3B) で発覚した
+3 つの「machinery は実装済だが production で exercise されない」
+ギャップを解消した。
+- **Phase G** prompt: agent system prompt の `:runtime-native` mode に
+  `code-find` / `code-describe` / `code-find-references` を vocabulary
+  probe の第一選択として推奨する段落を追記。"vocabulary"
+  keyword + 3 つの tool 名を含む。
+- **Phase H** prompt: explore system prompt の action schema に
+  `{"type":"finding","hypothesis":..,"probe":..,"finding":..,"decision":..}`
+  shape を追加し、Workflow rule 2 と 3 の間に「probe で hypothesis を
+  確認した時点で finding を emit すべし」の段落を挿入。"REPL success"
+  → "shipped behaviour" の promote semantics も明示。
+- **Phase I** wiring: `cl-harness/src/orchestrator:develop` が
+  `make-develop-state` 直後に `gather-project-summary` を best-effort
+  (`handler-case (... (error () nil))`) で呼び、
+  `develop-state-set-project-summary` で slot を populate する。
+  これで `:planning` view が legacy inventory text と structured
+  summary を併記する。
+
+prompt-only 変更が中心なので unit test は keyword 含有のみ assert
+(4 deftests 追加: 357 → 361)。実 LLM 動作は manual verify。
