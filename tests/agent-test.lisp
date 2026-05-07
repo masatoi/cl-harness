@@ -29,14 +29,20 @@
   (:import-from #:cl-harness/src/state
                 #:make-develop-state
                 #:develop-state-patch-records
-                #:develop-state-source-facts)
+                #:develop-state-source-facts
+                #:develop-state-runtime-vocabulary
+                #:develop-state-current-step-index)
   (:import-from #:cl-harness/src/patch-record
                 #:patch-record-path
                 #:patch-record-via-tool
-                #:patch-record-verify-status)
+                #:patch-record-verify-status
+                #:patch-record-related-step-index)
   (:import-from #:cl-harness/src/source-fact
                 #:source-fact-path
-                #:source-fact-via-tool)
+                #:source-fact-via-tool
+                #:source-fact-related-step-index)
+  (:import-from #:cl-harness/src/runtime-vocabulary
+                #:runtime-vocab-fact-related-step-index)
   (:import-from #:cl-harness/src/planner
                 #:plan-step
                 #:investigation-target)
@@ -1066,6 +1072,121 @@ order. Helper for tests that assert against the on-disk transcript."
     (ok (eq :class
             (cl-harness/src/runtime-vocabulary:runtime-vocab-fact-kind
              (second facts))))))
+
+(deftest record-source-fact-threads-current-step-index
+  ;; Drive run-agent with a develop-state whose CURRENT-STEP-INDEX is
+  ;; pre-set; the recorder for source-facts must persist that index on
+  ;; the resulting SOURCE-FACT (instead of the previously hard-coded
+  ;; NIL).
+  (let ((ds (make-develop-state
+             :goal "g"
+             :project-root "/tmp/cl-harness-step-idx-source/"
+             :system "demo"
+             :test-system "demo/tests"))
+        (*llm-responses*
+         (list "{\"type\":\"tool_call\",\"tool\":\"lisp-read-file\",\"arguments\":{\"path\":\"src/foo.lisp\",\"name_pattern\":\"^bar$\"},\"thought\":\"read foo\"}"
+               "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"done\"}"))
+        (*mcp-handler*
+         (lambda (body)
+           (let ((id (%jsonrpc-id body)))
+             (cond
+               ((search "\"fs-set-project-root\"" body)
+                (%ok-tool-result id))
+               ((search "\"load-system\"" body)
+                (%ok-tool-result id))
+               ((search "\"run-tests\"" body)
+                (%ok-tool-result id :passed 0 :failed 1))
+               ((search "\"lisp-read-file\"" body)
+                (%ok-tool-result id))
+               ((search "\"pool-kill-worker\"" body)
+                (%ok-tool-result id))
+               (t (error "unexpected MCP body: ~A" body))))))
+        (mcp (%make-mcp-client-with-handler))
+        (provider (%make-stub-provider))
+        (policy (make-tool-policy :generic-mcp))
+        (path (%temp-log-path)))
+    (setf (develop-state-current-step-index ds) 7)
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (run-agent (%make-config) provider mcp policy logger
+                      :develop-state ds)
+           (close-run-logger logger))
+      (when (probe-file path) (delete-file path)))
+    (let ((facts (develop-state-source-facts ds)))
+      (ok (= 1 (length facts)))
+      (ok (eql 7 (source-fact-related-step-index (first facts)))))))
+
+(deftest record-runtime-vocab-threads-current-step-index
+  ;; Drive the runtime-vocab recorder helper directly with a hand-built
+  ;; list-shaped result and a develop-state whose CURRENT-STEP-INDEX is
+  ;; pre-set; the helper must persist that index on every recorded
+  ;; RUNTIME-VOCAB-FACT (instead of the previously hard-coded NIL).
+  (let* ((ds (make-develop-state
+              :goal "g"
+              :project-root "/tmp/cl-harness-step-idx-vocab/"
+              :system "demo"
+              :test-system "demo/tests"))
+         (state (cl-harness/src/agent::%make-agent-state-for-tests
+                 :develop-state ds))
+         (result (alexandria:plist-hash-table
+                  (list "results"
+                        (list (alexandria:plist-hash-table
+                               (list "kind" "function"
+                                     "name" "foo"
+                                     "package" "CL-USER")
+                               :test 'equal)))
+                  :test 'equal)))
+    (setf (develop-state-current-step-index ds) 4)
+    (cl-harness/src/agent::%record-runtime-vocab-from-tool-call
+     "code-find" result state)
+    (let ((facts (develop-state-runtime-vocabulary ds)))
+      (ok (= 1 (length facts)))
+      (ok (eql 4 (runtime-vocab-fact-related-step-index (first facts)))))))
+
+(deftest record-patch-record-threads-current-step-index
+  ;; Drive run-agent with a develop-state whose CURRENT-STEP-INDEX is
+  ;; pre-set; the recorder for patch-records must persist that index on
+  ;; the resulting PATCH-RECORD (instead of NIL).
+  (let* ((ds (make-develop-state
+              :goal "g"
+              :project-root "/tmp/cl-harness-step-idx-patch/"
+              :system "demo"
+              :test-system "demo/tests"))
+         (run-tests-count 0)
+         (*llm-responses*
+          (list "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"operation\":\"replace\",\"content\":\"(defun f () 2)\"},\"thought\":\"replace f\"}"))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body)
+                 (%ok-tool-result id))
+                ((search "\"load-system\"" body)
+                 (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (incf run-tests-count)
+                 (if (= run-tests-count 1)
+                     (%ok-tool-result id :passed 0 :failed 1)
+                     (%ok-tool-result id :passed 4 :failed 0)))
+                ((search "\"lisp-edit-form\"" body)
+                 (%ok-tool-result id))
+                ((search "\"pool-kill-worker\"" body)
+                 (%ok-tool-result id))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (path (%temp-log-path)))
+    (setf (develop-state-current-step-index ds) 9)
+    (unwind-protect
+         (let ((logger (open-run-logger path)))
+           (run-agent (%make-config) provider mcp policy logger
+                      :develop-state ds)
+           (close-run-logger logger))
+      (when (probe-file path) (delete-file path)))
+    (let ((records (develop-state-patch-records ds)))
+      (ok (= 1 (length records)))
+      (ok (eql 9 (patch-record-related-step-index (first records)))))))
 
 (deftest run-explore-agent-uses-context-view-when-develop-state-supplied
   ;; Phase C.7 wiring: when :develop-state is passed, the initial user
