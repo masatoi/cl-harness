@@ -261,8 +261,8 @@
   ;; Construct a temp file, record a source-fact with an OLDER baseline
   ;; mtime, then generate the :exploration view and verify the bullet
   ;; for that fact has the [STALE] prefix.
-  (let* ((path #P"/tmp/cl-harness-cv-stale-test.lisp")
-         (s (%state)))
+  (let ((path #P"/tmp/cl-harness-cv-stale-test.lisp")
+        (s (%state)))
     (with-open-file (out path :direction :output :if-exists :supersede
                               :if-does-not-exist :create)
       (write-string "(defun greet () 1)" out))
@@ -284,8 +284,8 @@
 (deftest exploration-formatter-omits-stale-prefix-on-fresh-fact
   ;; Construct a temp file, record a source-fact whose mtime-at-read
   ;; equals the current file mtime (fresh); verify [STALE] is absent.
-  (let* ((path #P"/tmp/cl-harness-cv-fresh-test.lisp")
-         (s (%state)))
+  (let ((path #P"/tmp/cl-harness-cv-fresh-test.lisp")
+        (s (%state)))
     (with-open-file (out path :direction :output :if-exists :supersede
                               :if-does-not-exist :create)
       (write-string "(defun greet () 1)" out))
@@ -307,9 +307,9 @@
 (deftest exploration-formatter-renders-mixed-stale-and-fresh
   ;; Two facts on different files: one stale, one fresh. Both render,
   ;; but only the stale one has the [STALE] prefix.
-  (let* ((stale-path #P"/tmp/cl-harness-cv-mix-stale.lisp")
-         (fresh-path #P"/tmp/cl-harness-cv-mix-fresh.lisp")
-         (s (%state)))
+  (let ((stale-path #P"/tmp/cl-harness-cv-mix-stale.lisp")
+        (fresh-path #P"/tmp/cl-harness-cv-mix-fresh.lisp")
+        (s (%state)))
     (with-open-file (out stale-path :direction :output :if-exists :supersede
                                     :if-does-not-exist :create)
       (write-string "(defun a () 1)" out))
