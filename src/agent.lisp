@@ -235,6 +235,26 @@ Returns a list of facts (possibly empty); never raises. Falls back to
                         :related-step-index related-step-index)))
            (and single (list single))))))))
 
+(defun %record-runtime-vocab-from-tool-call (tool result state)
+  "If STATE has a develop-state and the tool call returned a non-error
+result on a runtime-introspection tool, persist any
+RUNTIME-VOCAB-FACTs extracted from RESULT bound to the develop-state's
+current step-index. Returns the list of persisted facts (possibly
+NIL)."
+  (let ((develop-state (agent-state-develop-state state)))
+    (when (and develop-state
+               (not (and (gethash "isError" result) t))
+               (member tool '("code-describe" "code-find"
+                              "code-find-references")
+                       :test #'string=))
+      (let ((facts (%vocab-facts-from-tool-result
+                    tool result
+                    :related-step-index
+                    (develop-state-current-step-index develop-state))))
+        (dolist (fact facts)
+          (develop-state-record-runtime-vocab-fact develop-state fact))
+        facts))))
+
 (defparameter +read-file-tools+
   '("fs-read-file"
     "lisp-read-file"
@@ -931,9 +951,10 @@ step since no real patch was applied."
                       (format nil "Tool ~A result:~%~A"
                               tool (summarize-tool-result tool result)))))
            ;; Record a SOURCE-FACT on the develop-level ledger for any
-           ;; successful read-style tool call. Step-index threading is
-           ;; deferred (no agent-state-step-index slot today); pass NIL
-           ;; until a follow-up wires plan-step context through here.
+           ;; successful read-style tool call. The fact carries the
+           ;; develop-state's current step-index so per-step context
+           ;; views (Phase C/F) can filter to facts read in the active
+           ;; step.
            (when (and (agent-state-develop-state state)
                       (not (and (gethash "isError" result) t))
                       (member tool '("lisp-read-file" "fs-read-file"
@@ -953,20 +974,14 @@ step since no real patch was applied."
                                    (gethash "form_type" arguments))
                    :form-name (and (hash-table-p arguments)
                                    (gethash "form_name" arguments))
-                   :related-step-index nil)))))
+                   :related-step-index
+                   (develop-state-current-step-index
+                    (agent-state-develop-state state)))))))
            ;; Record runtime-vocab-facts on the develop-level ledger
-           ;; for any successful runtime-introspection tool call. Step
-           ;; index threading deferred (mirrors source-fact recorder).
-           (when (and (agent-state-develop-state state)
-                      (not (and (gethash "isError" result) t))
-                      (member tool '("code-describe" "code-find"
-                                     "code-find-references")
-                              :test #'string=))
-             (let ((facts (%vocab-facts-from-tool-result
-                           tool result :related-step-index nil)))
-               (dolist (fact facts)
-                 (develop-state-record-runtime-vocab-fact
-                  (agent-state-develop-state state) fact))))
+           ;; for any successful runtime-introspection tool call. The
+           ;; recorded facts carry the develop-state's current
+           ;; step-index so per-step context views can find them.
+           (%record-runtime-vocab-from-tool-call tool result state)
            (cond
              ((member tool +source-mutating-tools+ :test #'equal)
               (incf (agent-state-patch-attempts state))
@@ -1005,7 +1020,9 @@ step since no real patch was applied."
                            :diff-summary
                            (when (and diff (plusp (length diff)))
                              (subseq diff 0 (min 500 (length diff))))
-                           :related-step-index nil
+                           :related-step-index
+                           (develop-state-current-step-index
+                            (agent-state-develop-state state))
                            :turn turn))))))
                  (let ((v (verify-task mcp-client config)))
                    (log-event logger :verify (verify-event-payload turn v))
