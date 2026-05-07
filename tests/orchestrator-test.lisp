@@ -33,7 +33,9 @@
                 #:materialize-test-source
                 #:plan-step->run-config
                 #:execute-plan
-                #:develop))
+                #:develop)
+  (:import-from #:cl-harness/src/state
+                #:make-develop-state))
 
 (in-package #:cl-harness/tests/orchestrator-test)
 
@@ -163,8 +165,9 @@ gethash and stop on non-:passed."
 supplied, is a cons-cell whose CAR is appended with each call so a
 test can verify the explorer was invoked with the right plan-step."
   (lambda (config provider mcp-client policy logger
-           &key max-turns plan-step)
-    (declare (ignore config provider mcp-client policy logger max-turns))
+           &key max-turns plan-step develop-state &allow-other-keys)
+    (declare (ignore config provider mcp-client policy logger max-turns
+                     develop-state))
     (when log (push plan-step (car log)))
     (let ((memo (or (pop (car memos))
                     "memo: investigated nothing in particular.")))
@@ -565,6 +568,64 @@ plan (so a stuck loop test can keep getting the same response)."
                (ok (search "package X already exists" seen-issue))
                (ok (search "## Task" seen-issue))
                (ok (search "Implement feature X" seen-issue)))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest execute-plan-threads-develop-state-into-explore-fn
+  ;; Phase C.7 wiring: when EXECUTE-PLAN is invoked with a
+  ;; :develop-state, %execute-step must thread that state into the
+  ;; explore-fn callback so the explorer can render the user prompt
+  ;; via the :exploration formatter. The explorer fixture below
+  ;; captures the develop-state it received; the test asserts it
+  ;; matches the develop-state the test passed in.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-thread-state"))
+         (steps (list (make-instance
+                       'plan-step
+                       :index 0
+                       :issue "Implement feature Y."
+                       :test-name "y-test"
+                       :test-source "(deftest y-test (ok t))"
+                       :files-to-modify nil
+                       :needs-exploration :lightweight)))
+         (state (make-develop-state
+                 :goal "g"
+                 :project-root (namestring project-root)
+                 :system "demo"
+                 :test-system "demo/tests"))
+         (call-log (cons '() nil))
+         (captured-state (cons nil nil))
+         (runner (%fake-runner call-log (cons (list :passed) nil)))
+         (explorer
+          (lambda (config provider mcp-client policy logger
+                   &key plan-step develop-state &allow-other-keys)
+            (declare (ignore config provider mcp-client policy logger
+                             plan-step))
+            (setf (car captured-state) develop-state)
+            (make-instance 'cl-harness/src/explore:explore-result
+                           :status :reported
+                           :memo "memo: ok"
+                           :turns 1
+                           :token-total 50))))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (execute-plan
+            steps
+            :project-root (namestring project-root)
+            :system "demo"
+            :test-system "demo/tests"
+            :test-file test-file
+            :log-path log-path
+            :run-fn runner
+            :explore-fn explorer
+            :develop-state state)
+           (ok (eq state (car captured-state))
+               "explore-fn received the develop-state passed to execute-plan"))
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 

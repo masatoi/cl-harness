@@ -144,8 +144,9 @@ plan steps directly, not the runner's view of them."
   "Explore-fn that records the plan-steps it gets called with into LOG
 (a cons cell) and returns a stub explore-result."
   (lambda (config provider mcp-client policy logger
-           &key max-turns plan-step)
-    (declare (ignore config provider mcp-client policy logger max-turns))
+           &key max-turns plan-step develop-state &allow-other-keys)
+    (declare (ignore config provider mcp-client policy logger max-turns
+                     develop-state))
     (push plan-step (car log))
     (make-instance 'cl-harness/src/explore:explore-result
                    :status :reported :memo memo :turns 1 :token-total 0)))

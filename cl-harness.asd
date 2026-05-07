@@ -40,7 +40,8 @@
                "cl-harness/tests/state-test"
                "cl-harness/tests/source-fact-test"
                "cl-harness/tests/patch-record-test"
-               "cl-harness/tests/failure-ledger-test")
+               "cl-harness/tests/failure-ledger-test"
+               "cl-harness/tests/context-view-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages

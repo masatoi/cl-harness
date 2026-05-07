@@ -53,6 +53,9 @@
                 #:investigation-target-kind
                 #:investigation-target-name
                 #:investigation-target-intent)
+  (:import-from #:cl-harness/src/context-view
+                #:make-context-view
+                #:context-view->string)
   (:export #:explore-result
            #:explore-result-status
            #:explore-result-memo
@@ -135,10 +138,19 @@ expectation (lightweight vs deep)."
     (dolist (tool (policy-allowed-tools policy))
       (format s "  - ~A~%" tool))))
 
-(defun %initial-explore-user-prompt (config plan-step)
+(defun %initial-explore-user-prompt (config plan-step &key develop-state)
   "Build the first user-side message for the explore loop. Includes
 the issue (so the explorer knows the WHY) and any planner-supplied
-investigation_targets."
+investigation_targets.
+
+DEVELOP-STATE (v0.4 Phase C) is the opt-in wiring entry point.
+When non-NIL, the issue + investigation-targets section is
+rendered via `cl-harness/src/context-view:context-view->string'
+:exploration instead of the legacy ad-hoc string assembly. The
+project-root / system / test-system orientation block and the
+trailing instruction line remain unchanged. When NIL (standalone
+callers, test stubs without a develop-state), the legacy path is
+preserved verbatim."
   (with-output-to-string (s)
     (format s "Project root: ~A~%"
             (run-config-project-root config))
@@ -146,12 +158,24 @@ investigation_targets."
       (format s "System: ~A~%" (run-config-system config)))
     (when (run-config-test-system config)
       (format s "Test system: ~A~%" (run-config-test-system config)))
-    (when plan-step
-      (format s "~%Issue (the implement step that follows you):~%~A~%"
-              (plan-step-issue plan-step)))
-    (let ((targets-text (%format-targets plan-step)))
-      (when targets-text
-        (format s "~%~A" targets-text)))
+    (cond
+      (develop-state
+       ;; Phase C.7 wiring: render the current step's issue +
+       ;; investigation-targets via the :exploration formatter.
+       (format s "~%~A"
+               (context-view->string
+                (make-context-view develop-state
+                                   :phase :exploration
+                                   :step plan-step)
+                :exploration)))
+      (t
+       ;; Legacy path: preserved unchanged for standalone callers.
+       (when plan-step
+         (format s "~%Issue (the implement step that follows you):~%~A~%"
+                 (plan-step-issue plan-step)))
+       (let ((targets-text (%format-targets plan-step)))
+         (when targets-text
+           (format s "~%~A" targets-text)))))
     (format s "~%Begin exploration. End with a finish action whose summary is the memo.~%")))
 
 (defun %append-message (messages role content)
@@ -186,7 +210,8 @@ investigation_targets."
 
 (defun run-explore-agent (config provider mcp-client policy logger
                           &key (max-turns 8)
-                               plan-step)
+                               plan-step
+                               develop-state)
   "Run a read-only exploration loop and return an EXPLORE-RESULT.
 
 CONFIG is a RUN-CONFIG (used only for project-root / system /
@@ -203,6 +228,14 @@ parallel with the implement loop's events.
 PLAN-STEP, when supplied, is consulted for INVESTIGATION-TARGETS
 to seed the initial user prompt, and for the issue paragraph to
 explain WHY the exploration is happening.
+
+DEVELOP-STATE (v0.4 Phase C) is an opt-in wiring kwarg. When
+non-NIL, the initial user prompt's issue + investigation-targets
+section is rendered via
+`cl-harness/src/context-view:context-view->string' :exploration
+instead of the legacy ad-hoc string assembly. Standalone callers
+(test stubs, external callers without a develop-state) leave it
+NIL and keep the v0.4.0 behavior unchanged.
 
 MAX-TURNS caps the loop. The agent is asked to finish well before
 that (3-6 sentence memo); MAX-TURNS just bounds the worst case."
@@ -226,7 +259,8 @@ that (3-6 sentence memo); MAX-TURNS just bounds the worst case."
                         (alist-hash-table
                          `(("role" . "user")
                            ("content" . ,(%initial-explore-user-prompt
-                                          config plan-step)))
+                                          config plan-step
+                                          :develop-state develop-state)))
                          :test 'equal)))
         (token-total 0)
         (final-status :limit-exhausted)

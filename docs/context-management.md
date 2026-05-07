@@ -723,14 +723,28 @@ clean runtimeで検証されたこと
 | A | 中央 `develop-state` クラスの導入と `develop` の thread 化 | landed (2026-05-06) | `docs/plans/2026-05-06-phase-a-develop-state.md` |
 | B (source/patch/failure) | `source-fact` / `patch-record` / `failure-ledger` の追加とインストルメント | landed (2026-05-07) | `docs/plans/2026-05-07-phase-b-source-patch-failure.md` |
 | B (runtime-vocabulary) | 構造化 packages / exports / classes / generic functions / conditions / ASDF systems (REPL introspection 経由) | not started | TBD |
-| C | `make-context-view` による phase/subtask ごとの圧縮 view 生成 | not started | TBD |
+| C | `make-context-view` による phase/subtask ごとの圧縮 view 生成 (planning / exploration / implementation の 3 phase + planner / explore / agent prompt-builder への opt-in 配線) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-c-context-view.md` |
 | D | tool 結果圧縮、REPL transcript の finding 化 | not started | TBD |
 | E | staleness 管理、構造化 reporting | not started | TBD |
 
 Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
 §3.9 (Verification) の保持先として機能する土台。Phase B は §3.5 (Source) /
 §3.8 (Patch) / §3.9 + §8 (Failure ledger active/resolved) を加え、agent loop /
-orchestrator から自動記録するインストルメントを設置した。Phase B は
-**記録のみ**で、記録した状態を消費する圧縮 view 生成は Phase C 以降で扱う。
-§3.3 (Project) / §3.4 (Runtime Vocabulary) / §3.6 (Exploration) / §4 / §5 / §6 /
-§9 / §10 は後続 phase で実装する。
+orchestrator から自動記録するインストルメントを設置した。Phase C は §4
+(Global / Phase / Turn 階層) / §5 (Context View 生成) を 3 phase 分
+(planning / exploration / implementation) 実装し、3 つの prompt-builder
+(planner / explore / agent) に **opt-in で配線**した — 既存の
+ad-hoc 文字列組み立てを残しつつ、`:develop-state` kwarg が渡された場合のみ
+新経路を使う設計で、`cl-harness:fix` の standalone path への影響をゼロにした。
+testing phase は implementation と同じ run-agent loop で扱われるため
+`:implementation` formatter に折り込んだ。
+§3.3 (Project) / §3.4 (Runtime Vocabulary) / §3.6 (Exploration) / §6 (圧縮) /
+§9 (Staleness) / §10 (Reporting) は後続 phase で実装する。
+
+**注**: Phase C は orchestrator → planner-fn の `:develop-state` 配線を
+意図的に保留している。`plan-development` は kwarg を受け付けるものの、
+`develop` のループは現状 kwarg を渡していないため、`:planning` formatter
+は test 経由でのみ exercise される。develop-state を planner-fn に流すと
+プロンプトの section 順序が変わる（mode-nudge が prior-plan / failure-
+context の後ろに移動する）ため、後続 phase で実モデルに対して検証した上で
+有効化する。
