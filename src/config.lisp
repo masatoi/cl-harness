@@ -47,7 +47,7 @@ Resets to zero on any successful PARSE-ACTION.")
     :initform 50000
     :reader run-limits-max-context-tokens
     :documentation "Approximate token budget for the agent loop's
-message history. When the running estimate of CHAT-TOKENS in MESSAGES
+message history. When the running estimate of APPROXIMATE-HISTORY-TOKENS over MESSAGES
 exceeds this, the agent calls COMPACT-HISTORY before the next
 COMPLETE-CHAT call. The threshold is approximate (chars / 4 heuristic);
 fine-grained accuracy is not required because the goal is keeping the
