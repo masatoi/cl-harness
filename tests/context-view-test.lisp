@@ -582,3 +582,138 @@
          (str (cl-harness/src/context-view:context-view->string
                view :planning)))
     (ok (null (search "Project summary" str)))))
+
+(deftest implementation-formatter-renders-completed-subtask-summaries
+  ;; Build develop-state with one completed step + a patch on that
+  ;; step + a current step. :implementation view should include
+  ;; "## Completed subtask summaries" with one bullet for the prior
+  ;; step (we only render a step when it appears in step-results
+  ;; AND status :passed).
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests"))
+        (prior-step (make-instance 'cl-harness/src/planner:plan-step
+                                   :index 0 :test-name "first-test"
+                                   :test-source "(deftest first-test)"
+                                   :issue "first thing"))
+        (current-step (make-instance 'cl-harness/src/planner:plan-step
+                                     :index 1 :test-name "current-test"
+                                     :test-source "(deftest current-test)"
+                                     :issue "current thing"))
+        (prior-result (make-instance
+                       'cl-harness/src/orchestrator:develop-step-result
+                       :step-index 0 :test-name "first-test"
+                       :run-config nil :status :passed))
+        (patch (cl-harness/src/patch-record:make-patch-record
+                :path "src/foo.lisp" :via-tool "lisp-edit-form"
+                :form-type "defun" :form-name "bar"
+                :related-step-index 0 :turn 1)))
+    (cl-harness/src/state:develop-state-record-step-result s prior-result)
+    (cl-harness/src/state:develop-state-record-patch-record s patch)
+    (setf (cl-harness/src/state:develop-state-current-plan s)
+          (list prior-step current-step))
+    (setf (cl-harness/src/state:develop-state-current-step-index s) 1)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :implementation :step current-step))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :implementation)))
+      (ok (search "Completed subtask summaries" str))
+      (ok (search "step 0" str))
+      (ok (search "first-test" str))
+      (ok (search "src/foo.lisp" str)))))
+
+(deftest implementation-formatter-omits-summaries-when-no-prior-steps
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests"))
+        (current-step (make-instance 'cl-harness/src/planner:plan-step
+                                     :index 0 :test-name "t"
+                                     :test-source "(deftest t)"
+                                     :issue "x")))
+    (setf (cl-harness/src/state:develop-state-current-plan s)
+          (list current-step))
+    (setf (cl-harness/src/state:develop-state-current-step-index s) 0)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :implementation :step current-step))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :implementation)))
+      (ok (null (search "Completed subtask summaries" str))))))
+
+(deftest implementation-formatter-renders-recently-resolved-failures
+  ;; Build develop-state, push one failure-record onto the ledger,
+  ;; mark it resolved, build the :implementation view, assert
+  ;; "Recently resolved failures (regression watch)" appears.
+  (let* ((s (cl-harness/src/state:make-develop-state
+             :goal "g" :project-root "/tmp/p"
+             :system "x" :test-system "x/tests"))
+         (current-step (make-instance 'cl-harness/src/planner:plan-step
+                                      :index 0 :test-name "t"
+                                      :test-source "(deftest t)"
+                                      :issue "x"))
+         (failure (cl-harness/src/failure-ledger:make-failure-record
+                   :kind :test-failed :description "reduced segfault"
+                   :test-name "reduces-segfault"
+                   :verify-source :incremental))
+         (ledger (cl-harness/src/state:develop-state-failure-ledger s)))
+    (cl-harness/src/failure-ledger:record-failure ledger failure)
+    (cl-harness/src/failure-ledger:mark-resolved-by ledger failure)
+    (setf (cl-harness/src/state:develop-state-current-plan s)
+          (list current-step))
+    (setf (cl-harness/src/state:develop-state-current-step-index s) 0)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :implementation :step current-step))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :implementation)))
+      (ok (search "Recently resolved failures" str))
+      (ok (search "reduces-segfault" str)))))
+
+(deftest implementation-formatter-caps-resolved-failures-at-limit
+  ;; Push 5 resolved failures. Default limit is 3; only the 3 most
+  ;; recent should appear.
+  (let* ((s (cl-harness/src/state:make-develop-state
+             :goal "g" :project-root "/tmp/p"
+             :system "x" :test-system "x/tests"))
+         (current-step (make-instance 'cl-harness/src/planner:plan-step
+                                      :index 0 :test-name "t"
+                                      :test-source "(deftest t)"
+                                      :issue "x"))
+         (ledger (cl-harness/src/state:develop-state-failure-ledger s)))
+    (loop for i from 1 to 5
+          for f = (cl-harness/src/failure-ledger:make-failure-record
+                   :kind :test-failed
+                   :description (format nil "failure ~D" i)
+                   :test-name (format nil "test-~D" i)
+                   :verify-source :incremental)
+          do (cl-harness/src/failure-ledger:record-failure ledger f)
+             (cl-harness/src/failure-ledger:mark-resolved-by ledger f))
+    (setf (cl-harness/src/state:develop-state-current-plan s)
+          (list current-step))
+    (setf (cl-harness/src/state:develop-state-current-step-index s) 0)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :implementation :step current-step))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :implementation)))
+      ;; Most-recent 3 (test-3, test-4, test-5) should be present;
+      ;; oldest 2 (test-1, test-2) should NOT be.
+      (ok (search "test-5" str))
+      (ok (search "test-4" str))
+      (ok (search "test-3" str))
+      (ok (null (search "test-1" str)))
+      (ok (null (search "test-2" str))))))
+
+(deftest implementation-formatter-omits-resolved-failures-when-empty
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests"))
+        (current-step (make-instance 'cl-harness/src/planner:plan-step
+                                     :index 0 :test-name "t"
+                                     :test-source "(deftest t)"
+                                     :issue "x")))
+    (setf (cl-harness/src/state:develop-state-current-plan s)
+          (list current-step))
+    (setf (cl-harness/src/state:develop-state-current-step-index s) 0)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :implementation :step current-step))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :implementation)))
+      (ok (null (search "Recently resolved failures" str))))))

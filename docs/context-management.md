@@ -730,6 +730,7 @@ clean runtimeで検証されたこと
 | H | repl-finding ledger (`(hypothesis probe finding decision)` + promotion linkage `repl-finding-mark-promoted`); action parser が `{"type":"finding"}` を受理し explore loop は `%record-finding-from-action` で persist、orchestrator post-step が hypothesis substring 一致した patch で `promoted-to-source-p` を flip、`:exploration` view は全 finding に `[PROMOTED]` 注釈、`:implementation` view は未 promote の "Findings to implement" のみ ("REPL success != implemented" §3.6) | landed (2026-05-08) | `docs/plans/2026-05-07-phase-h-repl-finding-ledger.md` |
 | H' (step-index threading) | source-fact / runtime-vocab / patch-record recorder の `:related-step-index` を `(develop-state-current-step-index ...)` から読むよう修正 (Phase A の orchestrator 配線を読むだけ); Phase H final review で発覚した cross-phase ギャップを解消 | landed (2026-05-08) | `docs/plans/2026-05-08-step-index-threading-followup.md` |
 | I | structured `project-summary` slot on `develop-state` (`gather-project-summary` wraps the existing inventory builder) wired into `:planning` view; agent post-patch hook marks dirty on `.asd` / `defpackage` patches; render-time `[STALE]` annotation on the section header when dirty; structured summary appears before the existing `project-inventory` text block (augments, not replaces) | landed (2026-05-08) | `docs/plans/2026-05-07-phase-i-project-summary.md` |
+| J | `subtask-summary` record (派生のみ; develop-state には保存しない) + `summarise-step-result` builder; `:implementation` view が `:passed` 完了 step を "Completed subtask summaries" として render し、最新 `+resolved-failures-context-limit+` (既定 3) の resolved failure を "Recently resolved failures (regression watch)" として render する; 両 block は空時には emit されず view が byte-identical | landed (2026-05-08) | `docs/plans/2026-05-07-phase-j-subtask-summary.md` |
 
 Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
 §3.9 (Verification) の保持先として機能する土台。Phase B は §3.5 (Source) /
@@ -836,8 +837,38 @@ summary を `## [STALE] Project summary` ヘッダー付き (render-time
 判定) で先頭に出力、既存の `## Project inventory` テキストは
 そのまま後続 (augments, not replaces)。`:exploration` /
 `:implementation` view は変更していない。
-§6.4 (完了 subtask summary) / §6.5 (resolved failures 参照) は
-後続 phase で実装する。
+
+Phase J は §6.4 (Completed Subtasks) と §6.5 (Resolved Failures
+references) を実装した — `subtask-summary` record (`step-index` /
+`test-name` / `what-changed` / `tests-added` / `verification` /
+`design-impact` / `summarised-at`) と `summarise-step-result`
+builder を `src/subtask-summary.lisp` に追加。develop-state には
+**保存しない** (派生データ; step-results / patch-records /
+abstraction-decisions は既存の slot から読む)。`:implementation`
+view は `:passed` 完了 step を `summarise-step-result` で要約し
+"## Completed subtask summaries" 配下に `step <N> (<test-name>):
+<status>` + `changed: ...` / `design: ...` の indent bullet として
+render。`failure-ledger-resolved` から最新 N 件 (既定
+`+resolved-failures-context-limit+` = 3、newest-first) を
+"## Recently resolved failures (regression watch)" として render
+する。両 block は空時に emit せず、空 develop-state に対しては
+view 出力が byte-identical。なお Task 2 で `subtask-summary →
+orchestrator` の compile-time 依存が
+`orchestrator → explore → context-view → subtask-summary →
+orchestrator` の load-time 循環を生むことが判明したため、
+`subtask-summary.lisp` は `develop-step-result` の slot を
+`find-symbol` + `slot-value` で runtime 解決する形に修正している
+(public API 不変)。`develop-step-result` を独立ファイル
+(`src/step-result.lisp` 等) に切り出して compile-time import に
+戻すのは将来 phase の cleanup として追跡。
+
+これで context-management refactor の `docs/context-management.md`
+で identify した sections (§3.1-3.9 / §4 / §5 / §6 / §8 / §9 /
+§10) は **すべて MVP 実装が landed** した。残るのは Phase C の
+orchestrator → planner-fn `:develop-state` 配線の有効化 (下記
+注を参照)、Phase G の `%vocab-facts-from-tool-result` input shape
+bug (yason の vector parsing と不整合)、`develop-step-result`
+切り出しの 3 つのクリーンアップ phase。
 
 **注**: Phase C は orchestrator → planner-fn の `:develop-state` 配線を
 意図的に保留している。`plan-development` は kwarg を受け付けるものの、
