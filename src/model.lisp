@@ -95,6 +95,15 @@ TRANSPORT is a function of (URL HEADERS BODY) returning
    (raw :initarg :raw :reader chat-response-raw))
   (:documentation "Parsed chat completion result with token usage."))
 
+(defparameter +default-llm-read-timeout-seconds+ 600
+  "Read timeout (seconds) for the dexador POST that DEFAULT-LLM-TRANSPORT
+issues against the LLM endpoint. Dexador's own default is 10 seconds,
+which is fine for sub-second chat models (Groq llama-3.3) but breaks
+hard against reasoning models (Qwen3 series, gpt-oss, OpenAI o1) where
+the first response can take a minute or more. 600 (10 min) is generous
+enough for slow first-prompt warmups without masking a genuinely-stuck
+endpoint.")
+
 (defun default-llm-transport (url headers body)
   "POST BODY to URL with HEADERS hash-table using dexador.
 
@@ -103,14 +112,20 @@ surface as their captured body so the caller can extract a model-error
 via CHAT-PARSE-RESPONSE.
 
 Connection reuse is disabled so repeated calls against an LLM endpoint
-that closes idle sockets do not surface stale streams."
+that closes idle sockets do not surface stale streams.
+
+READ-TIMEOUT is set to +DEFAULT-LLM-READ-TIMEOUT-SECONDS+ so reasoning
+models whose response time exceeds dexador's 10s default do not raise
+SIMPLE-ERROR \"I/O timeout while doing input\" before the first chat
+completion lands."
   (let ((header-list (let ((acc '()))
                        (maphash (lambda (k v) (push (cons k v) acc)) headers)
                        (nreverse acc))))
     (handler-case
         (multiple-value-bind (resp-body status resp-headers)
             (dexador:post url :headers header-list :content body
-                              :keep-alive nil)
+                              :keep-alive nil
+                              :read-timeout +default-llm-read-timeout-seconds+)
           (values resp-body status resp-headers))
       (http-request-failed (c)
         (values (response-body c)

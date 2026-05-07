@@ -22,3 +22,6 @@ tests/tmp/*
 
 # Built shell binary (asdf:make :cl-harness/binary)
 /cl-harness
+
+# Claude Code runtime (per-machine; not source)
+.claude/scheduled_tasks.lock
