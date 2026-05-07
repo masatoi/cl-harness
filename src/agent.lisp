@@ -33,7 +33,11 @@
                 #:run-limits-max-read-files
                 #:run-limits-max-repl-evals
                 #:run-limits-max-wall-clock-seconds
-                #:run-limits-max-action-parse-errors)
+                #:run-limits-max-action-parse-errors
+                #:run-limits-max-context-tokens)
+  (:import-from #:cl-harness/src/compact
+                #:compact-history
+                #:approximate-history-tokens)
   (:import-from #:local-time
                 #:now
                 #:timestamp-difference)
@@ -528,17 +532,29 @@ Returns the text or NIL when none is present."
 
 (defun summarize-run-tests (result)
   "Compact summary of a run-tests tools/call RESULT, including up to a few
-failed_tests entries when present (PRD §10.3 SUMMARIZE-TOOL-RESULT)."
+failed_tests entries when present (PRD §10.3 SUMMARIZE-TOOL-RESULT).
+
+When the failed_tests array exceeds the display limit (5), append a
+single-line footer announcing how many failures were truncated so the
+LLM is aware of the silent loss; the full list remains in the JSONL
+transcript."
   (with-output-to-string (s)
     (let ((passed (gethash "passed" result))
           (failed (gethash "failed" result))
-          (failed-tests (gethash "failed_tests" result)))
-      (format s "passed: ~A, failed: ~A~%"
-              (or passed "?") (or failed "?"))
-      (when (and failed-tests
-                 (or (and (vectorp failed-tests) (plusp (length failed-tests)))
-                     (and (listp failed-tests) failed-tests)))
-        (format s "~A" (format-failed-tests failed-tests))))))
+          (failed-tests (gethash "failed_tests" result))
+          (display-limit 5))
+      (format s "passed: ~A, failed: ~A~%" (or passed "?") (or failed "?"))
+      (when
+          (and failed-tests
+               (or (and (vectorp failed-tests) (plusp (length failed-tests)))
+                   (and (listp failed-tests) failed-tests)))
+        (format s "~A" (format-failed-tests failed-tests :limit display-limit)))
+      (let ((failed-count (cond ((vectorp failed-tests) (length failed-tests))
+                                ((listp failed-tests) (length failed-tests))
+                                (t 0))))
+        (when (> failed-count display-limit)
+          (format s "(~D more failure~:P truncated; see JSONL transcript for the full list)~%"
+                  (- failed-count display-limit)))))))
 
 (defun summarize-repl-eval (result)
   "Compact summary of a repl-eval tools/call RESULT.
@@ -576,6 +592,25 @@ or symbols pass through unchanged."
     (symbol (intern (symbol-name tool-name) :keyword))
     (string (intern (string-upcase tool-name) :keyword))))
 
+(defparameter +default-tool-result-cap+ 1500
+  "Default cap (in characters) for read-style tool results in
+SUMMARIZE-TOOL-BY-KEY methods. Strings longer than this are
+truncated with a '[... truncated, N chars elided ...]'
+footer so the LLM can see that data was lost. The JSONL transcript
+records the full tool result for audit / recovery.")
+
+(defun %truncate-large-text (text &optional (cap +default-tool-result-cap+))
+  "If TEXT is longer than CAP characters, return the first CAP
+characters followed by an explicit truncation footer noting the
+elided byte count. Otherwise return TEXT unchanged. NIL TEXT
+returns NIL."
+  (cond
+    ((null text) nil)
+    ((<= (length text) cap) text)
+    (t (format nil "~A~%[... truncated, ~D chars elided ...]"
+               (subseq text 0 cap)
+               (- (length text) cap)))))
+
 (defgeneric summarize-tool-by-key (tool-key result)
   (:documentation
    "Per-tool summarizer dispatched on a keyword TOOL-KEY (e.g.
@@ -600,16 +635,29 @@ and the string→keyword conversion, then dispatches here."))
 
 (macrolet ((deftext-method (key)
              `(defmethod summarize-tool-by-key ((tool-key (eql ,key)) result)
-                (or (extract-content-text result) "(empty)"))))
+                (or (%truncate-large-text (extract-content-text result))
+                    "(empty)"))))
   ;; Read-only probes whose useful payload is just the first content
   ;; text block. Adding a new probe? Drop another deftext-method here
   ;; or define your own (defmethod summarize-tool-by-key ...).
+  ;;
+  ;; Phase D.3: results are passed through %TRUNCATE-LARGE-TEXT so
+  ;; long file/grep payloads can't balloon the agent's MESSAGES list.
+  ;; Full results are still recorded in the JSONL transcript.
   (deftext-method :code-find)
   (deftext-method :code-describe)
   (deftext-method :code-find-references)
   (deftext-method :inspect-object)
   (deftext-method :lisp-read-file)
   (deftext-method :clgrep-search))
+
+(defmethod summarize-tool-by-key ((tool-key (eql :fs-read-file)) result)
+  ;; Phase D.3: cap fs-read-file output the same way the macro caps
+  ;; the lisp-read-file / clgrep-search family. Falls back to the
+  ;; default summarizer when no content text is present so the
+  ;; isError flag and JSON dump still reach the caller.
+  (or (%truncate-large-text (extract-content-text result))
+      (default-tool-result-summary result)))
 
 (defun summarize-tool-result (tool-name result)
   "Return a compact human-readable summary of the MCP tools/call RESULT
@@ -894,6 +942,27 @@ step since no real patch was applied."
                                  nil nil nil)))))))
              (t (values next nil nil nil)))))))))
 
+(defun %maybe-compact-messages (messages run-limits)
+  "When the approximate token estimate of MESSAGES exceeds
+RUN-LIMITS-MAX-CONTEXT-TOKENS, return the result of COMPACT-HISTORY;
+otherwise return MESSAGES unchanged. Returns MESSAGES unchanged when
+RUN-LIMITS is NIL.
+
+The threshold is approximate (chars/4 heuristic via
+APPROXIMATE-HISTORY-TOKENS); fine-grained accuracy is not the goal —
+keeping the context window from blowing during long agent runs is.
+
+The compaction is per-call and does not mutate MESSAGES. Callers pass
+the compacted result to COMPLETE-CHAT; the agent loop's own message
+threading is left alone so the JSONL transcript still records the full
+conversation."
+  (let ((threshold (and run-limits
+                        (run-limits-max-context-tokens run-limits))))
+    (if (and threshold
+             (> (approximate-history-tokens messages) threshold))
+        (compact-history messages)
+        messages)))
+
 (defun step-turn (turn state config provider mcp-client policy logger messages
                   &key dry-run-p)
   "Run one turn of the agent loop.
@@ -901,7 +970,10 @@ step since no real patch was applied."
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
 the loop should continue, otherwise a terminal status keyword
 (:PASSED / :GIVE-UP)."
-  (let* ((chat (complete-chat provider messages))
+  (let* ((effective-messages
+          (%maybe-compact-messages messages
+                                   (run-config-limits config)))
+         (chat (complete-chat provider effective-messages))
          (text (chat-response-content chat)))
     (incf (agent-state-token-total state)
           (or (chat-response-total-tokens chat) 0))

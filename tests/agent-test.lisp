@@ -1130,3 +1130,114 @@ order. Helper for tests that assert against the on-disk transcript."
           "context-view :implementation Current step heading present")
       (ok (and content (search "[IMPLEMENTATION-MARKER]" content))
           "plan-step issue text appears in user prompt"))))
+
+(deftest maybe-compact-messages-fires-over-threshold
+  ;; Phase D.2: when the messages list's approximate token estimate
+  ;; exceeds RUN-LIMITS-MAX-CONTEXT-TOKENS, %MAYBE-COMPACT-MESSAGES
+  ;; returns the compacted form (shorter than input).
+  (let* ((messages (loop for i from 0 below 200
+                         collect (cl-harness/src/model:make-chat-message
+                                  "user"
+                                  (format nil "padding message ~A xxxxxxx" i))))
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 1
+                                :max-tool-calls 1
+                                :max-patches 1
+                                :max-read-files 1
+                                :max-repl-evals 1
+                                :max-wall-clock-seconds 1
+                                :max-action-parse-errors 1
+                                :max-context-tokens 1000))
+         (result (cl-harness/src/agent::%maybe-compact-messages
+                  messages limits)))
+    (ok (< (length result) (length messages)))))
+
+(deftest maybe-compact-messages-skips-under-threshold
+  ;; Phase D.2: under the threshold, %MAYBE-COMPACT-MESSAGES returns
+  ;; the original list verbatim — no compaction overhead, no behavior
+  ;; change for short conversations.
+  (let* ((messages (loop for i from 0 below 5
+                         collect (cl-harness/src/model:make-chat-message
+                                  "user" (format nil "msg ~A" i))))
+         (limits (make-default-limits))
+         (result (cl-harness/src/agent::%maybe-compact-messages
+                  messages limits)))
+    (ok (eql (length result) (length messages)))
+    (ok (equal messages result))))
+
+(deftest maybe-compact-messages-handles-nil-limits
+  ;; Phase D.2: a NIL run-limits (defensive guard) short-circuits the
+  ;; helper and returns MESSAGES unchanged. Same identity, no copy.
+  (let ((messages (loop for i from 0 below 5
+                        collect (cl-harness/src/model:make-chat-message
+                                 "user" (format nil "m ~A" i)))))
+    (ok (eq messages
+            (cl-harness/src/agent::%maybe-compact-messages messages nil)))))
+
+(defun %make-fake-text-result (text)
+  "Test helper: construct a hash-table that looks like a tools/call
+success result with one text content block."
+  (alexandria:alist-hash-table
+   `(("content" . ,(vector
+                    (alexandria:alist-hash-table
+                     `(("type" . "text") ("text" . ,text))
+                     :test 'equal))))
+   :test 'equal))
+
+(deftest summarize-fs-read-file-truncates-large-text
+  (let* ((huge (make-string 5000 :initial-element #\a))
+         (result (%make-fake-text-result huge))
+         (out (cl-harness/src/agent::summarize-tool-result "fs-read-file" result)))
+    (ok (< (length out) 2500))
+    (ok (search "[... truncated" out))))
+
+(deftest summarize-fs-read-file-leaves-short-text-alone
+  (let* ((short "(defun foo () 1)")
+         (result (%make-fake-text-result short))
+         (out (cl-harness/src/agent::summarize-tool-result "fs-read-file" result)))
+    (ok (search short out))
+    (ok (not (search "truncated" out)))))
+
+(deftest summarize-lisp-read-file-truncates-large-text
+  (let* ((huge (make-string 5000 :initial-element #\b))
+         (result (%make-fake-text-result huge))
+         (out (cl-harness/src/agent::summarize-tool-result "lisp-read-file" result)))
+    (ok (< (length out) 2500))
+    (ok (search "[... truncated" out))))
+
+(deftest summarize-clgrep-search-truncates-large-text
+  (let* ((huge (make-string 5000 :initial-element #\c))
+         (result (%make-fake-text-result huge))
+         (out (cl-harness/src/agent::summarize-tool-result "clgrep-search" result)))
+    (ok (< (length out) 2500))
+    (ok (search "[... truncated" out))))
+
+(deftest summarize-run-tests-signals-truncation-when-over-five-failures
+  (let* ((entries (loop for i from 0 below 8
+                        collect (alexandria:alist-hash-table
+                                 `(("test_name" . ,(format nil "test-~D" i))
+                                   ("description" . ,(format nil "test ~D failed" i))
+                                   ("reason" . "x"))
+                                 :test 'equal)))
+         (tr (alexandria:alist-hash-table
+              `(("passed" . 0)
+                ("failed" . 8)
+                ("failed_tests" . ,(coerce entries 'vector)))
+              :test 'equal)))
+    (let ((out (cl-harness/src/agent::summarize-tool-result "run-tests" tr)))
+      (ok (search "3 more" out))
+      (ok (or (search "test-0" out) (search "test-1" out)))
+      (ok (not (search "test-7" out))))))
+
+(deftest summarize-run-tests-no-footer-when-five-or-fewer-failures
+  (let* ((entries (loop for i from 0 below 5
+                        collect (alexandria:alist-hash-table
+                                 `(("test_name" . ,(format nil "t~D" i))
+                                   ("description" . "x") ("reason" . "y"))
+                                 :test 'equal)))
+         (tr (alexandria:alist-hash-table
+              `(("passed" . 0) ("failed" . 5)
+                ("failed_tests" . ,(coerce entries 'vector)))
+              :test 'equal)))
+    (let ((out (cl-harness/src/agent::summarize-tool-result "run-tests" tr)))
+      (ok (not (search "more failure" out))))))
