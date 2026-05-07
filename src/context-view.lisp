@@ -22,7 +22,13 @@
                 #:develop-state-patch-records
                 #:develop-state-failure-ledger
                 #:develop-state-runtime-vocabulary
-                #:develop-state-repl-findings)
+                #:develop-state-repl-findings
+                #:develop-state-project-summary)
+  (:import-from #:cl-harness/src/project-summary
+                #:project-summary-asd-files
+                #:project-summary-source-files
+                #:project-summary-test-files
+                #:project-summary-dirty-p)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:runtime-vocab-fact-kind
                 #:runtime-vocab-fact-name
@@ -73,6 +79,7 @@
            #:context-view-prior-plan
            #:context-view-failure-context
            #:context-view-project-inventory
+           #:context-view-project-summary
            #:context-view->string
            #:+supported-phases+))
 
@@ -152,7 +159,16 @@ including promoted ones — promotion is annotated in the formatter).")
 to the current step AND not yet promoted to source. Populated for
 :IMPLEMENTATION so the agent sees the work that's still pending.
 Promotion is filtered at construction time (not render time): the
-LLM should never see promoted findings in the implementation view."))
+LLM should never see promoted findings in the implementation view.")
+   (project-summary :initarg :project-summary :initform nil
+                    :reader context-view-project-summary
+                    :documentation "PROJECT-SUMMARY snapshot from
+DEVELOP-STATE for the :PLANNING view, or NIL when the develop-state
+has no summary yet. Phase I (§3.3): structured cold-start project
+context with a dirty flag for staleness annotation. The formatter
+calls PROJECT-SUMMARY-DIRTY-P at render time to decide whether to
+prefix the section header with [STALE]; MAKE-CONTEXT-VIEW does not
+read the flag (Phase F render-time contract)."))
   (:documentation
    "A snapshot of DEVELOP-STATE filtered for one phase. Pure data;
 no behaviour beyond construction and the CONTEXT-VIEW->STRING
@@ -221,6 +237,9 @@ mutations do not propagate."
                       :project-inventory (and state
                                               (develop-state-project-inventory
                                                state))
+                      :project-summary (and state
+                                            (develop-state-project-summary
+                                             state))
                       :current-plan (and state
                                          (develop-state-current-plan state))
                       :prior-plan prior-plan
@@ -274,6 +293,25 @@ context (replan only). The output is a multi-section markdown block
 that the planner's user-prompt builder can splice in place of its
 current ad-hoc inventory + goal + replan block."
   (with-output-to-string (s)
+    (let ((sum (context-view-project-summary view)))
+      (when sum
+        (format s "## ~AProject summary~%"
+                (if (project-summary-dirty-p sum) "[STALE] " ""))
+        (format s "ASD systems: ~A~%"
+                (or (and (project-summary-asd-files sum)
+                         (format nil "~{~A~^, ~}"
+                                 (project-summary-asd-files sum)))
+                    "(none)"))
+        (format s "Source files: ~A~%"
+                (or (and (project-summary-source-files sum)
+                         (format nil "~{~A~^, ~}"
+                                 (project-summary-source-files sum)))
+                    "(none)"))
+        (format s "Test files: ~A~%~%"
+                (or (and (project-summary-test-files sum)
+                         (format nil "~{~A~^, ~}"
+                                 (project-summary-test-files sum)))
+                    "(none)"))))
     (when (context-view-project-inventory view)
       (format s "## Project inventory~%~A~%~%"
               (context-view-project-inventory view)))

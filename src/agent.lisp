@@ -71,7 +71,8 @@
                 #:develop-state-record-source-fact
                 #:develop-state-record-runtime-vocab-fact
                 #:develop-state-current-plan
-                #:develop-state-current-step-index)
+                #:develop-state-current-step-index
+                #:develop-state-mark-project-summary-dirty)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:make-runtime-vocab-fact
                 #:+supported-runtime-vocab-kinds+)
@@ -254,6 +255,31 @@ NIL)."
         (dolist (fact facts)
           (develop-state-record-runtime-vocab-fact develop-state fact))
         facts))))
+
+(defun %asd-path-p (path)
+  "Case-insensitive check for paths ending in '.asd'. Accepts
+strings or pathnames; NIL inputs return NIL."
+  (let ((ns (and path (cond
+                        ((pathnamep path) (namestring path))
+                        ((stringp path) path)))))
+    (and ns
+         (>= (length ns) 4)
+         (string-equal ns ".asd" :start1 (- (length ns) 4)))))
+
+(defun %maybe-mark-summary-dirty (develop-state patch-record)
+  "Flip DEVELOP-STATE's project-summary dirty flag when PATCH-RECORD
+targets a .asd file or a defpackage form. Best-effort: no-op when
+DEVELOP-STATE is NIL or the project-summary slot is NIL.
+Returns DEVELOP-STATE."
+  (when (and develop-state patch-record
+             (or (%asd-path-p (cl-harness/src/patch-record:patch-record-path
+                               patch-record))
+                 (let ((ft (cl-harness/src/patch-record:patch-record-form-type
+                            patch-record)))
+                   (and (stringp ft)
+                        (string-equal ft "defpackage")))))
+    (develop-state-mark-project-summary-dirty develop-state))
+  develop-state)
 
 (defparameter +read-file-tools+
   '("fs-read-file"
@@ -1004,26 +1030,31 @@ step since no real patch was applied."
                         ("file" . ,(namestring target))
                         ("diff" . ,(or diff ""))))
                      (when (agent-state-develop-state state)
-                       (let ((arguments (or (agent-action-arguments action)
-                                            (make-hash-table :test 'equal))))
+                       (let* ((arguments (or (agent-action-arguments action)
+                                             (make-hash-table :test 'equal)))
+                              (record
+                               (make-patch-record
+                                :path target
+                                :via-tool tool
+                                :form-type (and (hash-table-p arguments)
+                                                (gethash "form_type" arguments))
+                                :form-name (and (hash-table-p arguments)
+                                                (gethash "form_name" arguments))
+                                :operation (and (hash-table-p arguments)
+                                                (gethash "operation" arguments))
+                                :diff-summary
+                                (when (and diff (plusp (length diff)))
+                                  (subseq diff 0 (min 500 (length diff))))
+                                :related-step-index
+                                (develop-state-current-step-index
+                                 (agent-state-develop-state state))
+                                :turn turn)))
                          (develop-state-record-patch-record
                           (agent-state-develop-state state)
-                          (make-patch-record
-                           :path target
-                           :via-tool tool
-                           :form-type (and (hash-table-p arguments)
-                                           (gethash "form_type" arguments))
-                           :form-name (and (hash-table-p arguments)
-                                           (gethash "form_name" arguments))
-                           :operation (and (hash-table-p arguments)
-                                           (gethash "operation" arguments))
-                           :diff-summary
-                           (when (and diff (plusp (length diff)))
-                             (subseq diff 0 (min 500 (length diff))))
-                           :related-step-index
-                           (develop-state-current-step-index
-                            (agent-state-develop-state state))
-                           :turn turn))))))
+                          record)
+                         (%maybe-mark-summary-dirty
+                          (agent-state-develop-state state)
+                          record)))))
                  (let ((v (verify-task mcp-client config)))
                    (log-event logger :verify (verify-event-payload turn v))
                    (if (verify-result-success-p v)

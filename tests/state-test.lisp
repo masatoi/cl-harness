@@ -40,13 +40,19 @@
                 #:develop-state-runtime-vocabulary
                 #:develop-state-record-runtime-vocab-fact
                 #:develop-state-repl-findings
-                #:develop-state-record-repl-finding)
+                #:develop-state-record-repl-finding
+                #:develop-state-project-summary
+                #:develop-state-set-project-summary
+                #:develop-state-mark-project-summary-dirty)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:make-runtime-vocab-fact
                 #:runtime-vocab-fact-name)
   (:import-from #:cl-harness/src/repl-finding
                 #:make-repl-finding
-                #:repl-finding-hypothesis))
+                #:repl-finding-hypothesis)
+  (:import-from #:cl-harness/src/project-summary
+                #:make-project-summary
+                #:project-summary-dirty-p))
 
 (in-package #:cl-harness/tests/state-test)
 
@@ -212,3 +218,20 @@
 (deftest develop-state-repl-findings-defaults-to-empty
   (let ((s (%make)))
     (ok (null (develop-state-repl-findings s)))))
+
+(deftest develop-state-stores-and-flips-project-summary-dirty
+  (let ((s (%make))
+        (sum (make-project-summary
+              :project-root "/tmp/p/" :system "x" :test-system "x/tests")))
+    (develop-state-set-project-summary s sum)
+    (ok (eq sum (develop-state-project-summary s)))
+    (ok (null (project-summary-dirty-p sum)))
+    (develop-state-mark-project-summary-dirty s)
+    (ok (eq t (project-summary-dirty-p sum)))))
+
+(deftest develop-state-mark-project-summary-dirty-handles-nil-slot
+  ;; If the slot is NIL (caller never gathered a summary) the helper
+  ;; is a no-op rather than raising.
+  (let ((s (%make)))
+    (develop-state-mark-project-summary-dirty s)
+    (ok (null (develop-state-project-summary s)))))

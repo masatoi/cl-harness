@@ -728,6 +728,8 @@ clean runtimeで検証されたこと
 | F | `source-fact-stale-p` の context-view 配線 (`:exploration` formatter で `[STALE]` prefix を render-time 付与) | landed (2026-05-07) | `docs/plans/2026-05-07-phase-f-staleness-annotation.md` |
 | G | runtime-vocabulary ledger (`runtime-vocab-fact` + `develop-state-runtime-vocabulary`); agent loop が `code-find` / `code-describe` / `code-find-references` 結果から best-effort 抽出して push、`:exploration` view は `[STALE] [kind] PKG:name` で render-time 注釈、`:planning` view は warm-start vocabulary summary を `project-inventory` テキストと併存表示 | landed (2026-05-07) | `docs/plans/2026-05-07-phase-g-runtime-vocabulary.md` |
 | H | repl-finding ledger (`(hypothesis probe finding decision)` + promotion linkage `repl-finding-mark-promoted`); action parser が `{"type":"finding"}` を受理し explore loop は `%record-finding-from-action` で persist、orchestrator post-step が hypothesis substring 一致した patch で `promoted-to-source-p` を flip、`:exploration` view は全 finding に `[PROMOTED]` 注釈、`:implementation` view は未 promote の "Findings to implement" のみ ("REPL success != implemented" §3.6) | landed (2026-05-08) | `docs/plans/2026-05-07-phase-h-repl-finding-ledger.md` |
+| H' (step-index threading) | source-fact / runtime-vocab / patch-record recorder の `:related-step-index` を `(develop-state-current-step-index ...)` から読むよう修正 (Phase A の orchestrator 配線を読むだけ); Phase H final review で発覚した cross-phase ギャップを解消 | landed (2026-05-08) | `docs/plans/2026-05-08-step-index-threading-followup.md` |
+| I | structured `project-summary` slot on `develop-state` (`gather-project-summary` wraps the existing inventory builder) wired into `:planning` view; agent post-patch hook marks dirty on `.asd` / `defpackage` patches; render-time `[STALE]` annotation on the section header when dirty; structured summary appears before the existing `project-inventory` text block (augments, not replaces) | landed (2026-05-08) | `docs/plans/2026-05-07-phase-i-project-summary.md` |
 
 Phase A の `develop-state` は §3.1 (Goal) / §3.2 (Plan) / §3.7 (Design Decision) /
 §3.9 (Verification) の保持先として機能する土台。Phase B は §3.5 (Source) /
@@ -800,8 +802,42 @@ promoted には `[PROMOTED]` prefix で render-time 注釈、
 表示する ("REPL success != implemented" の §3.6 ルールを
 view 層で強制)。`:planning` view は変更していない (finding は
 step-local)。fuzzy match や受動的な transcript mining は別 phase。
-§3.3 (Project) / §6.4 (完了 subtask summary) /
-§6.5 (resolved failures 参照) は後続 phase で実装する。
+
+Phase H final review で **cross-phase の step-index threading
+gap** が露呈した: `agent.lisp` の source-fact / runtime-vocab /
+patch-record recorder 3 箇所は `:related-step-index nil` を
+hard-code していたため、step フィルタ通過する Phase C/F/G/H の
+view では実 production データが unconditional に drop していた
+(test fixture が hand-build で step-index を入れていたため
+気付かれなかった)。`develop-state-current-step-index` は
+orchestrator が Phase A で既に setf 済なので、recorder 側は
+それを読むだけ。step-index threading follow-up phase
+(`docs/plans/2026-05-08-step-index-threading-followup.md`,
+landed 2026-05-08) で 3 recorder を一括修正、runtime-vocab は
+helper 抽出 (`%record-runtime-vocab-from-tool-call`)。なお
+`%vocab-facts-from-tool-result` の input shape bug (yason が JSON
+array を vector として parse する関係で `code-find` の `{results:
+[...]}` が拾えていない) が同時に発覚、別 phase で対処予定。
+
+Phase I は §3.3 (Project Context) を実装した — `project-summary`
+record (`project-root` / `system` / `test-system` / `asd-files` /
+`source-files` / `test-files` / `text` / `gathered-at` /
+`dirty-p`) と `develop-state` の単一値 slot (これが
+context-management refactor で初めての非リスト slot、`:accessor`
+直行)、`gather-project-summary` ヘルパー (既存の
+`gather-project-inventory` テキスト ビルダーを wrap、reader path
+は UIOP のまま)、`develop-state-mark-project-summary-dirty`
+NIL-safe flipper を導入。agent loop の patch-record recorder
+直後に `%maybe-mark-summary-dirty` フックを inline で配置し
+(orchestrator post-step 集約より per-patch atomic で軽い)、
+`%asd-path-p` (case-insensitive) または `defpackage` form-type
+が一致した場合に dirty を flip する。`:planning` view は構造化
+summary を `## [STALE] Project summary` ヘッダー付き (render-time
+判定) で先頭に出力、既存の `## Project inventory` テキストは
+そのまま後続 (augments, not replaces)。`:exploration` /
+`:implementation` view は変更していない。
+§6.4 (完了 subtask summary) / §6.5 (resolved failures 参照) は
+後続 phase で実装する。
 
 **注**: Phase C は orchestrator → planner-fn の `:develop-state` 配線を
 意図的に保留している。`plan-development` は kwarg を受け付けるものの、
