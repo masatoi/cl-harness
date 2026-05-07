@@ -31,6 +31,7 @@
                "cl-harness/tests/bench-test"
                "cl-harness/tests/planner-test"
                "cl-harness/tests/orchestrator-test"
+               "cl-harness/tests/explore-test"
                "cl-harness/tests/compact-test"
                "cl-harness/tests/inventory-test"
                "cl-harness/tests/abstraction-test"
@@ -41,6 +42,7 @@
                "cl-harness/tests/runtime-vocabulary-test"
                "cl-harness/tests/source-fact-test"
                "cl-harness/tests/patch-record-test"
+               "cl-harness/tests/repl-finding-test"
                "cl-harness/tests/failure-ledger-test"
                "cl-harness/tests/context-view-test"
                "cl-harness/tests/report-test")

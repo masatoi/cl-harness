@@ -61,7 +61,8 @@
                 #:develop-state-step-results
                 #:develop-state-record-failure
                 #:develop-state-failure-ledger
-                #:develop-state-patch-records)
+                #:develop-state-patch-records
+                #:develop-state-repl-findings)
   (:import-from #:cl-harness/src/failure-ledger
                 #:parse-failure-records-from-test-result
                 #:failure-ledger-active
@@ -69,7 +70,12 @@
                 #:failure-record-test-name
                 #:failure-record-source-file)
   (:import-from #:cl-harness/src/patch-record
-                #:patch-record-path)
+                #:patch-record-path
+                #:patch-record-diff-summary)
+  (:import-from #:cl-harness/src/repl-finding
+                #:repl-finding-hypothesis
+                #:repl-finding-promoted-to-source-p
+                #:repl-finding-mark-promoted)
   (:import-from #:cl-harness/src/verify
                 #:verify-result-test)
   (:import-from #:cl-harness/src/integration
@@ -325,6 +331,41 @@ slot is empty."
           (dolist (rec new-records)
             (develop-state-record-failure develop-state rec)))))))
 
+(defun %hypothesis-in-diff-p (hypothesis diff-summary)
+  "Case-folded substring match of HYPOTHESIS within DIFF-SUMMARY.
+Returns T when DIFF-SUMMARY non-NIL and HYPOTHESIS appears (any case)
+within it. Defensive: NIL inputs yield NIL."
+  (and (stringp hypothesis) (plusp (length hypothesis))
+       (stringp diff-summary) (plusp (length diff-summary))
+       (search (string-downcase hypothesis)
+               (string-downcase diff-summary))))
+
+(defun %find-matching-patch (hypothesis develop-state)
+  "Walk DEVELOP-STATE's patch-records (oldest first) and return the
+first PATCH-RECORD whose diff-summary contains HYPOTHESIS (case-fold
+substring). Returns NIL when no patch matches."
+  (find-if (lambda (p)
+             (%hypothesis-in-diff-p hypothesis
+                                    (patch-record-diff-summary p)))
+           (develop-state-patch-records develop-state)))
+
+(defun %promote-matching-findings (develop-state)
+  "Walk DEVELOP-STATE's not-yet-promoted REPL-FINDINGs; for each whose
+hypothesis appears (case-fold substring) in any patch-record's
+diff-summary, flip the promoted-to-source-p flag via
+REPL-FINDING-MARK-PROMOTED with :linked-patch <matching-patch>.
+Already-promoted findings are skipped; NIL DEVELOP-STATE is a no-op
+(returns NIL). Best-effort: never raises. Returns DEVELOP-STATE."
+  (when develop-state
+    (dolist (finding (develop-state-repl-findings develop-state))
+      (unless (repl-finding-promoted-to-source-p finding)
+        (let ((patch (%find-matching-patch
+                      (repl-finding-hypothesis finding)
+                      develop-state)))
+          (when patch
+            (repl-finding-mark-promoted finding :linked-patch patch))))))
+  develop-state)
+
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
                       provider mcp-client run-limits explore-fn
@@ -428,6 +469,7 @@ without a develop-state)."
                          :explore-result explore-result
                          :abstraction-decisions abstraction-decisions)))
            (%record-and-resolve-failures develop-state state step)
+           (%promote-matching-findings develop-state)
            (when abstraction-decisions
              (%log-develop-event
               logger :abstraction-decision

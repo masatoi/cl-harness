@@ -15,9 +15,13 @@
                 #:develop-state-record-source-fact
                 #:develop-state-record-patch-record
                 #:develop-state-record-failure
-                #:develop-state-record-runtime-vocab-fact)
+                #:develop-state-record-runtime-vocab-fact
+                #:develop-state-record-repl-finding)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:make-runtime-vocab-fact)
+  (:import-from #:cl-harness/src/repl-finding
+                #:make-repl-finding
+                #:repl-finding-mark-promoted)
   (:import-from #:cl-harness/src/source-fact
                 #:make-source-fact)
   (:import-from #:cl-harness/src/patch-record
@@ -414,3 +418,91 @@
          (view (make-context-view s :phase :planning))
          (str (context-view->string view :planning)))
     (ok (null (search "Runtime vocabulary observed so far" str)))))
+
+(deftest exploration-formatter-renders-findings-bullet
+  (let ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests"))
+        (step (make-instance 'cl-harness/src/planner:plan-step
+                             :index 0 :test-name "t"
+                             :test-source "(deftest t)"
+                             :issue "explore the failure mode"))
+        (finding (make-repl-finding
+                  :hypothesis "pure function suffices"
+                  :probe "(reduce #'+ '(1 2 3))"
+                  :finding "returns 6"
+                  :decision "promote ordinary function"
+                  :related-step-index 0)))
+    (setf (cl-harness/src/state:develop-state-current-plan s) (list step))
+    (setf (develop-state-current-step-index s) 0)
+    (develop-state-record-repl-finding s finding)
+    (let* ((view (make-context-view s :phase :exploration :step step))
+           (str (context-view->string view :exploration)))
+      (ok (search "Findings observed in this step" str))
+      (ok (search "pure function suffices" str))
+      (ok (search "promote ordinary function" str))
+      ;; Unpromoted findings do NOT have [PROMOTED] prefix.
+      (ok (null (search "[PROMOTED]" str))))))
+
+(deftest exploration-formatter-marks-promoted-findings
+  (let ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests"))
+        (step (make-instance 'cl-harness/src/planner:plan-step
+                             :index 0 :test-name "t"
+                             :test-source "(deftest t)"
+                             :issue "explore"))
+        (finding (make-repl-finding
+                  :hypothesis "h" :probe "p" :finding "f" :decision "d"
+                  :related-step-index 0)))
+    (repl-finding-mark-promoted finding :linked-patch :sentinel)
+    (setf (cl-harness/src/state:develop-state-current-plan s) (list step))
+    (setf (develop-state-current-step-index s) 0)
+    (develop-state-record-repl-finding s finding)
+    (let* ((view (make-context-view s :phase :exploration :step step))
+           (str (context-view->string view :exploration)))
+      (ok (search "[PROMOTED]" str)))))
+
+(deftest implementation-formatter-lists-only-unpromoted-findings
+  (let ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests"))
+        (step (make-instance 'cl-harness/src/planner:plan-step
+                             :index 0 :test-name "t"
+                             :test-source "(deftest t)"
+                             :issue "implement"))
+        (promoted (make-repl-finding
+                   :hypothesis "implement greet"
+                   :probe "p" :finding "f" :decision "d"
+                   :related-step-index 0))
+        (unpromoted (make-repl-finding
+                     :hypothesis "implement zonk"
+                     :probe "p" :finding "f" :decision "d"
+                     :related-step-index 0)))
+    (repl-finding-mark-promoted promoted :linked-patch :sentinel)
+    (setf (cl-harness/src/state:develop-state-current-plan s) (list step))
+    (setf (develop-state-current-step-index s) 0)
+    (develop-state-record-repl-finding s promoted)
+    (develop-state-record-repl-finding s unpromoted)
+    (let* ((view (make-context-view s :phase :implementation :step step))
+           (str (context-view->string view :implementation)))
+      ;; Unpromoted hypothesis appears.
+      (ok (search "implement zonk" str))
+      ;; Promoted hypothesis does NOT appear in :implementation.
+      (ok (null (search "implement greet" str))))))
+
+(deftest implementation-formatter-omits-findings-section-when-all-promoted
+  (let ((s (make-develop-state :goal "g" :project-root "/tmp/p"
+                               :system "x" :test-system "x/tests"))
+        (step (make-instance 'cl-harness/src/planner:plan-step
+                             :index 0 :test-name "t"
+                             :test-source "(deftest t)"
+                             :issue "implement"))
+        (finding (make-repl-finding
+                  :hypothesis "h" :probe "p" :finding "f" :decision "d"
+                  :related-step-index 0)))
+    (repl-finding-mark-promoted finding :linked-patch :sentinel)
+    (setf (cl-harness/src/state:develop-state-current-plan s) (list step))
+    (setf (develop-state-current-step-index s) 0)
+    (develop-state-record-repl-finding s finding)
+    (let* ((view (make-context-view s :phase :implementation :step step))
+           (str (context-view->string view :implementation)))
+      ;; Section header should be absent when only promoted findings exist.
+      (ok (null (search "Findings to implement" str))))))

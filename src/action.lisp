@@ -25,6 +25,10 @@
            #:agent-action-summary
            #:agent-action-thought
            #:agent-action-raw
+           #:agent-action-hypothesis
+           #:agent-action-probe
+           #:agent-action-finding
+           #:agent-action-decision
            #:parse-action
            #:action-parse-error
            #:action-parse-error-message
@@ -47,8 +51,24 @@
    (status :initarg :status :initform nil :reader agent-action-status)
    (summary :initarg :summary :initform nil :reader agent-action-summary)
    (thought :initarg :thought :initform nil :reader agent-action-thought)
-   (raw :initarg :raw :initform nil :reader agent-action-raw))
-  (:documentation "Parsed LLM action; TYPE is :TOOL-CALL or :FINISH."))
+   (raw :initarg :raw :initform nil :reader agent-action-raw)
+   (hypothesis :initarg :hypothesis :initform nil
+               :reader agent-action-hypothesis
+               :documentation "For :FINDING actions, the conjecture
+under test (non-empty string). NIL for other action types.")
+   (probe :initarg :probe :initform nil
+          :reader agent-action-probe
+          :documentation "For :FINDING actions, the description of
+the REPL probe used. NIL for other action types.")
+   (finding :initarg :finding :initform nil
+            :reader agent-action-finding
+            :documentation "For :FINDING actions, the observed result
+of the probe (non-empty string). NIL for other action types.")
+   (decision :initarg :decision :initform nil
+             :reader agent-action-decision
+             :documentation "For :FINDING actions, the design decision
+the finding drives (non-empty string). NIL for other action types."))
+  (:documentation "Parsed LLM action; TYPE is :TOOL-CALL, :FINISH, or :FINDING."))
 
 ;; --- Stubs ---------------------------------------------------------------
 ;; Intentionally wrong return values so the failing tests surface
@@ -76,10 +96,11 @@ is also dropped. TEXT without fences is returned unchanged."
               inner)))))
 
 (defparameter +envelope-keys+
-  '("type" "tool" "thought" "arguments" "status" "summary")
+  '("type" "tool" "thought" "arguments" "status" "summary"
+    "hypothesis" "probe" "finding" "decision")
   "Top-level action-envelope keys that must NOT be treated as implicit
 arguments when the LLM emits a flat tool_call payload (no nested
-\"arguments\" object).")
+\"arguments\" object). Phase H added the four :FINDING sub-fields.")
 
 (defun %extract-flat-arguments (parsed)
   "Return a fresh hash-table of every PARSED key not in +ENVELOPE-KEYS+.
@@ -136,6 +157,30 @@ declares an unknown TYPE, or is missing a required field for its variant."
                           :type :finish
                           :status (if (equal status "fixed") :fixed :give-up)
                           :summary (gethash "summary" parsed)
+                          :thought (and (stringp thought) thought)
+                          :raw parsed)))
+        ((equal type "finding")
+         (let ((hypothesis (gethash "hypothesis" parsed))
+               (probe (gethash "probe" parsed))
+               (finding (gethash "finding" parsed))
+               (decision (gethash "decision" parsed)))
+           (dolist (pair (list (cons "hypothesis" hypothesis)
+                               (cons "probe" probe)
+                               (cons "finding" finding)
+                               (cons "decision" decision)))
+             (let ((field (car pair))
+                   (value (cdr pair)))
+               (unless (and (stringp value) (plusp (length value)))
+                 (error 'action-parse-error
+                        :message (format nil "finding action requires non-empty '~A'"
+                                         field)
+                        :raw parsed))))
+           (make-instance 'agent-action
+                          :type :finding
+                          :hypothesis hypothesis
+                          :probe probe
+                          :finding finding
+                          :decision decision
                           :thought (and (stringp thought) thought)
                           :raw parsed)))
         (t (error 'action-parse-error

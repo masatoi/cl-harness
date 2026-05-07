@@ -754,3 +754,74 @@ plan (so a stuck loop test can keep getting the same response)."
                            :step-results nil
                            :develop-state s)))
     (ok (eq s (cl-harness/src/orchestrator:develop-result-develop-state r)))))
+
+(deftest promote-matching-findings-flips-promoted-flag-when-hypothesis-in-diff
+  (let ((state (cl-harness/src/state:make-develop-state
+                :goal "g" :project-root "/tmp/p"
+                :system "x" :test-system "x/tests"))
+        (finding (cl-harness/src/repl-finding:make-repl-finding
+                  :hypothesis "implement greet helper"
+                  :probe "(greet \"Alice\")"
+                  :finding "returns Hello, Alice!"
+                  :decision "promote ordinary function"))
+        (patch (cl-harness/src/patch-record:make-patch-record
+                :path "src/foo.lisp" :via-tool "lisp-edit-form"
+                :diff-summary "+ (defun greet (name) ...)
+;; implement greet helper for the public API"
+                :turn 1)))
+    (cl-harness/src/state:develop-state-record-repl-finding state finding)
+    (cl-harness/src/state:develop-state-record-patch-record state patch)
+    (ok (null (cl-harness/src/repl-finding:repl-finding-promoted-to-source-p
+               finding)))
+    (cl-harness/src/orchestrator::%promote-matching-findings state)
+    (ok (eq t (cl-harness/src/repl-finding:repl-finding-promoted-to-source-p
+               finding)))
+    (ok (eq patch (cl-harness/src/repl-finding:repl-finding-linked-patch
+                   finding)))))
+
+(deftest promote-matching-findings-leaves-unpromoted-when-no-patch-matches
+  (let ((state (cl-harness/src/state:make-develop-state
+                :goal "g" :project-root "/tmp/p"
+                :system "x" :test-system "x/tests"))
+        (finding (cl-harness/src/repl-finding:make-repl-finding
+                  :hypothesis "implement zonk function"
+                  :probe "p" :finding "f" :decision "d"))
+        (patch (cl-harness/src/patch-record:make-patch-record
+                :path "src/foo.lisp" :via-tool "lisp-edit-form"
+                :diff-summary "+ (defun greet (name) ...)"
+                :turn 1)))
+    (cl-harness/src/state:develop-state-record-repl-finding state finding)
+    (cl-harness/src/state:develop-state-record-patch-record state patch)
+    (cl-harness/src/orchestrator::%promote-matching-findings state)
+    (ok (null (cl-harness/src/repl-finding:repl-finding-promoted-to-source-p
+               finding)))))
+
+(deftest promote-matching-findings-handles-nil-state
+  ;; The hook is called from the orchestrator's post-step path with
+  ;; whatever develop-state is bound. Test stubs may pass NIL.
+  (ok (null (cl-harness/src/orchestrator::%promote-matching-findings nil))))
+
+(deftest promote-matching-findings-skips-already-promoted-finding
+  ;; Idempotence: if a finding is already promoted (linked to patch A),
+  ;; a later run that finds patch B matching the same hypothesis must
+  ;; NOT clobber the prior linkage.
+  (let ((state (cl-harness/src/state:make-develop-state
+                :goal "g" :project-root "/tmp/p"
+                :system "x" :test-system "x/tests"))
+        (finding (cl-harness/src/repl-finding:make-repl-finding
+                  :hypothesis "implement greet helper"
+                  :probe "p" :finding "f" :decision "d"))
+        (patch-a (cl-harness/src/patch-record:make-patch-record
+                  :path "src/foo.lisp" :via-tool "lisp-edit-form"
+                  :diff-summary "implement greet helper" :turn 1))
+        (patch-b (cl-harness/src/patch-record:make-patch-record
+                  :path "src/bar.lisp" :via-tool "lisp-edit-form"
+                  :diff-summary "implement greet helper" :turn 2)))
+    (cl-harness/src/state:develop-state-record-repl-finding state finding)
+    (cl-harness/src/state:develop-state-record-patch-record state patch-a)
+    (cl-harness/src/orchestrator::%promote-matching-findings state)
+    ;; Now add patch-b and call again — linkage should remain patch-a.
+    (cl-harness/src/state:develop-state-record-patch-record state patch-b)
+    (cl-harness/src/orchestrator::%promote-matching-findings state)
+    (ok (eq patch-a (cl-harness/src/repl-finding:repl-finding-linked-patch
+                     finding)))))

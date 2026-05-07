@@ -41,12 +41,21 @@
                 #:agent-action-tool
                 #:agent-action-arguments
                 #:agent-action-summary
+                #:agent-action-hypothesis
+                #:agent-action-probe
+                #:agent-action-finding
+                #:agent-action-decision
                 #:action-parse-error
                 #:action-parse-error-message)
+  (:import-from #:cl-harness/src/repl-finding
+                #:make-repl-finding)
+  (:import-from #:cl-harness/src/state
+                #:develop-state-record-repl-finding)
   (:import-from #:cl-harness/src/policy
                 #:policy-allowed-tools
                 #:allowed-tool-p)
   (:import-from #:cl-harness/src/planner
+                #:plan-step-index
                 #:plan-step-issue
                 #:plan-step-investigation-targets
                 #:plan-step-needs-exploration
@@ -208,6 +217,27 @@ preserved verbatim."
          (text (subseq text 0 (min 600 (length text))))
          (t (with-output-to-string (s) (yason:encode result s))))))))
 
+(defun %record-finding-from-action (action develop-state plan-step)
+  "Persist a REPL-FINDING built from ACTION's :FINDING sub-fields onto
+DEVELOP-STATE. The action parser already validated the four required
+fields are non-empty strings (src/action.lisp). Returns the
+constructed finding, or NIL when DEVELOP-STATE is NIL.
+
+PLAN-STEP, when non-NIL, supplies :related-step-index via
+PLAN-STEP-INDEX so the persisted finding is visible to step-filtered
+context views (Phase H). Tests may pass NIL when step-locality
+isn't relevant."
+  (when develop-state
+    (let ((finding (make-repl-finding
+                    :hypothesis (agent-action-hypothesis action)
+                    :probe (agent-action-probe action)
+                    :finding (agent-action-finding action)
+                    :decision (agent-action-decision action)
+                    :related-step-index (and plan-step
+                                             (plan-step-index plan-step)))))
+      (develop-state-record-repl-finding develop-state finding)
+      finding)))
+
 (defun run-explore-agent (config provider mcp-client policy logger
                           &key (max-turns 8)
                                plan-step
@@ -285,6 +315,23 @@ that (3-6 sentence memo); MAX-TURNS just bounds the worst case."
                           (setf final-status :reported
                                 final-memo (or (agent-action-summary action) ""))
                           (return-from run-loop))
+                         (:finding
+                          (%record-finding-from-action action develop-state plan-step)
+                          (log-event logger :explore-finding
+                                     (alist-hash-table
+                                      `(("turn" . ,turn)
+                                        ("hypothesis"
+                                         . ,(agent-action-hypothesis action))
+                                        ("decision"
+                                         . ,(agent-action-decision action)))
+                                      :test 'equal))
+                          (setf messages
+                                (%append-message
+                                 messages "assistant" (or text "")))
+                          (setf messages
+                                (%append-message
+                                 messages "user"
+                                 "Finding recorded. Continue exploring or emit a finish action.")))
                          (:tool-call
                           (let ((tool (agent-action-tool action))
                                 (args (or (agent-action-arguments action)

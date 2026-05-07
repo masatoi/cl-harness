@@ -21,13 +21,19 @@
                 #:develop-state-source-facts
                 #:develop-state-patch-records
                 #:develop-state-failure-ledger
-                #:develop-state-runtime-vocabulary)
+                #:develop-state-runtime-vocabulary
+                #:develop-state-repl-findings)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:runtime-vocab-fact-kind
                 #:runtime-vocab-fact-name
                 #:runtime-vocab-fact-package
                 #:runtime-vocab-fact-related-step-index
                 #:runtime-vocab-fact-stale-p)
+  (:import-from #:cl-harness/src/repl-finding
+                #:repl-finding-hypothesis
+                #:repl-finding-decision
+                #:repl-finding-promoted-to-source-p
+                #:repl-finding-related-step-index)
   (:import-from #:cl-harness/src/source-fact
                 #:source-fact-related-step-index
                 #:source-fact-path
@@ -60,6 +66,8 @@
            #:context-view-relevant-source-facts
            #:context-view-relevant-runtime-vocab
            #:context-view-runtime-vocab
+           #:context-view-relevant-repl-findings
+           #:context-view-relevant-unpromoted-findings
            #:context-view-relevant-patch-records
            #:context-view-active-failures
            #:context-view-prior-plan
@@ -131,7 +139,20 @@ to the current step. Populated for :EXPLORATION.")
                   :documentation "Full RUNTIME-VOCAB-FACT list — all
 observations across the run, oldest-first. Populated for :PLANNING
 so the planner sees what the agent has already probed (warm-start
-context). NIL when the develop-state has no runtime-vocabulary."))
+context). NIL when the develop-state has no runtime-vocabulary.")
+   (relevant-repl-findings :initarg :relevant-repl-findings :initform nil
+                           :reader context-view-relevant-repl-findings
+                           :documentation "REPL-FINDINGs filtered to
+the current step. Populated for :EXPLORATION (lists all findings,
+including promoted ones — promotion is annotated in the formatter).")
+   (relevant-unpromoted-findings :initarg :relevant-unpromoted-findings
+                                 :initform nil
+                                 :reader context-view-relevant-unpromoted-findings
+                                 :documentation "REPL-FINDINGs filtered
+to the current step AND not yet promoted to source. Populated for
+:IMPLEMENTATION so the agent sees the work that's still pending.
+Promotion is filtered at construction time (not render time): the
+LLM should never see promoted findings in the implementation view."))
   (:documentation
    "A snapshot of DEVELOP-STATE filtered for one phase. Pure data;
 no behaviour beyond construction and the CONTEXT-VIEW->STRING
@@ -164,6 +185,17 @@ is NIL (no current step, no items match)."
         (lambda (f) (%related-to-step-p
                      f step-index #'runtime-vocab-fact-related-step-index))
         (develop-state-runtime-vocabulary state))))
+
+(defun %filter-repl-findings (state step-index)
+  (and step-index
+       (remove-if-not
+        (lambda (f) (%related-to-step-p
+                     f step-index #'repl-finding-related-step-index))
+        (develop-state-repl-findings state))))
+
+(defun %filter-unpromoted-findings (state step-index)
+  (remove-if #'repl-finding-promoted-to-source-p
+             (%filter-repl-findings state step-index)))
 
 (defun %active-failures (state)
   (let ((ledger (develop-state-failure-ledger state)))
@@ -204,6 +236,8 @@ mutations do not propagate."
                       :relevant-source-facts (%filter-source-facts
                                               state step-index)
                       :relevant-runtime-vocab (%filter-runtime-vocab
+                                               state step-index)
+                      :relevant-repl-findings (%filter-repl-findings
                                                state step-index)))
       (:implementation
        (make-instance 'context-view
@@ -216,7 +250,9 @@ mutations do not propagate."
                                               state step-index)
                       :relevant-patch-records (%filter-patch-records
                                                state step-index)
-                      :active-failures (%active-failures state))))))
+                      :active-failures (%active-failures state)
+                      :relevant-unpromoted-findings
+                      (%filter-unpromoted-findings state step-index))))))
 
 (defgeneric context-view->string (view phase)
   (:documentation
@@ -305,7 +341,15 @@ targets (if any), and a one-line summary of relevant source-facts
                   (if (runtime-vocab-fact-package fact)
                       (format nil "~A:" (runtime-vocab-fact-package fact))
                       "")
-                  (runtime-vocab-fact-name fact)))))))
+                  (runtime-vocab-fact-name fact)))))
+    (let ((findings (context-view-relevant-repl-findings view)))
+      (when findings
+        (format s "~%## Findings observed in this step~%")
+        (dolist (f findings)
+          (format s "- ~A~A => ~A~%"
+                  (if (repl-finding-promoted-to-source-p f) "[PROMOTED] " "")
+                  (repl-finding-hypothesis f)
+                  (repl-finding-decision f)))))))
 
 (defmethod context-view->string ((view context-view)
                                   (phase (eql :implementation)))
@@ -343,4 +387,11 @@ later phases that need it."
                   (failure-record-description f)
                   (if (failure-record-reason f)
                       (format nil " (~A)" (failure-record-reason f))
-                      "")))))))
+                      "")))))
+    (let ((findings (context-view-relevant-unpromoted-findings view)))
+      (when findings
+        (format s "~%## Findings to implement (REPL-confirmed, not yet shipped)~%")
+        (dolist (f findings)
+          (format s "- ~A => ~A~%"
+                  (repl-finding-hypothesis f)
+                  (repl-finding-decision f)))))))

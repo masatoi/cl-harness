@@ -39,6 +39,8 @@
            #:develop-state-record-patch-record
            #:develop-state-runtime-vocabulary
            #:develop-state-record-runtime-vocab-fact
+           #:develop-state-repl-findings
+           #:develop-state-record-repl-finding
            #:develop-state-failure-ledger
            #:develop-state-record-failure))
 
@@ -136,7 +138,11 @@ instances.")
 RUNTIME-VOCAB-FACT instances captured by the agent loop's runtime
 introspection probes (cl-mcp code-find / code-describe /
 code-find-references results). Internal; public reader is
-DEVELOP-STATE-RUNTIME-VOCABULARY."))
+DEVELOP-STATE-RUNTIME-VOCABULARY.")
+   (repl-findings :initform nil :accessor %repl-findings
+                  :documentation "Reverse-chronological list of
+REPL-FINDING instances. Internal; public reader is
+DEVELOP-STATE-REPL-FINDINGS."))
   (:documentation
    "Central state for one DEVELOP invocation. Aggregates the goal,
 project context, current plan, step outcomes across replan rounds,
@@ -236,3 +242,13 @@ Returns STATE."
   "Return STATE's recorded runtime-vocab-facts in observation order
 (oldest first)."
   (reverse (%runtime-vocabulary state)))
+
+(defun develop-state-record-repl-finding (state finding)
+  "Push FINDING onto STATE's repl-findings list. Returns STATE."
+  (push finding (%repl-findings state))
+  state)
+
+(defun develop-state-repl-findings (state)
+  "Return STATE's recorded repl-findings in observation order
+(oldest first)."
+  (reverse (%repl-findings state)))

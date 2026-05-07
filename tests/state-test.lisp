@@ -38,10 +38,15 @@
                 #:develop-state-failure-ledger
                 #:develop-state-record-failure
                 #:develop-state-runtime-vocabulary
-                #:develop-state-record-runtime-vocab-fact)
+                #:develop-state-record-runtime-vocab-fact
+                #:develop-state-repl-findings
+                #:develop-state-record-repl-finding)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:make-runtime-vocab-fact
-                #:runtime-vocab-fact-name))
+                #:runtime-vocab-fact-name)
+  (:import-from #:cl-harness/src/repl-finding
+                #:make-repl-finding
+                #:repl-finding-hypothesis))
 
 (in-package #:cl-harness/tests/state-test)
 
@@ -190,3 +195,20 @@
 (deftest develop-state-runtime-vocabulary-defaults-to-empty
   (let ((s (%make)))
     (ok (null (develop-state-runtime-vocabulary s)))))
+
+(deftest develop-state-records-repl-findings-in-order
+  (let ((s (%make))
+        (f1 (make-repl-finding
+             :hypothesis "h1" :probe "p1" :finding "fnd1" :decision "d1"))
+        (f2 (make-repl-finding
+             :hypothesis "h2" :probe "p2" :finding "fnd2" :decision "d2")))
+    (develop-state-record-repl-finding s f1)
+    (develop-state-record-repl-finding s f2)
+    (let ((findings (develop-state-repl-findings s)))
+      (ok (= 2 (length findings)))
+      (ok (string= "h1" (repl-finding-hypothesis (first findings))))
+      (ok (string= "h2" (repl-finding-hypothesis (second findings)))))))
+
+(deftest develop-state-repl-findings-defaults-to-empty
+  (let ((s (%make)))
+    (ok (null (develop-state-repl-findings s)))))
