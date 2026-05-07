@@ -580,6 +580,25 @@ or symbols pass through unchanged."
     (symbol (intern (symbol-name tool-name) :keyword))
     (string (intern (string-upcase tool-name) :keyword))))
 
+(defparameter +default-tool-result-cap+ 1500
+  "Default cap (in characters) for read-style tool results in
+SUMMARIZE-TOOL-BY-KEY methods. Strings longer than this are
+truncated with a '[... truncated, N chars elided ...]'
+footer so the LLM can see that data was lost. The JSONL transcript
+records the full tool result for audit / recovery.")
+
+(defun %truncate-large-text (text &optional (cap +default-tool-result-cap+))
+  "If TEXT is longer than CAP characters, return the first CAP
+characters followed by an explicit truncation footer noting the
+elided byte count. Otherwise return TEXT unchanged. NIL TEXT
+returns NIL."
+  (cond
+    ((null text) nil)
+    ((<= (length text) cap) text)
+    (t (format nil "~A~%[... truncated, ~D chars elided ...]"
+               (subseq text 0 cap)
+               (- (length text) cap)))))
+
 (defgeneric summarize-tool-by-key (tool-key result)
   (:documentation
    "Per-tool summarizer dispatched on a keyword TOOL-KEY (e.g.
@@ -604,16 +623,29 @@ and the string→keyword conversion, then dispatches here."))
 
 (macrolet ((deftext-method (key)
              `(defmethod summarize-tool-by-key ((tool-key (eql ,key)) result)
-                (or (extract-content-text result) "(empty)"))))
+                (or (%truncate-large-text (extract-content-text result))
+                    "(empty)"))))
   ;; Read-only probes whose useful payload is just the first content
   ;; text block. Adding a new probe? Drop another deftext-method here
   ;; or define your own (defmethod summarize-tool-by-key ...).
+  ;;
+  ;; Phase D.3: results are passed through %TRUNCATE-LARGE-TEXT so
+  ;; long file/grep payloads can't balloon the agent's MESSAGES list.
+  ;; Full results are still recorded in the JSONL transcript.
   (deftext-method :code-find)
   (deftext-method :code-describe)
   (deftext-method :code-find-references)
   (deftext-method :inspect-object)
   (deftext-method :lisp-read-file)
   (deftext-method :clgrep-search))
+
+(defmethod summarize-tool-by-key ((tool-key (eql :fs-read-file)) result)
+  ;; Phase D.3: cap fs-read-file output the same way the macro caps
+  ;; the lisp-read-file / clgrep-search family. Falls back to the
+  ;; default summarizer when no content text is present so the
+  ;; isError flag and JSON dump still reach the caller.
+  (or (%truncate-large-text (extract-content-text result))
+      (default-tool-result-summary result)))
 
 (defun summarize-tool-result (tool-name result)
   "Return a compact human-readable summary of the MCP tools/call RESULT

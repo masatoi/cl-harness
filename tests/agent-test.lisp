@@ -1173,3 +1173,41 @@ order. Helper for tests that assert against the on-disk transcript."
                                  "user" (format nil "m ~A" i)))))
     (ok (eq messages
             (cl-harness/src/agent::%maybe-compact-messages messages nil)))))
+
+(defun %make-fake-text-result (text)
+  "Test helper: construct a hash-table that looks like a tools/call
+success result with one text content block."
+  (alexandria:alist-hash-table
+   `(("content" . ,(vector
+                    (alexandria:alist-hash-table
+                     `(("type" . "text") ("text" . ,text))
+                     :test 'equal))))
+   :test 'equal))
+
+(deftest summarize-fs-read-file-truncates-large-text
+  (let* ((huge (make-string 5000 :initial-element #\a))
+         (result (%make-fake-text-result huge))
+         (out (cl-harness/src/agent::summarize-tool-result "fs-read-file" result)))
+    (ok (< (length out) 2500))
+    (ok (search "[... truncated" out))))
+
+(deftest summarize-fs-read-file-leaves-short-text-alone
+  (let* ((short "(defun foo () 1)")
+         (result (%make-fake-text-result short))
+         (out (cl-harness/src/agent::summarize-tool-result "fs-read-file" result)))
+    (ok (search short out))
+    (ok (not (search "truncated" out)))))
+
+(deftest summarize-lisp-read-file-truncates-large-text
+  (let* ((huge (make-string 5000 :initial-element #\b))
+         (result (%make-fake-text-result huge))
+         (out (cl-harness/src/agent::summarize-tool-result "lisp-read-file" result)))
+    (ok (< (length out) 2500))
+    (ok (search "[... truncated" out))))
+
+(deftest summarize-clgrep-search-truncates-large-text
+  (let* ((huge (make-string 5000 :initial-element #\c))
+         (result (%make-fake-text-result huge))
+         (out (cl-harness/src/agent::summarize-tool-result "clgrep-search" result)))
+    (ok (< (length out) 2500))
+    (ok (search "[... truncated" out))))
