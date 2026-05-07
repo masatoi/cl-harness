@@ -36,7 +36,12 @@
                 #:develop-state-patch-records
                 #:develop-state-record-patch-record
                 #:develop-state-failure-ledger
-                #:develop-state-record-failure))
+                #:develop-state-record-failure
+                #:develop-state-runtime-vocabulary
+                #:develop-state-record-runtime-vocab-fact)
+  (:import-from #:cl-harness/src/runtime-vocabulary
+                #:make-runtime-vocab-fact
+                #:runtime-vocab-fact-name))
 
 (in-package #:cl-harness/tests/state-test)
 
@@ -168,3 +173,20 @@
     (ok (= 3 (develop-state-current-step-index s)))
     (setf (develop-state-current-step-index s) nil)
     (ok (null (develop-state-current-step-index s)))))
+
+(deftest develop-state-records-runtime-vocab-facts-in-order
+  (let ((s (%make))
+        (f1 (make-runtime-vocab-fact
+             :kind :function :name "f1" :via-tool "code-describe"))
+        (f2 (make-runtime-vocab-fact
+             :kind :function :name "f2" :via-tool "code-describe")))
+    (develop-state-record-runtime-vocab-fact s f1)
+    (develop-state-record-runtime-vocab-fact s f2)
+    (let ((facts (develop-state-runtime-vocabulary s)))
+      (ok (= 2 (length facts)))
+      (ok (string= "f1" (runtime-vocab-fact-name (first facts))))
+      (ok (string= "f2" (runtime-vocab-fact-name (second facts)))))))
+
+(deftest develop-state-runtime-vocabulary-defaults-to-empty
+  (let ((s (%make)))
+    (ok (null (develop-state-runtime-vocabulary s)))))
