@@ -41,6 +41,7 @@
                "cl-harness/tests/runtime-vocabulary-test"
                "cl-harness/tests/source-fact-test"
                "cl-harness/tests/patch-record-test"
+               "cl-harness/tests/repl-finding-test"
                "cl-harness/tests/failure-ledger-test"
                "cl-harness/tests/context-view-test"
                "cl-harness/tests/report-test")
