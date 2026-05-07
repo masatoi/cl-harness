@@ -21,7 +21,8 @@
            #:run-limits-max-read-files
            #:run-limits-max-repl-evals
            #:run-limits-max-wall-clock-seconds
-           #:run-limits-max-action-parse-errors))
+           #:run-limits-max-action-parse-errors
+           #:run-limits-max-context-tokens))
 
 (in-package #:cl-harness/src/config)
 
@@ -40,7 +41,17 @@
     :reader run-limits-max-action-parse-errors
     :documentation "Consecutive ACTION-PARSE-ERRORs tolerated before
 RUN-AGENT exits :limit-exhausted with limit-hit :max-action-parse-errors.
-Resets to zero on any successful PARSE-ACTION."))
+Resets to zero on any successful PARSE-ACTION.")
+   (max-context-tokens
+    :initarg :max-context-tokens
+    :initform 50000
+    :reader run-limits-max-context-tokens
+    :documentation "Approximate token budget for the agent loop's
+message history. When the running estimate of CHAT-TOKENS in MESSAGES
+exceeds this, the agent calls COMPACT-HISTORY before the next
+COMPLETE-CHAT call. The threshold is approximate (chars / 4 heuristic);
+fine-grained accuracy is not required because the goal is keeping the
+context window from blowing, not minimising tokens."))
   (:documentation "Resource budget for a single fix run (PRD §8.4 REQ-AGENT-003)."))
 
 (defun make-default-limits ()
@@ -52,7 +63,8 @@ Resets to zero on any successful PARSE-ACTION."))
                  :max-read-files 40
                  :max-repl-evals 40
                  :max-wall-clock-seconds 600
-                 :max-action-parse-errors 3))
+                 :max-action-parse-errors 3
+                 :max-context-tokens 50000))
 
 (defclass run-config ()
   ((project-root :initarg :project-root :reader run-config-project-root)

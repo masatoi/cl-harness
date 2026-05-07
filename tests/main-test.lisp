@@ -13,7 +13,9 @@
                 #:run-config-condition
                 #:run-config-limits
                 #:run-limits
-                #:run-limits-max-patches)
+                #:run-limits-max-patches
+                #:run-limits-max-context-tokens
+                #:make-default-limits)
   (:import-from #:cl-harness/src/log
                 #:with-run-logger
                 #:log-event))
@@ -41,6 +43,20 @@
       (ok (eq :runtime-native (run-config-condition c)))
       (ok (typep (run-config-limits c) 'run-limits))
       (ok (= 3 (run-limits-max-patches (run-config-limits c)))))))
+
+(deftest run-limits-default-max-context-tokens
+  (ok (= 50000
+         (cl-harness/src/config:run-limits-max-context-tokens
+          (cl-harness/src/config:make-default-limits)))))
+
+(deftest run-limits-accepts-custom-max-context-tokens
+  (let ((l (make-instance 'cl-harness/src/config:run-limits
+                          :max-turns 1 :max-tool-calls 1
+                          :max-patches 1 :max-read-files 1
+                          :max-repl-evals 1 :max-wall-clock-seconds 1
+                          :max-action-parse-errors 1
+                          :max-context-tokens 12345)))
+    (ok (= 12345 (cl-harness/src/config:run-limits-max-context-tokens l)))))
 
 (deftest log-roundtrip
   (testing "log-event writes one JSON line per call"
