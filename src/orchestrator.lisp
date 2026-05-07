@@ -76,6 +76,16 @@
                 #:repl-finding-hypothesis
                 #:repl-finding-promoted-to-source-p
                 #:repl-finding-mark-promoted)
+  (:import-from #:cl-harness/src/step-result
+                #:develop-step-result
+                #:develop-step-result-step-index
+                #:develop-step-result-test-name
+                #:develop-step-result-run-config
+                #:develop-step-result-status
+                #:develop-step-result-run-agent-state
+                #:develop-step-result-transcript-path
+                #:develop-step-result-explore-result
+                #:develop-step-result-abstraction-decisions)
   (:import-from #:cl-harness/src/verify
                 #:verify-result-test)
   (:import-from #:cl-harness/src/integration
@@ -117,33 +127,14 @@
 (in-package #:cl-harness/src/orchestrator)
 
 ;; --- result ---------------------------------------------------------------
-
-(defclass develop-step-result ()
-  ((step-index :initarg :step-index :reader develop-step-result-step-index)
-   (test-name :initarg :test-name :reader develop-step-result-test-name)
-   (run-config :initarg :run-config :reader develop-step-result-run-config)
-   (status :initarg :status :reader develop-step-result-status)
-   (run-agent-state :initarg :run-agent-state
-                    :initform nil
-                    :reader develop-step-result-run-agent-state)
-   (transcript-path :initarg :transcript-path
-                    :initform nil
-                    :reader develop-step-result-transcript-path)
-   (explore-result :initarg :explore-result :initform nil
-                   :reader develop-step-result-explore-result)
-   (abstraction-decisions :initarg :abstraction-decisions :initform nil
-                          :reader develop-step-result-abstraction-decisions))
-  (:documentation
-   "One step's outcome inside an EXECUTE-PLAN run. STATUS mirrors the
-RUN-AGENT terminal status (:PASSED, :GIVE-UP, :LIMIT-EXHAUSTED,
-:DIRTY-ONLY, :ERROR). RUN-AGENT-STATE is the underlying AGENT-STATE
-the executor returned; the orchestrator stays agnostic about its
-exact shape so tests can inject a stand-in. EXPLORE-RESULT (v0.4
-Phase 3) is the EXPLORE-RESULT object from the explore sub-agent
-when needs-exploration was non-:NONE; NIL otherwise.
-ABSTRACTION-DECISIONS (v0.4 Phase 4) is the list of
-ABSTRACTION-DECISION instances PARSE-ABSTRACTION-DECISIONS extracted
-from the explore memo (NIL when no explore ran or no markers found)."))
+;;
+;; DEVELOP-STEP-RESULT lives in CL-HARNESS/SRC/STEP-RESULT (extracted
+;; so callers that need the class without pulling orchestrator's
+;; dependency surface — notably SUBTASK-SUMMARY — can :import-from
+;; that module). The orchestrator's :import-from + :export above
+;; preserves the prior public spelling: external callers that wrote
+;; CL-HARNESS/SRC/ORCHESTRATOR:DEVELOP-STEP-RESULT-X keep working,
+;; because :import-from shares symbol identity.
 
 ;; --- helpers --------------------------------------------------------------
 
