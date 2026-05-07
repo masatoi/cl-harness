@@ -864,16 +864,22 @@ orchestrator` の load-time 循環を生むことが判明したため、
 
 これで context-management refactor の `docs/context-management.md`
 で identify した sections (§3.1-3.9 / §4 / §5 / §6 / §8 / §9 /
-§10) は **すべて MVP 実装が landed** した。残るのは Phase C の
-orchestrator → planner-fn `:develop-state` 配線の有効化 (下記
-注を参照)、Phase G の `%vocab-facts-from-tool-result` input shape
-bug (yason の vector parsing と不整合)、`develop-step-result`
-切り出しの 3 つのクリーンアップ phase。
+§10) は **すべて MVP 実装が landed** した。残るのは Phase G の
+`%vocab-facts-from-tool-result` input shape bug (yason の vector
+parsing と不整合) と `develop-step-result` 切り出しの 2 つの
+クリーンアップ phase のみ。
 
-**注**: Phase C は orchestrator → planner-fn の `:develop-state` 配線を
-意図的に保留している。`plan-development` は kwarg を受け付けるものの、
-`develop` のループは現状 kwarg を渡していないため、`:planning` formatter
-は test 経由でのみ exercise される。develop-state を planner-fn に流すと
-プロンプトの section 順序が変わる（mode-nudge が prior-plan / failure-
-context の後ろに移動する）ため、後続 phase で実モデルに対して検証した上で
-有効化する。
+Phase C wiring follow-up (landed 2026-05-08): 上記の §14 表外と
+して個別行を起こさず、Phase C 行と本パラグラフを参照。具体的には
+`src/orchestrator.lisp` の 2 箇所の `funcall planner-fn` で
+`:develop-state state` を渡すよう更新した — initial-plan 呼び出しと
+replan 呼び出しの両方。これで `develop` の実 production プロンプト
+が `cl-harness/src/context-view:context-view->string` `:planning`
+経由で組み立てられる (legacy ad-hoc 文字列組み立ては
+`%build-user-prompt` の `(t ...)` branch に残し、`:develop-state`
+を渡さない standalone caller / test stub / bench harness の
+planner-fn callback 用に保持)。section 順序は legacy と微妙に
+異なる (mode-nudge が context-view block の後ろに移動) が、内容は
+同じ。`develop-threads-develop-state-into-planner-fn` deftest が
+両 call site で `develop-state` インスタンスが渡されていることを
+assert する。

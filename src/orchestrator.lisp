@@ -729,21 +729,25 @@ MODE (v0.4 Phase 6) selects the development style:
                                    :mode mode)))
     (setf (develop-state-current-plan state)
           (%apply-mode-to-plan
-           ;; Phase C: planner-fn is intentionally NOT given :develop-state here.
-           ;; Phase C wired the :planning formatter into PLAN-DEVELOPMENT, but the
-           ;; planner branch's section ordering differs from legacy (mode-nudge
-           ;; moves after prior-plan / failure-context). Threading :develop-state
-           ;; through here would silently switch production prompts to the new
-           ;; ordering, which has not been validated against a real model. A future
-           ;; phase should either (a) align the two orderings, or (b) explicitly
-           ;; opt into the new shape after validation.
+           ;; Phase C wiring (active since the Phase C wiring follow-up):
+           ;; thread :develop-state into PLAN-DEVELOPMENT so the planner's
+           ;; user prompt is built via the :planning context-view formatter
+           ;; (cl-harness/src/context-view) instead of the legacy ad-hoc
+           ;; string assembly. Section ordering differs slightly from
+           ;; legacy (mode-nudge now follows the context-view block rather
+           ;; than appearing between Goal and project metadata), but the
+           ;; rendered content is the same. The legacy branch in
+           ;; %BUILD-USER-PROMPT remains intact for standalone callers
+           ;; (test stubs, external callers, the bench harness's
+           ;; planner-fn callback) that don't pass :develop-state.
            (funcall planner-fn goal
                     :project-root project-root
                     :system system
                     :test-system test-system
                     :provider provider
                     :project-inventory project-inventory
-                    :mode mode)
+                    :mode mode
+                    :develop-state state)
            mode))
     (loop
       (let* ((round-results (execute-plan
@@ -786,14 +790,13 @@ MODE (v0.4 Phase 6) selects the development style:
                    this-failure))
            (incf (develop-state-replan-count state))
            (let ((new-plan (%apply-mode-to-plan
-                            ;; Phase C: planner-fn is intentionally NOT given :develop-state here.
-                            ;; Phase C wired the :planning formatter into PLAN-DEVELOPMENT, but the
-                            ;; planner branch's section ordering differs from legacy (mode-nudge
-                            ;; moves after prior-plan / failure-context). Threading :develop-state
-                            ;; through here would silently switch production prompts to the new
-                            ;; ordering, which has not been validated against a real model. A future
-                            ;; phase should either (a) align the two orderings, or (b) explicitly
-                            ;; opt into the new shape after validation.
+                            ;; Phase C wiring active: see the initial-plan
+                            ;; call site above for rationale. Replan path
+                            ;; threads :develop-state too so the planner's
+                            ;; replan prompt is built via the :planning
+                            ;; context-view formatter (which already
+                            ;; renders prior-plan + failure-context as
+                            ;; structured sub-sections of the view).
                             (funcall planner-fn goal
                                      :project-root project-root
                                      :system system
@@ -803,7 +806,8 @@ MODE (v0.4 Phase 6) selects the development style:
                                      :mode mode
                                      :prior-plan (develop-state-current-plan state)
                                      :failure-context
-                                     (%failure-context last-result))
+                                     (%failure-context last-result)
+                                     :develop-state state)
                             mode)))
              (when (equal (%first-test-name new-plan)
                           (develop-state-last-failure-test-name state))
