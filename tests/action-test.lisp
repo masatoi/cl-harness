@@ -16,6 +16,10 @@
                 #:agent-action-status
                 #:agent-action-summary
                 #:agent-action-thought
+                #:agent-action-hypothesis
+                #:agent-action-probe
+                #:agent-action-finding
+                #:agent-action-decision
                 #:parse-action
                 #:action-parse-error
                 #:action-parse-error-message))
@@ -125,4 +129,30 @@
 (deftest parse-action-rejects-finish-bad-status
   (ok (handler-case (progn (parse-action
                             "{\"type\":\"finish\",\"status\":\"maybe\"}") nil)
+        (action-parse-error () t))))
+
+(deftest parse-action-recognises-finding-shape
+  (let ((a (parse-action
+            "{\"type\":\"finding\",\"hypothesis\":\"h\",\"probe\":\"p\",\"finding\":\"f\",\"decision\":\"d\"}")))
+    (ok (typep a 'agent-action))
+    (ok (eq :finding (agent-action-type a)))
+    (ok (string= "h" (agent-action-hypothesis a)))
+    (ok (string= "p" (agent-action-probe a)))
+    (ok (string= "f" (agent-action-finding a)))
+    (ok (string= "d" (agent-action-decision a)))))
+
+(deftest parse-action-rejects-finding-with-missing-fields
+  (ok (handler-case
+          (progn
+            (parse-action
+             "{\"type\":\"finding\",\"hypothesis\":\"h\"}")
+            nil)
+        (action-parse-error () t))))
+
+(deftest parse-action-rejects-finding-with-empty-string
+  (ok (handler-case
+          (progn
+            (parse-action
+             "{\"type\":\"finding\",\"hypothesis\":\"\",\"probe\":\"p\",\"finding\":\"f\",\"decision\":\"d\"}")
+            nil)
         (action-parse-error () t))))
