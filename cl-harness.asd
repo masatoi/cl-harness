@@ -38,6 +38,7 @@
                "cl-harness/tests/mode-selector-test"
                "cl-harness/tests/develop-bench-test"
                "cl-harness/tests/state-test"
+               "cl-harness/tests/runtime-vocabulary-test"
                "cl-harness/tests/source-fact-test"
                "cl-harness/tests/patch-record-test"
                "cl-harness/tests/failure-ledger-test"
