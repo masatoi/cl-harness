@@ -177,13 +177,16 @@ on both sides of the diff header."
 (defun %vocab-kind-from-string (kind-string)
   "Coerce a string like \"function\" into a keyword from
 +SUPPORTED-RUNTIME-VOCAB-KINDS+, or NIL when the string isn't a
-recognised kind. Defensive: tool results from cl-mcp arrive as JSON
-strings, lower-cased."
+recognised kind. Uses FIND-SYMBOL (not INTERN) so unknown kinds do
+not pollute the keyword package — cl-mcp results are external input
+and the project style guide forbids runtime INTERN of untrusted
+strings."
   (when (stringp kind-string)
-    (let ((normalized (intern (string-upcase
-                               (substitute #\- #\_ kind-string))
-                              :keyword)))
-      (when (member normalized +supported-runtime-vocab-kinds+)
+    (let ((normalized (find-symbol (string-upcase
+                                    (substitute #\- #\_ kind-string))
+                                   :keyword)))
+      (when (and normalized
+                 (member normalized +supported-runtime-vocab-kinds+))
         normalized))))
 
 (defun %vocab-fact-from-tool-result (tool result &key related-step-index)
