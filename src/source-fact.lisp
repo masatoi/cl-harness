@@ -21,7 +21,8 @@
            #:source-fact-read-at
            #:source-fact-mtime-at-read
            #:source-fact-related-step-index
-           #:source-fact-via-tool))
+           #:source-fact-via-tool
+           #:source-fact-stale-p))
 
 (in-package #:cl-harness/src/source-fact)
 
@@ -95,3 +96,23 @@ pathname or string, got ~S" path)))))
                      :mtime-at-read effective-mtime
                      :related-step-index related-step-index
                      :via-tool via-tool))))
+
+(defun source-fact-stale-p (fact)
+  "Return T when FACT's path on disk has been modified since the
+read recorded by the fact (i.e. (file-write-date path) >
+(source-fact-mtime-at-read fact)). Returns NIL when:
+- The fact has no recorded mtime (no baseline to compare against).
+- The file no longer exists (no current mtime to read).
+- The file's mtime equals or precedes the recorded baseline.
+
+The third branch is the typical 'no staleness' case: the file is
+unchanged since the read.
+
+This is a pure predicate — no side effects, no caching. Phase E
+introduces it as a building block; Phase F may wire it into
+context-view filtering or invalidation."
+  (let ((recorded (source-fact-mtime-at-read fact)))
+    (and recorded
+         (let ((current (handler-case (file-write-date (source-fact-path fact))
+                          (error () nil))))
+           (and current (> current recorded))))))
