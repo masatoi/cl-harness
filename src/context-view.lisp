@@ -25,7 +25,8 @@
                 #:source-fact-related-step-index
                 #:source-fact-path
                 #:source-fact-form-type
-                #:source-fact-form-name)
+                #:source-fact-form-name
+                #:source-fact-stale-p)
   (:import-from #:cl-harness/src/planner
                 #:plan-step-issue
                 #:plan-step-investigation-targets
@@ -245,7 +246,8 @@ targets (if any), and a one-line summary of relevant source-facts
       (when facts
         (format s "~%## Source already read in this step~%")
         (dolist (fact facts)
-          (format s "- ~A~A~%"
+          (format s "- ~A~A~A~%"
+                  (if (source-fact-stale-p fact) "[STALE] " "")
                   (namestring (source-fact-path fact))
                   (if (source-fact-form-name fact)
                       (format nil " :: ~A ~A"
