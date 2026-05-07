@@ -532,17 +532,29 @@ Returns the text or NIL when none is present."
 
 (defun summarize-run-tests (result)
   "Compact summary of a run-tests tools/call RESULT, including up to a few
-failed_tests entries when present (PRD §10.3 SUMMARIZE-TOOL-RESULT)."
+failed_tests entries when present (PRD §10.3 SUMMARIZE-TOOL-RESULT).
+
+When the failed_tests array exceeds the display limit (5), append a
+single-line footer announcing how many failures were truncated so the
+LLM is aware of the silent loss; the full list remains in the JSONL
+transcript."
   (with-output-to-string (s)
     (let ((passed (gethash "passed" result))
           (failed (gethash "failed" result))
-          (failed-tests (gethash "failed_tests" result)))
-      (format s "passed: ~A, failed: ~A~%"
-              (or passed "?") (or failed "?"))
-      (when (and failed-tests
-                 (or (and (vectorp failed-tests) (plusp (length failed-tests)))
-                     (and (listp failed-tests) failed-tests)))
-        (format s "~A" (format-failed-tests failed-tests))))))
+          (failed-tests (gethash "failed_tests" result))
+          (display-limit 5))
+      (format s "passed: ~A, failed: ~A~%" (or passed "?") (or failed "?"))
+      (when
+          (and failed-tests
+               (or (and (vectorp failed-tests) (plusp (length failed-tests)))
+                   (and (listp failed-tests) failed-tests)))
+        (format s "~A" (format-failed-tests failed-tests :limit display-limit)))
+      (let ((failed-count (cond ((vectorp failed-tests) (length failed-tests))
+                                ((listp failed-tests) (length failed-tests))
+                                (t 0))))
+        (when (> failed-count display-limit)
+          (format s "(~D more failure~:P truncated; see JSONL transcript for the full list)~%"
+                  (- failed-count display-limit)))))))
 
 (defun summarize-repl-eval (result)
   "Compact summary of a repl-eval tools/call RESULT.

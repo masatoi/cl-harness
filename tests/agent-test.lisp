@@ -1211,3 +1211,33 @@ success result with one text content block."
          (out (cl-harness/src/agent::summarize-tool-result "clgrep-search" result)))
     (ok (< (length out) 2500))
     (ok (search "[... truncated" out))))
+
+(deftest summarize-run-tests-signals-truncation-when-over-five-failures
+  (let* ((entries (loop for i from 0 below 8
+                        collect (alexandria:alist-hash-table
+                                 `(("test_name" . ,(format nil "test-~D" i))
+                                   ("description" . ,(format nil "test ~D failed" i))
+                                   ("reason" . "x"))
+                                 :test 'equal)))
+         (tr (alexandria:alist-hash-table
+              `(("passed" . 0)
+                ("failed" . 8)
+                ("failed_tests" . ,(coerce entries 'vector)))
+              :test 'equal)))
+    (let ((out (cl-harness/src/agent::summarize-tool-result "run-tests" tr)))
+      (ok (search "3 more" out))
+      (ok (or (search "test-0" out) (search "test-1" out)))
+      (ok (not (search "test-7" out))))))
+
+(deftest summarize-run-tests-no-footer-when-five-or-fewer-failures
+  (let* ((entries (loop for i from 0 below 5
+                        collect (alexandria:alist-hash-table
+                                 `(("test_name" . ,(format nil "t~D" i))
+                                   ("description" . "x") ("reason" . "y"))
+                                 :test 'equal)))
+         (tr (alexandria:alist-hash-table
+              `(("passed" . 0) ("failed" . 5)
+                ("failed_tests" . ,(coerce entries 'vector)))
+              :test 'equal)))
+    (let ((out (cl-harness/src/agent::summarize-tool-result "run-tests" tr)))
+      (ok (not (search "more failure" out))))))
