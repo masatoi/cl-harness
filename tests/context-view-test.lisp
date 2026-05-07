@@ -16,7 +16,11 @@
                 #:develop-state-record-patch-record
                 #:develop-state-record-failure
                 #:develop-state-record-runtime-vocab-fact
-                #:develop-state-record-repl-finding)
+                #:develop-state-record-repl-finding
+                #:develop-state-set-project-summary
+                #:develop-state-mark-project-summary-dirty)
+  (:import-from #:cl-harness/src/project-summary
+                #:make-project-summary)
   (:import-from #:cl-harness/src/runtime-vocabulary
                 #:make-runtime-vocab-fact)
   (:import-from #:cl-harness/src/repl-finding
@@ -506,3 +510,75 @@
            (str (context-view->string view :implementation)))
       ;; Section header should be absent when only promoted findings exist.
       (ok (null (search "Findings to implement" str))))))
+
+(deftest planning-formatter-renders-project-summary-when-present
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests"))
+        (sum (cl-harness/src/project-summary:make-project-summary
+              :project-root "/tmp/p/" :system "x"
+              :test-system "x/tests"
+              :asd-files (list "x.asd")
+              :source-files (list "src/main.lisp")
+              :test-files (list "tests/main-test.lisp")
+              :text "raw inventory text")))
+    (cl-harness/src/state:develop-state-set-project-summary s sum)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :planning))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :planning)))
+      (ok (search "## Project summary" str))
+      (ok (search "x.asd" str))
+      (ok (search "src/main.lisp" str))
+      (ok (search "tests/main-test.lisp" str))
+      ;; Not stale -- no [STALE] prefix.
+      (ok (null (search "[STALE]" str))))))
+
+(deftest planning-formatter-marks-dirty-summary-as-stale
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests"))
+        (sum (cl-harness/src/project-summary:make-project-summary
+              :project-root "/tmp/p/" :system "x"
+              :test-system "x/tests"
+              :asd-files (list "x.asd"))))
+    (cl-harness/src/state:develop-state-set-project-summary s sum)
+    (cl-harness/src/state:develop-state-mark-project-summary-dirty s)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :planning))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :planning)))
+      (ok (search "[STALE]" str))
+      (ok (search "Project summary" str)))))
+
+(deftest planning-formatter-emits-both-summary-and-text-inventory
+  ;; develop-state with both project-summary AND project-inventory text
+  ;; populated -> structured summary first, then text inventory block.
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests"
+            :project-inventory "free-text inventory line"))
+        (sum (cl-harness/src/project-summary:make-project-summary
+              :project-root "/tmp/p/" :system "x"
+              :test-system "x/tests"
+              :asd-files (list "x.asd"))))
+    (cl-harness/src/state:develop-state-set-project-summary s sum)
+    (let* ((view (cl-harness/src/context-view:make-context-view
+                  s :phase :planning))
+           (str (cl-harness/src/context-view:context-view->string
+                 view :planning))
+           (sum-pos (search "Project summary" str))
+           (inv-pos (search "Project inventory" str)))
+      (ok (and sum-pos inv-pos))
+      ;; Summary appears before inventory (structured first).
+      (ok (< sum-pos inv-pos)))))
+
+(deftest planning-formatter-omits-summary-section-when-absent
+  (let* ((s (cl-harness/src/state:make-develop-state
+             :goal "g" :project-root "/tmp/p"
+             :system "x" :test-system "x/tests"))
+         (view (cl-harness/src/context-view:make-context-view
+                s :phase :planning))
+         (str (cl-harness/src/context-view:context-view->string
+               view :planning)))
+    (ok (null (search "Project summary" str)))))
