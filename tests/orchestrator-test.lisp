@@ -913,3 +913,80 @@ plan (so a stuck loop test can keep getting the same response)."
                           :final-plan nil
                           :step-results nil)))
     (ok (null (cl-harness/src/orchestrator:develop-result-reason r)))))
+
+;; --- failure-context-enrichment helpers --------------------------
+
+(defun %make-stub-step-result-with-state (&key (step-index 0)
+                                               (test-name "demo")
+                                               (status :give-up)
+                                               agent-state)
+  "Build a develop-step-result whose run-agent-state slot points to
+the supplied AGENT-STATE. Used to drive the new %FAILURE-CONTEXT
+multi-paragraph branches without spinning up a real run-agent."
+  (make-instance 'cl-harness/src/step-result:develop-step-result
+                 :step-index step-index
+                 :test-name test-name
+                 :status status
+                 :run-agent-state agent-state))
+
+(deftest failure-context-omits-empty-sections
+  ;; Stub agent-state with NIL final-verify and empty ring; output
+  ;; should be the single-paragraph form (no subheaders).
+  (let* ((state (make-instance 'cl-harness/src/agent::agent-state))
+         (sr (%make-stub-step-result-with-state
+              :step-index 1 :test-name "foo" :status :give-up
+              :agent-state state))
+         (out (cl-harness/src/orchestrator::%failure-context sr)))
+    (ok (search "step 1" out))
+    (ok (search "foo" out))
+    (ok (search ":give-up" out))
+    (ok (not (search "### " out))
+        "no subheaders emitted when no enrichment data available")))
+
+(deftest failure-context-includes-tool-errors-when-ring-non-empty
+  ;; Push 2 tool-error entries onto agent-state's ring; verify both
+  ;; show up in the rendered string in newest-first order.
+  (let ((state (make-instance 'cl-harness/src/agent::agent-state)))
+    (cl-harness/src/agent::record-tool-error
+     state "lisp-edit-form" "defun foo (replace)" "form-name not unique" 5)
+    (cl-harness/src/agent::record-tool-error
+     state "repl-eval" "(boom)" "INPUT unbound" 6)
+    (let* ((sr (%make-stub-step-result-with-state
+                :step-index 0 :test-name "x" :status :give-up
+                :agent-state state))
+           (out (cl-harness/src/orchestrator::%failure-context sr)))
+      (ok (search "### Recent tool errors" out))
+      (ok (search "repl-eval" out))
+      (ok (search "INPUT unbound" out))
+      (ok (search "lisp-edit-form" out))
+      (ok (search "form-name not unique" out))
+      (ok (< (search "INPUT unbound" out)
+             (search "form-name not unique" out))
+          "newest entry rendered first"))))
+
+(deftest failure-context-includes-load-error-when-final-verify-load-failed
+  ;; Stub final-verify slot with a verify-result whose load-result
+  ;; carries an EXPORT name-conflict isError=true text.
+  (let* ((load-fail
+          (alist-hash-table
+           `(("isError" . t)
+             ("content"
+              . ,(vector
+                  (alist-hash-table
+                   '(("type" . "text")
+                     ("text"
+                      . "EXPORT FIB::FIBONACCI causes name-conflicts in #<PACKAGE \"FIB/TESTS/MAIN\"> between the following symbols: FIB::FIBONACCI, FIB/TESTS/MAIN::FIBONACCI"))
+                   :test 'equal))))
+           :test 'equal))
+         (vr (make-instance 'cl-harness/src/verify:verify-result
+                            :status :load-failed
+                            :load-result load-fail))
+         (state (make-instance 'cl-harness/src/agent::agent-state)))
+    (setf (cl-harness/src/agent:agent-state-final-verify state) vr)
+    (let* ((sr (%make-stub-step-result-with-state
+                :step-index 0 :test-name "y" :status :give-up
+                :agent-state state))
+           (out (cl-harness/src/orchestrator::%failure-context sr)))
+      (ok (search "### Last verify error (load-system)" out))
+      (ok (search "EXPORT FIB::FIBONACCI" out))
+      (ok (search "name-conflicts" out)))))
