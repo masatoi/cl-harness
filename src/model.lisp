@@ -171,7 +171,6 @@ underlying transport raised before producing a status."
            (cond
              ((not (hash-table-p parsed)) :malformed-response)
              ((or (null choices)
-                  (and (listp choices) (null choices))
                   (and (vectorp choices) (zerop (length choices))))
               :malformed-response)
              (t nil)))
