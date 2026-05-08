@@ -127,6 +127,107 @@ exercise the JSONL `error_text' field."
           "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":~A}]}}"
           id (with-output-to-string (s) (yason:encode text s))))
 
+(defun %iserror-tool-result (text)
+  "Build a hash-table mimicking an MCP tool-result with isError=true
+and a single text content entry. Used by the new tool-error ring
+populate tests."
+  (alexandria:alist-hash-table
+   `(("isError" . t)
+     ("content"
+      . ,(vector
+          (alexandria:alist-hash-table
+           `(("type" . "text") ("text" . ,text))
+           :test 'equal))))
+   :test 'equal))
+
+(defun %fresh-agent-state ()
+  "Construct a bare AGENT-STATE for ring-buffer tests."
+  (make-instance 'cl-harness/src/agent::agent-state))
+
+(deftest record-tool-error-pushes-and-truncates
+  (let ((state (%fresh-agent-state)))
+    (cl-harness/src/agent::record-tool-error
+     state "repl-eval" "(foo 1)" "err A" 1)
+    (cl-harness/src/agent::record-tool-error
+     state "repl-eval" "(foo 2)" "err B" 2)
+    (cl-harness/src/agent::record-tool-error
+     state "repl-eval" "(foo 3)" "err C" 3)
+    (cl-harness/src/agent::record-tool-error
+     state "repl-eval" "(foo 4)" "err D" 4)
+    (let ((ring (cl-harness/src/agent:agent-state-last-tool-errors state)))
+      (ok (= 3 (length ring)))
+      (ok (string= "err D" (getf (first ring) :error-text))
+          "head is most recent")
+      (ok (string= "err B" (getf (third ring) :error-text))
+          "oldest retained is the 2nd push (1st rolled off)"))))
+
+(deftest summarize-tool-args-handles-known-tools
+  (flet ((h (alist) (alexandria:alist-hash-table alist :test 'equal)))
+    (ok (search "(my-parser \"abc\")"
+                (cl-harness/src/agent::%summarize-tool-args
+                 "repl-eval"
+                 (h '(("code" . "(my-parser \"abc\")"))))))
+    (ok (search "defun fibonacci"
+                (cl-harness/src/agent::%summarize-tool-args
+                 "lisp-edit-form"
+                 (h '(("form_type" . "defun")
+                      ("form_name" . "fibonacci")
+                      ("operation" . "replace"))))))
+    (ok (string= "fib"
+                 (cl-harness/src/agent::%summarize-tool-args
+                  "load-system" (h '(("system" . "fib"))))))
+    (ok (search "fib/tests"
+                (cl-harness/src/agent::%summarize-tool-args
+                 "run-tests" (h '(("system" . "fib/tests"))))))))
+
+(deftest summarize-tool-args-falls-back-to-json-dump
+  (let* ((args (alexandria:alist-hash-table '(("foo" . "bar") ("n" . 42))
+                                            :test 'equal))
+         (out (cl-harness/src/agent::%summarize-tool-args
+               "unknown-tool" args)))
+    (ok (search "foo" out))
+    (ok (<= (length out) 200))))
+
+(deftest summarize-tool-args-flattens-newlines
+  (let* ((args (alexandria:alist-hash-table
+                '(("code" . "(progn
+  (foo)
+  (bar))"))
+                :test 'equal))
+         (out (cl-harness/src/agent::%summarize-tool-args
+               "repl-eval" args)))
+    (ok (not (find #\Newline out)) "no embedded newlines")
+    (ok (search "(progn" out))))
+
+(deftest step-turn-records-tool-error-when-iserror-true
+  (let ((state (%fresh-agent-state)))
+    (cl-harness/src/agent::%maybe-record-tool-error
+     state "repl-eval"
+     (alexandria:alist-hash-table '(("code" . "(boom)")) :test 'equal)
+     (%iserror-tool-result "The variable INPUT is unbound.")
+     7)
+    (let ((ring (cl-harness/src/agent:agent-state-last-tool-errors state)))
+      (ok (= 1 (length ring)))
+      (ok (string= "repl-eval" (getf (first ring) :tool-name)))
+      (ok (search "INPUT is unbound" (getf (first ring) :error-text)))
+      (ok (= 7 (getf (first ring) :turn))))))
+
+(deftest step-turn-skips-recording-on-success
+  (let ((state (%fresh-agent-state))
+        (ok-result (alexandria:alist-hash-table
+                    `(("isError" . :false)
+                      ("content" . ,(vector
+                                     (alexandria:alist-hash-table
+                                      '(("type" . "text") ("text" . "ok"))
+                                      :test 'equal))))
+                    :test 'equal)))
+    (cl-harness/src/agent::%maybe-record-tool-error
+     state "repl-eval"
+     (alexandria:alist-hash-table '(("code" . "(:ok)")) :test 'equal)
+     ok-result
+     1)
+    (ok (null (cl-harness/src/agent:agent-state-last-tool-errors state)))))
+
 (defun %read-jsonl-events (path)
   "Read every line from PATH and return the parsed YASON objects in file
 order. Helper for tests that assert against the on-disk transcript."

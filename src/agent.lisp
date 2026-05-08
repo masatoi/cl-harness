@@ -109,6 +109,7 @@
            #:agent-state-parse-error-streak
            #:agent-state-develop-state
            #:agent-state-reason
+           #:agent-state-last-tool-errors
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -298,6 +299,10 @@ Returns DEVELOP-STATE."
 LLM-driven inspection of the project surface; bounded so a runaway
 'read everything' loop is caught.")
 
+(defparameter +tool-error-ring-size+ 3
+  "Maximum number of recent agent-LLM-issued tool errors retained on
+AGENT-STATE.LAST-TOOL-ERRORS. Internal — not exported.")
+
 (defclass agent-state ()
   ((turn :initform 0 :accessor agent-state-turn)
    (status :initform :running :accessor agent-state-status)
@@ -349,7 +354,15 @@ standalone (cl-harness:fix path).")
 when STATUS transitions to :ERROR or :GIVE-UP with a specific
 reason (one of :auth-failed, :rate-limited, :http-server-error,
 :http-client-error, :transport-timeout, :transport-unavailable,
-:malformed-response, :empty-content). NIL on the success path."))
+:malformed-response, :empty-content). NIL on the success path.")
+   (last-tool-errors :initform nil
+                     :accessor agent-state-last-tool-errors
+                     :documentation "Ring of up to +TOOL-ERROR-RING-SIZE+
+plist entries for the most-recent agent-LLM-issued tool calls that
+returned isError=true. Each entry: (:TOOL-NAME string :ARGS-SUMMARY
+string :ERROR-TEXT string :TURN integer). Head is most recent.
+Populated only by RECORD-TOOL-ERROR; per-step naturally because
+agent-state is created fresh per RUN-AGENT."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
 
 (defun %make-agent-state-for-tests (&rest initargs &key &allow-other-keys)
@@ -358,6 +371,87 @@ for slots whose presence is not what the test cares about. Forwards
 INITARGS to MAKE-INSTANCE so tests can override any field. Not
 exported; intended for use only by cl-harness/tests/*-test."
   (apply #'make-instance 'agent-state initargs))
+
+(defun record-tool-error (state tool-name args-summary error-text turn)
+  "Push a new tool-error entry to STATE's last-tool-errors ring;
+truncate to +TOOL-ERROR-RING-SIZE+. Internal — called from
+HANDLE-TOOL-CALL when an LLM-issued tool call returns isError=true."
+  (let ((entry (list :tool-name tool-name
+                     :args-summary args-summary
+                     :error-text error-text
+                     :turn turn)))
+    (setf (agent-state-last-tool-errors state)
+          (let ((updated (cons entry (agent-state-last-tool-errors state))))
+            (if (> (length updated) +tool-error-ring-size+)
+                (subseq updated 0 +tool-error-ring-size+)
+                updated)))))
+
+(defun %trunc-200 (s)
+  "Return S truncated to 200 chars; flatten embedded newlines to spaces.
+NIL/empty input returns the empty string."
+  (let* ((str (if (stringp s) s ""))
+         (flat (substitute #\Space #\Newline str))
+         (trimmed (string-trim '(#\Space #\Tab) flat)))
+    (if (> (length trimmed) 200)
+        (subseq trimmed 0 200)
+        trimmed)))
+
+(defun %summarize-tool-args (tool-name args)
+  "Return a one-line ≤200-char human-readable summary of TOOL-NAME's
+ARGS hash-table. Dispatch table picks the salient key per tool; falls
+back to a JSON dump for unknown tools. Internal — not exported."
+  (flet ((g (k) (or (and (hash-table-p args) (gethash k args)) "")))
+    (let ((s (cond
+               ((string= tool-name "repl-eval")
+                (%trunc-200 (g "code")))
+               ((string= tool-name "lisp-edit-form")
+                (format nil "~A ~A (~A)"
+                        (g "form_type") (g "form_name") (g "operation")))
+               ((string= tool-name "lisp-patch-form")
+                (format nil "~A ~A" (g "form_type") (g "form_name")))
+               ((string= tool-name "run-tests")
+                (let ((sys (g "system")) (test (g "test")))
+                  (if (and (stringp test) (plusp (length test)))
+                      (format nil "~A::~A" sys test)
+                      sys)))
+               ((string= tool-name "load-system")
+                (g "system"))
+               ((string= tool-name "fs-write-file")
+                (g "path"))
+               ((string= tool-name "lisp-read-file")
+                (let ((path (g "path")) (pat (g "name_pattern")))
+                  (if (and (stringp pat) (plusp (length pat)))
+                      (format nil "~A [pattern: ~A]" path pat)
+                      path)))
+               ((or (string= tool-name "code-find")
+                    (string= tool-name "code-describe")
+                    (string= tool-name "code-find-references"))
+                (let ((name (g "name")) (kind (g "kind")))
+                  (if (and (stringp kind) (plusp (length kind)))
+                      (format nil "~A [~A]" name kind)
+                      name)))
+               (t
+                (handler-case
+                    (with-output-to-string (out)
+                      (yason:encode args out))
+                  (error () "(unrenderable args)"))))))
+      (let ((trimmed (%trunc-200 s)))
+        (if (zerop (length trimmed)) "(no args)" trimmed)))))
+
+(defun %maybe-record-tool-error (state tool-name arguments result turn)
+  "When RESULT carries isError=true, record a tool-error entry on
+STATE. Internal helper called from HANDLE-TOOL-CALL only on
+LLM-issued tool calls. ARGUMENTS may be NIL or a hash-table."
+  (when (and (hash-table-p result)
+             (let ((v (gethash "isError" result)))
+               (and v (not (eq v :false)))))
+    (let ((args (or arguments (make-hash-table :test 'equal))))
+      (record-tool-error
+       state
+       tool-name
+       (%summarize-tool-args tool-name args)
+       (%trunc-200 (extract-content-text result))
+       turn))))
 
 (defun check-limits (state limits)
   "Compare STATE's counters against LIMITS and return the keyword for
@@ -995,7 +1089,15 @@ step since no real patch was applied."
                       `(("turn" . ,turn) ("tool" . ,tool)
                         ("is_error" . ,is-error)
                         ,@(when (and error-text (plusp (length error-text)))
-                            `(("error_text" . ,error-text))))))
+                            `(("error_text" . ,error-text)))))
+           ;; Populate the per-step tool-error ring on isError=true. Only
+           ;; LLM-issued tool calls land here (HANDLE-TOOL-CALL is on that
+           ;; path); harness-internal calls (verify-task setup,
+           ;; pool-kill-worker) do not pass through this function.
+           (%maybe-record-tool-error
+            state tool
+            (or (agent-action-arguments action) (make-hash-table :test 'equal))
+            result turn))
          (let ((next (append-message
                       messages "user"
                       (format nil "Tool ~A result:~%~A"
