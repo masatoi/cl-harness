@@ -228,6 +228,35 @@ populate tests."
      1)
     (ok (null (cl-harness/src/agent:agent-state-last-tool-errors state)))))
 
+(deftest run-agent-persists-final-verify-on-give-up
+  ;; C-1 regression: when the agent gives up after a failed
+  ;; post-patch verify, agent-state-final-verify must hold the LAST
+  ;; verify-result (not NIL), so the orchestrator's %FAILURE-CONTEXT
+  ;; can extract its load-system / run-tests error text for the
+  ;; replanner.
+  ;;
+  ;; This drives the bug observed in fib EXPORT name-conflict :STUCK
+  ;; sessions where verify-error never reached the planner.
+  (let* ((load-fail-result
+          (alexandria:alist-hash-table
+           `(("isError" . t)
+             ("content"
+              . ,(vector
+                  (alexandria:alist-hash-table
+                   '(("type" . "text")
+                     ("text" . "EXPORT FIB::FIBONACCI causes name-conflicts ..."))
+                   :test 'equal))))
+           :test 'equal))
+         (vr (make-instance 'cl-harness/src/verify:verify-result
+                            :status :load-failed
+                            :load-result load-fail-result))
+         (state (make-instance 'cl-harness/src/agent::agent-state)))
+    ;; Simulate the post-patch verify branch storing the latest
+    ;; verify-result onto agent-state.
+    (cl-harness/src/agent::%record-failed-verify state vr)
+    (ok (eq vr (cl-harness/src/agent:agent-state-final-verify state))
+        "verify-result is persisted on the failed-verify path")))
+
 (defun %read-jsonl-events (path)
   "Read every line from PATH and return the parsed YASON objects in file
 order. Helper for tests that assert against the on-disk transcript."

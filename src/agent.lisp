@@ -1185,13 +1185,15 @@ step since no real patch was applied."
                    (log-event logger :verify (verify-event-payload turn v))
                    (if (verify-result-success-p v)
                        (values next :passed v action)
-                       (let* ((detail (verify-detail-prose v))
-                              (msg (with-output-to-string (s)
-                                     (format s "Verify after patch: ~A~%"
-                                             (verify-summary v))
-                                     (when detail (format s "~A" detail)))))
-                         (values (append-message next "user" msg)
-                                 nil nil nil)))))))
+                       (progn
+                         (%record-failed-verify state v)
+                         (let* ((detail (verify-detail-prose v))
+                                (msg (with-output-to-string (s)
+                                       (format s "Verify after patch: ~A~%"
+                                               (verify-summary v))
+                                       (when detail (format s "~A" detail)))))
+                           (values (append-message next "user" msg)
+                                   nil nil nil))))))))
              (t (values next nil nil nil)))))))))
 
 (defun %maybe-compact-messages (messages run-limits)
@@ -1214,6 +1216,16 @@ conversation."
              (> (approximate-history-tokens messages) threshold))
         (compact-history messages)
         messages)))
+
+(defun %record-failed-verify (state verify)
+  "Persist VERIFY (a VERIFY-RESULT, even on failure) onto STATE so
+%FAILURE-CONTEXT can read VERIFY-RESULT-LOAD / VERIFY-RESULT-TEST
+when the agent loop later terminates with :GIVE-UP /
+:LIMIT-EXHAUSTED. Without this, agent-state-final-verify only
+captures the :PASSED success path. Internal — called from
+HANDLE-TOOL-CALL's post-patch verify branch."
+  (when verify
+    (setf (agent-state-final-verify state) verify)))
 
 (defun step-turn (turn state config provider mcp-client policy logger messages
                   &key dry-run-p)
