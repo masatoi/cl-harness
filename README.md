@@ -12,13 +12,21 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-**v0.5.1**. Patch release on top of v0.5.0's context-management
-refactor: dexador read-timeout 10s → 600s (so reasoning models like
-Qwen3.6 don't crash on the first planner LLM call), Phase G/H/I
-prompt-side wiring (LLM is now told about runtime introspection
-tools and the `finding` action shape; orchestrator auto-gathers
-project-summary on every `develop` run), live-verified end-to-end
-against Qwen/Qwen3.6-35B-A3B. See
+**v0.5.2**. Production resilience for the LLM transport layer:
+typed `model-error :kind` classification end-to-end (8 reasons:
+`:auth-failed`, `:http-server-error`, `:http-client-error`,
+`:rate-limited`, `:transport-timeout`, `:transport-unavailable`,
+`:malformed-response`, `:empty-content`), `:reason` slot on
+`agent-state` / `develop-state` / `develop-result`, and a minimal
+automatic retry (1 retry, no backoff, opt-out via `:retry-p nil`)
+on the 3 most-clearly-transient kinds. `tools/chaos-probe.lisp`
+manual real-LLM failure-mode runner. **397 unit tests** (+36 over
+v0.5.1). See
+[docs/release-notes/v0.5.2.md](docs/release-notes/v0.5.2.md).
+
+v0.5.1 was a patch release on top of v0.5.0: dexador read-timeout
+10s → 600s, Phase G/H/I prompt-side wiring, live-verified against
+Qwen/Qwen3.6-35B-A3B. See
 [docs/release-notes/v0.5.1.md](docs/release-notes/v0.5.1.md).
 
 v0.5.0 added the **context-management refactor**: every observation
@@ -427,6 +435,10 @@ itself is developed under (REPL-driven, TDD-first).
 - `docs/context-management.md` — v0.5 requirements doc; §14
   implementation-status table maps every section to the phase
   that delivered it.
+- `docs/release-notes/v0.5.2.md` — v0.5.2 release (typed
+  `model-error :kind` classification + minimal retry policy on
+  the 3 most-clearly-transient kinds; `tools/chaos-probe.lisp`
+  manual real-LLM failure-mode runner).
 - `docs/release-notes/v0.5.1.md` — v0.5.1 patch release (dexador
   timeout fix + Phase G/H/I prompt enrichment, with live
   verification numbers from Qwen/Qwen3.6-35B-A3B).
