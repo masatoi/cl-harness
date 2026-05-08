@@ -667,7 +667,7 @@ or similar."
     (let ((content (gethash "content" result)))
       (when (and content (vectorp content) (plusp (length content)))
         (let ((text (gethash "text" (aref content 0))))
-          (when (stringp text)
+          (when (and (stringp text) (plusp (length text)))
             (let ((flat (substitute #\Space #\Newline text)))
               (if (> (length flat) 800)
                   (subseq flat 0 800)

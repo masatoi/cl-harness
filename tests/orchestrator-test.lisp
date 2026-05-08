@@ -990,3 +990,27 @@ multi-paragraph branches without spinning up a real run-agent."
       (ok (search "### Last verify error (load-system)" out))
       (ok (search "EXPORT FIB::FIBONACCI" out))
       (ok (search "name-conflicts" out)))))
+
+(deftest failure-context-omits-load-error-when-text-is-empty
+  ;; Regression for code-quality reviewer I1: empty content[].text
+  ;; must NOT emit the ### Last verify error (load-system) subheader.
+  (let* ((load-fail
+          (alist-hash-table
+           `(("isError" . t)
+             ("content"
+              . ,(vector
+                  (alist-hash-table
+                   '(("type" . "text") ("text" . ""))
+                   :test 'equal))))
+           :test 'equal))
+         (vr (make-instance 'cl-harness/src/verify:verify-result
+                            :status :load-failed
+                            :load-result load-fail))
+         (state (make-instance 'cl-harness/src/agent::agent-state)))
+    (setf (cl-harness/src/agent:agent-state-final-verify state) vr)
+    (let* ((sr (%make-stub-step-result-with-state
+                :step-index 0 :test-name "z" :status :give-up
+                :agent-state state))
+           (out (cl-harness/src/orchestrator::%failure-context sr)))
+      (ok (not (search "### Last verify error (load-system)" out))
+          "empty error text → subheader omitted"))))
