@@ -151,3 +151,85 @@ MODEL-ERROR with :KIND = EXPECTED-KIND was signalled."
             ;; The envelope's "type" string lands as the :kind value.
             (equal "invalid_request_error"
                    (cl-harness/src/model:model-error-type c)))))))
+
+;; --- end-to-end develop with stub transport ---------------------
+;;
+;; These tests drive cl-harness/src/orchestrator:develop with a stub
+;; provider whose %canned-transport returns a failure-shaped response
+;; on the FIRST LLM call (the planner). Since the orchestrator's first
+;; LLM-bearing operation is plan-development, a model-error raised
+;; there should be caught at the top of develop and recorded as
+;; :status :error :reason <kw> on develop-result.
+
+(defun %make-test-file (path)
+  "Create an empty rove test file at PATH so the orchestrator's
+test-file plumbing doesn't trip on file-not-found."
+  (with-open-file (s path :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (format s "(defpackage #:transport-test/main (:use #:cl #:rove))~%~%")
+    (format s "(in-package #:transport-test/main)~%"))
+  path)
+
+(defun %tmp-transport-test-path (label)
+  (merge-pathnames
+   (format nil "transport-test-~A-~A.lisp" label (get-universal-time))
+   (uiop:default-temporary-directory)))
+
+(defun %drive-develop-with-canned-response (responses)
+  "Run cl-harness/src/orchestrator:develop with a stub provider
+returning RESPONSES. Returns the develop-result. RESPONSES is a list
+suitable for %CANNED-TRANSPORT (each entry is (BODY STATUS HEADERS)
+or a CONDITION instance)."
+  (let ((tf (%make-test-file (%tmp-transport-test-path "develop")))
+        (provider (%make-stub-provider (%canned-transport responses))))
+    (unwind-protect
+         (cl-harness/src/orchestrator:develop
+          "smoke goal"
+          :project-root (namestring (uiop:default-temporary-directory))
+          :system "demo"
+          :test-system "demo/tests"
+          :test-file tf
+          :provider provider
+          :mcp-client nil
+          :run-fn (lambda (&rest args)
+                    (declare (ignore args))
+                    (cl-harness/src/agent::%make-agent-state-for-tests
+                     :status :passed))
+          :explore-fn nil)
+      (when (probe-file tf) (delete-file tf)))))
+
+(deftest develop-with-401-yields-error-auth-failed
+  (let ((result (%drive-develop-with-canned-response
+                 (list (list "{\"error\":{\"message\":\"bad key\"}}"
+                             401 nil)))))
+    (ok (eq :error (cl-harness/src/orchestrator:develop-result-status
+                    result)))
+    (ok (eq :auth-failed (cl-harness/src/orchestrator:develop-result-reason
+                          result)))))
+
+(deftest develop-with-500-yields-error-http-server-error
+  (let ((result (%drive-develop-with-canned-response
+                 (list (list "{\"error\":{\"message\":\"oops\"}}"
+                             500 nil)))))
+    (ok (eq :error (cl-harness/src/orchestrator:develop-result-status
+                    result)))
+    (ok (eq :http-server-error
+            (cl-harness/src/orchestrator:develop-result-reason result)))))
+
+(deftest develop-with-429-yields-error-rate-limited
+  (let ((result (%drive-develop-with-canned-response
+                 (list (list "{\"error\":{\"message\":\"slow\"}}"
+                             429 nil)))))
+    (ok (eq :error (cl-harness/src/orchestrator:develop-result-status
+                    result)))
+    (ok (eq :rate-limited
+            (cl-harness/src/orchestrator:develop-result-reason result)))))
+
+(deftest develop-with-malformed-body-yields-error-malformed-response
+  (let ((result (%drive-develop-with-canned-response
+                 (list (list "<html>oops</html>" 200 nil)))))
+    (ok (eq :error (cl-harness/src/orchestrator:develop-result-status
+                    result)))
+    (ok (eq :malformed-response
+            (cl-harness/src/orchestrator:develop-result-reason result)))))
