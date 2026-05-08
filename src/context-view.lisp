@@ -299,6 +299,7 @@ mutations do not propagate."
                                          (develop-state-current-plan state))
                       :prior-plan prior-plan
                       :failure-context failure-context
+                      :active-failures (%active-failures state)
                       :runtime-vocab (and state
                                           (develop-state-runtime-vocabulary
                                            state))))
@@ -382,6 +383,14 @@ current ad-hoc inventory + goal + replan block."
     (when (context-view-failure-context view)
       (format s "~%## Prior failure context~%~A~%"
               (context-view-failure-context view)))
+    (let ((failures (context-view-active-failures view)))
+      (when failures
+        (format s "~%## Active failures (test-level)~%")
+        (dolist (rec failures)
+          (format s "- ~A: ~A~@[~%  reason: ~A~]~%"
+                  (failure-record-test-name rec)
+                  (failure-record-description rec)
+                  (failure-record-reason rec)))))
     (let ((vocab (context-view-runtime-vocab view)))
       (when vocab
         (format s "~%## Runtime vocabulary observed so far~%")

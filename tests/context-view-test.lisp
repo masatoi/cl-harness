@@ -717,3 +717,21 @@
            (str (cl-harness/src/context-view:context-view->string
                  view :implementation)))
       (ok (null (search "Recently resolved failures" str))))))
+
+(deftest planning-view-renders-active-failures
+  (let ((state (cl-harness/src/state:make-develop-state
+                :goal "g" :project-root "/tmp/p"
+                :system "p" :test-system "p/tests"))
+        (rec (make-failure-record
+              :kind :test-failed
+              :description "expected 1 got 2"
+              :verify-source :incremental
+              :test-name "p/tests::demo-fails"
+              :reason "assertion failed"
+              :source-file "src/main.lisp")))
+    (develop-state-record-failure state rec)
+    (let* ((view (make-context-view state :phase :planning))
+           (out (context-view->string view :planning)))
+      (ok (search "## Active failures" out))
+      (ok (search "demo-fails" out))
+      (ok (search "expected 1 got 2" out)))))
