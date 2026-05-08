@@ -936,3 +936,29 @@ v0.5.0 のライブ verification (Qwen/Qwen3.6-35B-A3B) で発覚した
 
 prompt-only 変更が中心なので unit test は keyword 含有のみ assert
 (4 deftests 追加: 357 → 361)。実 LLM 動作は manual verify。
+
+Transport failure-mode coverage follow-up (landed 2026-05-08):
+v0.5.1 のライブ verification で発覚した dexador 10s timeout のような
+transport-layer 故障モードを CI で網羅できるよう、新ファイル
+`tests/transport-test.lisp` に **29 deftests** を追加 (361 → 390)。
+`%classify-llm-failure` (model.lisp) が HTTP 401/429/4xx/5xx と
+response shape 異常を reason keyword に分類し、`complete-chat` は
+usocket transport conditions (`timeout-error` / `connection-refused-
+error` / 親 `socket-error`) を typed `model-error` に wrap する。
+orchestrator は `model-error` を catch して `develop-result :reason`
+に伝播 (`:empty-content` のみ `:give-up`、それ以外は `:error`)。
+`agent-state` / `develop-state` / `develop-result` に opt-in
+`:reason` slot を追加 (NIL on success path、classification keyword
+on `:error/:give-up`)。empty-content (planner / agent loop どちらでも)
+は即 `:give-up :empty-content` で安定停止。length truncation +
+non-empty content は既存どおり parse-action へ forward (再 prompt 経路
+で吸収)。レポート formatter (`format-develop-report` /
+`format-develop-report-markdown`) が `:reason` を `(reason: :<kw>)` で
+inline 注釈する。`tools/chaos-probe.lisp` は real LLM endpoint への
+3 シナリオ (P1 max-tokens=1 / P3 unreachable URL / P4 bad API key)
+手動 runner で、Qwen/Qwen3.6-35B-A3B + SGLang 上で **P1 (empty-content)
+が PASS**、P3/P4 は endpoint 固有挙動 (loopback の closed port が
+ECONNREFUSED でなく connect-timeout 化 / SGLang が API key 検証を行わない)
+で expected reason と実機挙動が一致しないが、ハーネス側の分類ロジック
+自体は正しく機能している。Phase H の prompt 誘導と異なり transport-
+layer は **deterministic に CI で検証可能** な点が大きな前進。

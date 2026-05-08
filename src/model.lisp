@@ -13,6 +13,10 @@
                 #:http-request-failed
                 #:response-status
                 #:response-body)
+  (:import-from #:usocket
+                #:timeout-error
+                #:connection-refused-error
+                #:socket-error)
   (:export #:model-provider
            #:openai-compatible-provider
            #:make-openai-provider
@@ -38,7 +42,8 @@
            #:model-error-type
            #:chat-build-request-body
            #:chat-parse-response
-           #:complete-chat))
+           #:complete-chat
+           #:%classify-llm-failure))
 
 (in-package #:cl-harness/src/model)
 
@@ -131,6 +136,51 @@ completion lands."
         (values (response-body c)
                 (response-status c)
                 (make-hash-table :test 'equal))))))
+
+(defparameter +classifiable-status-codes+
+  '((401 . :auth-failed)
+    (429 . :rate-limited))
+  "Direct mapping from a few HTTP status codes to specific reason
+keywords. Other statuses fall through to range checks
+(:http-server-error / :http-client-error) in %CLASSIFY-LLM-FAILURE.")
+
+(defun %classify-llm-failure (status body)
+  "Map (HTTP STATUS, response BODY) into a reason keyword for
+MODEL-ERROR. Returns one of:
+
+  :auth-failed         -- HTTP 401
+  :rate-limited        -- HTTP 429
+  :http-server-error   -- HTTP 500-599
+  :http-client-error   -- other HTTP 4xx
+  :malformed-response  -- body is not JSON, or shape is wrong
+  NIL                  -- response is shaped like a successful chat
+                          completion (caller proceeds to parse)
+
+BODY is the raw response string. STATUS may be NIL when the
+underlying transport raised before producing a status."
+  (cond
+    ((and (integerp status)
+          (cdr (assoc status +classifiable-status-codes+))))
+    ((and (integerp status) (<= 500 status 599))
+     :http-server-error)
+    ((and (integerp status) (<= 400 status 499))
+     :http-client-error)
+    ((not (stringp body))
+     :malformed-response)
+    (t
+     (handler-case
+         (let ((parsed (yason:parse body)))
+           (cond
+             ((not (hash-table-p parsed)) :malformed-response)
+             ;; OpenAI envelope: defer to chat-parse-response so the
+             ;; envelope's "type" field surfaces as model-error :kind.
+             ((gethash "error" parsed) nil)
+             ((let ((choices (gethash "choices" parsed)))
+                (or (null choices)
+                    (and (vectorp choices) (zerop (length choices)))))
+              :malformed-response)
+             (t nil)))
+       (error () :malformed-response)))))
 
 (defun make-openai-provider (&key base-url api-key model
                                   temperature max-tokens
@@ -268,6 +318,27 @@ call-site passes NIL."))
                                extra-body
                                (provider-default-extra-body provider)))))
     (multiple-value-bind (resp-body status resp-headers)
-        (funcall (provider-transport provider) url headers body)
-      (declare (ignore status resp-headers))
+        (handler-case
+            (funcall (provider-transport provider) url headers body)
+          (timeout-error ()
+            (error 'model-error
+                   :kind :transport-timeout
+                   :message "LLM transport timed out reading the response"))
+          (connection-refused-error ()
+            (error 'model-error
+                   :kind :transport-unavailable
+                   :message "LLM endpoint refused connection"))
+          (socket-error ()
+            (error 'model-error
+                   :kind :transport-unavailable
+                   :message "LLM endpoint unreachable (socket-level error)")))
+      (declare (ignore resp-headers))
+      (let ((reason (%classify-llm-failure status resp-body)))
+        (when reason
+          (error 'model-error
+                 :kind reason
+                 :message (format nil
+                                  "LLM transport failure: ~A (status=~A)"
+                                  reason status)
+                 :raw resp-body)))
       (chat-parse-response resp-body))))

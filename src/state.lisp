@@ -47,7 +47,8 @@
            #:develop-state-repl-findings
            #:develop-state-record-repl-finding
            #:develop-state-failure-ledger
-           #:develop-state-record-failure))
+           #:develop-state-record-failure
+           #:develop-state-reason))
 
 (in-package #:cl-harness/src/state)
 
@@ -152,7 +153,14 @@ DEVELOP-STATE-REPL-FINDINGS.")
                     :documentation "Optional PROJECT-SUMMARY instance
 holding the structured cold-start project context (Phase I, §3.3).
 Replaced wholesale via DEVELOP-STATE-SET-PROJECT-SUMMARY; mutated
-in-place only via DEVELOP-STATE-MARK-PROJECT-SUMMARY-DIRTY."))
+in-place only via DEVELOP-STATE-MARK-PROJECT-SUMMARY-DIRTY.")
+   (reason :initarg :reason :initform nil
+           :accessor develop-state-reason
+           :documentation "Failure-mode classification keyword (or
+NIL on success). Set by the orchestrator's MODEL-ERROR catch when
+a transport / HTTP / shape failure aborts the run. Mirrors
+AGENT-STATE-REASON / DEVELOP-RESULT-REASON for cross-layer
+visibility."))
   (:documentation
    "Central state for one DEVELOP invocation. Aggregates the goal,
 project context, current plan, step outcomes across replan rounds,

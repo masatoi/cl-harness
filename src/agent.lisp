@@ -108,6 +108,7 @@
            #:agent-state-limit-hit
            #:agent-state-parse-error-streak
            #:agent-state-develop-state
+           #:agent-state-reason
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -340,7 +341,15 @@ LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
 from inside a DEVELOP run, the back-reference to the caller's
 DEVELOP-STATE so RUN-AGENT can record source-facts, patch-records, and
 failures into the develop-level ledgers. NIL when run-agent is invoked
-standalone (cl-harness:fix path)."))
+standalone (cl-harness:fix path).")
+   (reason :initarg :reason
+           :initform nil
+           :accessor agent-state-reason
+           :documentation "Failure-mode classification keyword set
+when STATUS transitions to :ERROR or :GIVE-UP with a specific
+reason (one of :auth-failed, :rate-limited, :http-server-error,
+:http-client-error, :transport-timeout, :transport-unavailable,
+:malformed-response, :empty-content). NIL on the success path."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
 
 (defun %make-agent-state-for-tests (&rest initargs &key &allow-other-keys)
@@ -1122,33 +1131,42 @@ the loop should continue, otherwise a terminal status keyword
                `(("turn" . ,turn)
                  ("content" . ,text)
                  ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
-    (handler-case
-        (let ((action (parse-action text)))
-          (setf (agent-state-parse-error-streak state) 0)
-          (log-event logger :action (action-event-payload turn action))
-          (let ((with-assistant (append-message messages "assistant" text)))
-            (case (agent-action-type action)
-              (:finish
-               (values with-assistant
-                       (handle-finish-action action)
-                       nil action))
-              (:tool-call
-               (handle-tool-call turn state config mcp-client policy logger
-                                 with-assistant action
-                                 :dry-run-p dry-run-p)))))
-      (action-parse-error (c)
-        (incf (agent-state-parse-error-streak state))
-        (log-event logger :action-error
-                   `(("turn" . ,turn)
-                     ("streak" . ,(agent-state-parse-error-streak state))
-                     ("message" . ,(action-parse-error-message c))))
-        (values
-         (append-message
-          (append-message messages "assistant" text)
-          "user"
-          (format nil "Could not parse your previous reply: ~A. Respond with one JSON object matching the schema."
-                  (action-parse-error-message c)))
-         nil nil nil)))))
+    (cond
+      ((or (null text) (zerop (length text)))
+       ;; C2 empty-content path: immediate :give-up :empty-content,
+       ;; no re-prompt. A degenerate empty reply otherwise triggers
+       ;; an action-parse-error churn that cannot recover -- the
+       ;; provider just returned nothing for the LLM to amend.
+       (setf (agent-state-reason state) :empty-content)
+       (values messages :give-up nil nil))
+      (t
+       (handler-case
+           (let ((action (parse-action text)))
+             (setf (agent-state-parse-error-streak state) 0)
+             (log-event logger :action (action-event-payload turn action))
+             (let ((with-assistant (append-message messages "assistant" text)))
+               (case (agent-action-type action)
+                 (:finish
+                  (values with-assistant
+                          (handle-finish-action action)
+                          nil action))
+                 (:tool-call
+                  (handle-tool-call turn state config mcp-client policy logger
+                                    with-assistant action
+                                    :dry-run-p dry-run-p)))))
+         (action-parse-error (c)
+           (incf (agent-state-parse-error-streak state))
+           (log-event logger :action-error
+                      `(("turn" . ,turn)
+                        ("streak" . ,(agent-state-parse-error-streak state))
+                        ("message" . ,(action-parse-error-message c))))
+           (values
+            (append-message
+             (append-message messages "assistant" text)
+             "user"
+             (format nil "Could not parse your previous reply: ~A. Respond with one JSON object matching the schema."
+                     (action-parse-error-message c)))
+            nil nil nil)))))))
 
 (defun run-agent (config provider mcp-client policy logger
                   &key (clean-verify-p t)

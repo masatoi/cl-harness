@@ -59,6 +59,7 @@
                 #:develop-state-limit-hit
                 #:develop-state-integration-issues
                 #:develop-state-step-results
+                #:develop-state-reason
                 #:develop-state-record-failure
                 #:develop-state-failure-ledger
                 #:develop-state-patch-records
@@ -102,6 +103,9 @@
                 #:run-agent
                 #:agent-state
                 #:agent-state-final-verify)
+  (:import-from #:cl-harness/src/model
+                #:model-error
+                #:model-error-type)
   (:export #:develop-step-result
            #:develop-step-result-status
            #:develop-step-result-step-index
@@ -120,6 +124,7 @@
            #:develop-result-develop-state
            #:develop-result-abstraction-ledger
            #:develop-result-integration-issues
+           #:develop-result-reason
            #:validate-test-source
            #:materialize-test-source
            #:plan-step->run-config
@@ -596,7 +601,13 @@ DEVELOP-STATE that produced this result. Populated by the
 orchestrator's DEVELOP function for downstream consumers
 (structured reporting via FORMAT-DEVELOP-STATE-REPORT, etc.).
 NIL when the develop-result was constructed by something other
-than the orchestrator (e.g. unit-test stubs)."))
+than the orchestrator (e.g. unit-test stubs).")
+   (reason :initarg :reason
+           :initform nil
+           :reader develop-result-reason
+           :documentation "Failure-mode classification keyword set
+by the orchestrator when STATUS is :ERROR or :GIVE-UP with a
+specific reason. NIL on the success path."))
   (:documentation
    "Outcome of a DEVELOP run.
 STATUS is :PASSED on a fully-passing plan, :STUCK when the
@@ -707,7 +718,15 @@ MODE (v0.4 Phase 6) selects the development style:
               coerced to :NONE before execution.
 :BOTTOM-UP -- explore-first; :NONE / NIL needs-exploration is promoted
               to :LIGHTWEIGHT.
-:MIXED     -- let the planner decide per step (default)."
+:MIXED     -- let the planner decide per step (default).
+
+A typed MODEL-ERROR raised by the LLM transport layer (auth /
+HTTP / shape failure inside complete-chat) is caught at the top
+of the planner+execute body. The run terminates with status
+:ERROR and reason set to the model-error's :KIND keyword. The
+post-success integration-check is skipped on the error path
+(its existing :PASSED guard already handles this), and the
+final DEVELOP-RESULT carries the reason through to callers."
   (check-type goal string)
   (check-type max-replans (integer 0))
   (unless (member mode +supported-development-modes+)
@@ -733,94 +752,108 @@ MODE (v0.4 Phase 6) selects the development style:
                                  :system system
                                  :test-system test-system))
       (error () nil))
-    (setf (develop-state-current-plan state)
-          (%apply-mode-to-plan
-           ;; Phase C wiring (active since the Phase C wiring follow-up):
-           ;; thread :develop-state into PLAN-DEVELOPMENT so the planner's
-           ;; user prompt is built via the :planning context-view formatter
-           ;; (cl-harness/src/context-view) instead of the legacy ad-hoc
-           ;; string assembly. Section ordering differs slightly from
-           ;; legacy (mode-nudge now follows the context-view block rather
-           ;; than appearing between Goal and project metadata), but the
-           ;; rendered content is the same. The legacy branch in
-           ;; %BUILD-USER-PROMPT remains intact for standalone callers
-           ;; (test stubs, external callers, the bench harness's
-           ;; planner-fn callback) that don't pass :develop-state.
-           (funcall planner-fn goal
-                    :project-root project-root
-                    :system system
-                    :test-system test-system
-                    :provider provider
-                    :project-inventory project-inventory
-                    :mode mode
-                    :develop-state state)
-           mode))
-    (loop
-      (let* ((round-results (execute-plan
-                             (develop-state-current-plan state)
-                             :project-root project-root
-                             :system system
-                             :test-system test-system
-                             :test-file test-file
-                             :condition condition
-                             :provider provider
-                             :mcp-client mcp-client
-                             :run-limits run-limits
-                             :log-path log-path
-                             :run-fn run-fn
-                             :explore-fn explore-fn
-                             :develop-state state))
-             (last-result (car (last round-results))))
-        (dolist (r round-results)
-          (develop-state-record-step-result state r))
-        (cond
-          ((null last-result)
-           (setf (develop-state-status state) :empty)
-           (return))
-          ((eq :passed (develop-step-result-status last-result))
-           (setf (develop-state-status state) :passed)
-           (return))
-          ((>= (develop-state-replan-count state) max-replans)
-           (setf (develop-state-status state) :limit-exhausted
-                 (develop-state-limit-hit state) :max-replans)
-           (return))
-          (t
-           (let ((this-failure (develop-step-result-test-name last-result)))
-             (when (and (develop-state-last-failure-test-name state)
-                        (equal (develop-state-last-failure-test-name state)
-                               this-failure))
-               (setf (develop-state-status state) :stuck
-                     (develop-state-limit-hit state) :no-progress)
-               (return))
-             (setf (develop-state-last-failure-test-name state)
-                   this-failure))
-           (incf (develop-state-replan-count state))
-           (let ((new-plan (%apply-mode-to-plan
-                            ;; Phase C wiring active: see the initial-plan
-                            ;; call site above for rationale. Replan path
-                            ;; threads :develop-state too so the planner's
-                            ;; replan prompt is built via the :planning
-                            ;; context-view formatter (which already
-                            ;; renders prior-plan + failure-context as
-                            ;; structured sub-sections of the view).
-                            (funcall planner-fn goal
-                                     :project-root project-root
-                                     :system system
-                                     :test-system test-system
-                                     :provider provider
-                                     :project-inventory project-inventory
-                                     :mode mode
-                                     :prior-plan (develop-state-current-plan state)
-                                     :failure-context
-                                     (%failure-context last-result)
-                                     :develop-state state)
-                            mode)))
-             (when (equal (%first-test-name new-plan)
-                          (develop-state-last-failure-test-name state))
-               (setf (develop-state-status state) :stuck
-                     (develop-state-limit-hit state) :no-progress)
-               (return))
-             (setf (develop-state-current-plan state) new-plan))))))
+    ;; LLM-bearing body: planner-fn (initial + replan) and execute-plan
+    ;; both reach complete-chat. A typed MODEL-ERROR raised by the
+    ;; transport layer is caught here, recorded on STATE as
+    ;; :STATUS :ERROR with :REASON set to the model-error's :KIND, and
+    ;; control falls through to the integration-check guard (which
+    ;; skips on non-:PASSED status) and the final develop-result
+    ;; construction below.
+    (handler-case
+        (progn
+          (setf (develop-state-current-plan state)
+                (%apply-mode-to-plan
+                 ;; Phase C wiring (active since the Phase C wiring follow-up):
+                 ;; thread :develop-state into PLAN-DEVELOPMENT so the planner's
+                 ;; user prompt is built via the :planning context-view formatter
+                 ;; (cl-harness/src/context-view) instead of the legacy ad-hoc
+                 ;; string assembly. Section ordering differs slightly from
+                 ;; legacy (mode-nudge now follows the context-view block rather
+                 ;; than appearing between Goal and project metadata), but the
+                 ;; rendered content is the same. The legacy branch in
+                 ;; %BUILD-USER-PROMPT remains intact for standalone callers
+                 ;; (test stubs, external callers, the bench harness's
+                 ;; planner-fn callback) that don't pass :develop-state.
+                 (funcall planner-fn goal
+                          :project-root project-root
+                          :system system
+                          :test-system test-system
+                          :provider provider
+                          :project-inventory project-inventory
+                          :mode mode
+                          :develop-state state)
+                 mode))
+          (loop
+            (let* ((round-results (execute-plan
+                                   (develop-state-current-plan state)
+                                   :project-root project-root
+                                   :system system
+                                   :test-system test-system
+                                   :test-file test-file
+                                   :condition condition
+                                   :provider provider
+                                   :mcp-client mcp-client
+                                   :run-limits run-limits
+                                   :log-path log-path
+                                   :run-fn run-fn
+                                   :explore-fn explore-fn
+                                   :develop-state state))
+                   (last-result (car (last round-results))))
+              (dolist (r round-results)
+                (develop-state-record-step-result state r))
+              (cond
+                ((null last-result)
+                 (setf (develop-state-status state) :empty)
+                 (return))
+                ((eq :passed (develop-step-result-status last-result))
+                 (setf (develop-state-status state) :passed)
+                 (return))
+                ((>= (develop-state-replan-count state) max-replans)
+                 (setf (develop-state-status state) :limit-exhausted
+                       (develop-state-limit-hit state) :max-replans)
+                 (return))
+                (t
+                 (let ((this-failure (develop-step-result-test-name last-result)))
+                   (when (and (develop-state-last-failure-test-name state)
+                              (equal (develop-state-last-failure-test-name state)
+                                     this-failure))
+                     (setf (develop-state-status state) :stuck
+                           (develop-state-limit-hit state) :no-progress)
+                     (return))
+                   (setf (develop-state-last-failure-test-name state)
+                         this-failure))
+                 (incf (develop-state-replan-count state))
+                 (let ((new-plan (%apply-mode-to-plan
+                                  ;; Phase C wiring active: see the initial-plan
+                                  ;; call site above for rationale. Replan path
+                                  ;; threads :develop-state too so the planner's
+                                  ;; replan prompt is built via the :planning
+                                  ;; context-view formatter (which already
+                                  ;; renders prior-plan + failure-context as
+                                  ;; structured sub-sections of the view).
+                                  (funcall planner-fn goal
+                                           :project-root project-root
+                                           :system system
+                                           :test-system test-system
+                                           :provider provider
+                                           :project-inventory project-inventory
+                                           :mode mode
+                                           :prior-plan (develop-state-current-plan state)
+                                           :failure-context
+                                           (%failure-context last-result)
+                                           :develop-state state)
+                                  mode)))
+                   (when (equal (%first-test-name new-plan)
+                                (develop-state-last-failure-test-name state))
+                     (setf (develop-state-status state) :stuck
+                           (develop-state-limit-hit state) :no-progress)
+                     (return))
+                   (setf (develop-state-current-plan state) new-plan)))))))
+      (model-error (c)
+        (let ((kind (model-error-type c)))
+          (setf (develop-state-status state)
+                (if (eq kind :empty-content) :give-up :error)
+                (develop-state-reason state) kind))))
     (when (and (eq (develop-state-status state) :passed) project-root)
       (handler-case
           (let ((issues (find-integration-issues
@@ -855,6 +888,7 @@ MODE (v0.4 Phase 6) selects the development style:
         (error () nil)))
     (make-instance 'develop-result
                    :status (develop-state-status state)
+                   :reason (develop-state-reason state)
                    :final-plan (develop-state-current-plan state)
                    :step-results (develop-state-step-results state)
                    :replan-count (develop-state-replan-count state)

@@ -31,7 +31,8 @@
                 #:develop-result-step-results
                 #:develop-result-limit-hit
                 #:develop-result-integration-issues
-                #:develop-result-develop-state)
+                #:develop-result-develop-state
+                #:develop-result-reason)
   (:import-from #:cl-harness/src/report
                 #:format-develop-state-report)
   (:import-from #:cl-harness/src/integration
@@ -212,6 +213,9 @@ mirroring the shape of FORMAT-FINAL-REPORT for fix runs."
     (format s "~&== cl-harness develop report ==~%")
     (format s "Status:           :~A"
             (string-upcase (%symbol-down (develop-result-status result))))
+    (let ((reason (develop-result-reason result)))
+      (when reason
+        (format s " (reason: :~A)" (%symbol-down reason))))
     (when (develop-result-limit-hit result)
       (format s " (limit: :~A)"
               (string-upcase (%symbol-down (develop-result-limit-hit result)))))
@@ -265,8 +269,10 @@ trivial runs."
     (when goal
       (format s "~%## User request~%~A~%" goal))
     (format s "~%## Outcome~%")
-    (format s "- Status: `:~A`~%"
-            (string-upcase (%symbol-down (develop-result-status result))))
+    (format s "- Status: `:~A`~@[ (reason: `:~A`)~]~%"
+            (string-upcase (%symbol-down (develop-result-status result)))
+            (let ((reason (develop-result-reason result)))
+              (and reason (%symbol-down reason))))
     (when (develop-result-limit-hit result)
       (format s "- Limit hit: `:~A`~%"
               (string-upcase (%symbol-down (develop-result-limit-hit result)))))

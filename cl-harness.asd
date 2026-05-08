@@ -10,6 +10,7 @@
                "yason"
                "local-time"
                "dexador"
+               "usocket"
                "bordeaux-threads"
                "clingon"
                "cl-harness/src/main")
@@ -45,6 +46,7 @@
                "cl-harness/tests/project-summary-test"
                "cl-harness/tests/repl-finding-test"
                "cl-harness/tests/subtask-summary-test"
+               "cl-harness/tests/transport-test"
                "cl-harness/tests/failure-ledger-test"
                "cl-harness/tests/context-view-test"
                "cl-harness/tests/report-test")

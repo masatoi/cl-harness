@@ -906,3 +906,10 @@ plan (so a stuck loop test can keep getting the same response)."
     (cl-harness/src/orchestrator::%promote-matching-findings state)
     (ok (eq patch-a (cl-harness/src/repl-finding:repl-finding-linked-patch
                      finding)))))
+
+(deftest develop-result-reason-defaults-to-nil
+  (let ((r (make-instance 'cl-harness/src/orchestrator:develop-result
+                          :status :passed
+                          :final-plan nil
+                          :step-results nil)))
+    (ok (null (cl-harness/src/orchestrator:develop-result-reason r)))))

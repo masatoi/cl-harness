@@ -19,7 +19,8 @@
   (:import-from #:cl-harness/src/model
                 #:complete-chat
                 #:make-chat-message
-                #:chat-response-content)
+                #:chat-response-content
+                #:model-error)
   (:export #:plan-step
            #:plan-step-index
            #:plan-step-issue
@@ -623,7 +624,8 @@ PLANNER-ERROR when the response cannot be parsed."
          (response (complete-chat provider messages))
          (content (chat-response-content response)))
     (unless (and (stringp content) (plusp (length content)))
-      (error 'planner-error
+      (error 'model-error
+             :kind :empty-content
              :message "planner LLM returned empty content"
              :raw response))
     (%parse-plan content)))

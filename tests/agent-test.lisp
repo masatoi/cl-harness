@@ -1518,3 +1518,12 @@ success result with one text content block."
     (ok (search "code-describe" prompt))
     (ok (search "code-find-references" prompt))
     (ok (search "vocabulary" prompt))))
+
+(deftest agent-state-reason-defaults-to-nil
+  ;; Phase: transport failure-mode coverage.
+  ;; The new :reason slot is the failure-mode classifier surface.
+  ;; Defaults NIL on the success path; the agent loop / orchestrator
+  ;; sets it when status transitions to :error / :give-up with a
+  ;; specific reason.
+  (let ((s (cl-harness/src/agent::%make-agent-state-for-tests)))
+    (ok (null (cl-harness/src/agent:agent-state-reason s)))))

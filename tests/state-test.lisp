@@ -235,3 +235,9 @@
   (let ((s (%make)))
     (develop-state-mark-project-summary-dirty s)
     (ok (null (develop-state-project-summary s)))))
+
+(deftest develop-state-reason-defaults-to-nil
+  (let ((s (cl-harness/src/state:make-develop-state
+            :goal "g" :project-root "/tmp/p"
+            :system "x" :test-system "x/tests")))
+    (ok (null (cl-harness/src/state:develop-state-reason s)))))
