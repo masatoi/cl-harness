@@ -304,7 +304,7 @@ NIL or empty string defaults to (:generic-mcp)."
   (clingon:make-command
    :name "cl-harness"
    :description "Runtime-native coding agent harness for Common Lisp."
-   :version "0.4.0"
+   :version "0.5.2"
    :sub-commands (list (fix-command)
                        (bench-command)
                        (develop-command))))
