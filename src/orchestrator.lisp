@@ -120,6 +120,7 @@
            #:develop-result-develop-state
            #:develop-result-abstraction-ledger
            #:develop-result-integration-issues
+           #:develop-result-reason
            #:validate-test-source
            #:materialize-test-source
            #:plan-step->run-config
@@ -596,7 +597,13 @@ DEVELOP-STATE that produced this result. Populated by the
 orchestrator's DEVELOP function for downstream consumers
 (structured reporting via FORMAT-DEVELOP-STATE-REPORT, etc.).
 NIL when the develop-result was constructed by something other
-than the orchestrator (e.g. unit-test stubs)."))
+than the orchestrator (e.g. unit-test stubs).")
+   (reason :initarg :reason
+           :initform nil
+           :reader develop-result-reason
+           :documentation "Failure-mode classification keyword set
+by the orchestrator when STATUS is :ERROR or :GIVE-UP with a
+specific reason. NIL on the success path."))
   (:documentation
    "Outcome of a DEVELOP run.
 STATUS is :PASSED on a fully-passing plan, :STUCK when the

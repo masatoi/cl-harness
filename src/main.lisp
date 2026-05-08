@@ -106,6 +106,7 @@
                 #:agent-state-read-file-count
                 #:agent-state-repl-eval-count
                 #:agent-state-limit-hit
+                #:agent-state-reason
                 #:run-agent
                 #:format-final-report)
   (:import-from #:cl-harness/src/planner
@@ -148,6 +149,7 @@
                 #:develop-result-limit-hit
                 #:develop-result-abstraction-ledger
                 #:develop-result-integration-issues
+                #:develop-result-reason
                 #:execute-plan)
   (:import-from #:cl-harness/src/explore
                 #:explore-result
@@ -262,6 +264,7 @@
            #:agent-state-read-file-count
            #:agent-state-repl-eval-count
            #:agent-state-limit-hit
+           #:agent-state-reason
            #:run-agent
            #:format-final-report
            #:plan-step
@@ -301,6 +304,7 @@
            #:develop-result-limit-hit
            #:develop-result-abstraction-ledger
            #:develop-result-integration-issues
+           #:develop-result-reason
            #:execute-plan
            #:package-info
            #:package-info-name

@@ -108,6 +108,7 @@
            #:agent-state-limit-hit
            #:agent-state-parse-error-streak
            #:agent-state-develop-state
+           #:agent-state-reason
            #:run-agent
            #:format-final-report
            #:summarize-tool-result
@@ -340,7 +341,15 @@ LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
 from inside a DEVELOP run, the back-reference to the caller's
 DEVELOP-STATE so RUN-AGENT can record source-facts, patch-records, and
 failures into the develop-level ledgers. NIL when run-agent is invoked
-standalone (cl-harness:fix path)."))
+standalone (cl-harness:fix path).")
+   (reason :initarg :reason
+           :initform nil
+           :accessor agent-state-reason
+           :documentation "Failure-mode classification keyword set
+when STATUS transitions to :ERROR or :GIVE-UP with a specific
+reason (one of :auth-failed, :rate-limited, :http-server-error,
+:http-client-error, :transport-timeout, :transport-unavailable,
+:malformed-response, :empty-content). NIL on the success path."))
   (:documentation "Live state of one fix-loop run (PRD §10.2 agent-state)."))
 
 (defun %make-agent-state-for-tests (&rest initargs &key &allow-other-keys)
