@@ -77,7 +77,8 @@ Returns (values project-root test-file)."
                        :project-root root
                        :system "greet" :test-system "greet/tests"
                        :test-file test-file
-                       :max-tokens 1)))
+                       :max-tokens 1
+                       :retry-p nil)))
           (%scenario-pass-p "P1 empty-content" :give-up :empty-content result))
       (error (c)
         (format t "[FAIL] P1 empty-content: uncaught condition ~A~%" c)
@@ -93,7 +94,8 @@ Returns (values project-root test-file)."
                        :project-root root
                        :system "greet" :test-system "greet/tests"
                        :test-file test-file
-                       :base-url "http://127.0.0.1:9999/v1")))
+                       :base-url "http://127.0.0.1:9999/v1"
+                       :retry-p nil)))
           (%scenario-pass-p "P3 transport-unavailable"
                             :error :transport-unavailable result))
       (error (c)
@@ -112,7 +114,8 @@ Returns (values project-root test-file)."
                        :project-root root
                        :system "greet" :test-system "greet/tests"
                        :test-file test-file
-                       :api-key "definitely-not-a-real-key")))
+                       :api-key "definitely-not-a-real-key"
+                       :retry-p nil)))
           (%scenario-pass-p "P4 auth-failed" :error :auth-failed result))
       (error (c)
         (format t "[FAIL] P4 auth-failed: uncaught condition ~A~%" c)
