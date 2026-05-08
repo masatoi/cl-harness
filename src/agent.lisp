@@ -1131,33 +1131,42 @@ the loop should continue, otherwise a terminal status keyword
                `(("turn" . ,turn)
                  ("content" . ,text)
                  ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
-    (handler-case
-        (let ((action (parse-action text)))
-          (setf (agent-state-parse-error-streak state) 0)
-          (log-event logger :action (action-event-payload turn action))
-          (let ((with-assistant (append-message messages "assistant" text)))
-            (case (agent-action-type action)
-              (:finish
-               (values with-assistant
-                       (handle-finish-action action)
-                       nil action))
-              (:tool-call
-               (handle-tool-call turn state config mcp-client policy logger
-                                 with-assistant action
-                                 :dry-run-p dry-run-p)))))
-      (action-parse-error (c)
-        (incf (agent-state-parse-error-streak state))
-        (log-event logger :action-error
-                   `(("turn" . ,turn)
-                     ("streak" . ,(agent-state-parse-error-streak state))
-                     ("message" . ,(action-parse-error-message c))))
-        (values
-         (append-message
-          (append-message messages "assistant" text)
-          "user"
-          (format nil "Could not parse your previous reply: ~A. Respond with one JSON object matching the schema."
-                  (action-parse-error-message c)))
-         nil nil nil)))))
+    (cond
+      ((or (null text) (zerop (length text)))
+       ;; C2 empty-content path: immediate :give-up :empty-content,
+       ;; no re-prompt. A degenerate empty reply otherwise triggers
+       ;; an action-parse-error churn that cannot recover -- the
+       ;; provider just returned nothing for the LLM to amend.
+       (setf (agent-state-reason state) :empty-content)
+       (values messages :give-up nil nil))
+      (t
+       (handler-case
+           (let ((action (parse-action text)))
+             (setf (agent-state-parse-error-streak state) 0)
+             (log-event logger :action (action-event-payload turn action))
+             (let ((with-assistant (append-message messages "assistant" text)))
+               (case (agent-action-type action)
+                 (:finish
+                  (values with-assistant
+                          (handle-finish-action action)
+                          nil action))
+                 (:tool-call
+                  (handle-tool-call turn state config mcp-client policy logger
+                                    with-assistant action
+                                    :dry-run-p dry-run-p)))))
+         (action-parse-error (c)
+           (incf (agent-state-parse-error-streak state))
+           (log-event logger :action-error
+                      `(("turn" . ,turn)
+                        ("streak" . ,(agent-state-parse-error-streak state))
+                        ("message" . ,(action-parse-error-message c))))
+           (values
+            (append-message
+             (append-message messages "assistant" text)
+             "user"
+             (format nil "Could not parse your previous reply: ~A. Respond with one JSON object matching the schema."
+                     (action-parse-error-message c)))
+            nil nil nil)))))))
 
 (defun run-agent (config provider mcp-client policy logger
                   &key (clean-verify-p t)

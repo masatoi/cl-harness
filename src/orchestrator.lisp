@@ -850,8 +850,10 @@ final DEVELOP-RESULT carries the reason through to callers."
                      (return))
                    (setf (develop-state-current-plan state) new-plan)))))))
       (model-error (c)
-        (setf (develop-state-status state) :error
-              (develop-state-reason state) (model-error-type c))))
+        (let ((kind (model-error-type c)))
+          (setf (develop-state-status state)
+                (if (eq kind :empty-content) :give-up :error)
+                (develop-state-reason state) kind))))
     (when (and (eq (develop-state-status state) :passed) project-root)
       (handler-case
           (let ((issues (find-integration-issues

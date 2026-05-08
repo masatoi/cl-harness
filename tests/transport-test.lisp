@@ -233,3 +233,37 @@ or a CONDITION instance)."
                     result)))
     (ok (eq :malformed-response
             (cl-harness/src/orchestrator:develop-result-reason result)))))
+
+(deftest develop-with-timeout-yields-error-transport-timeout
+  ;; T5: usocket:timeout-error from the transport stub propagates
+  ;; through complete-chat -> model-error :transport-timeout ->
+  ;; orchestrator -> develop-result :error :transport-timeout.
+  (let ((result (%drive-develop-with-canned-response
+                 (list (make-condition 'usocket:timeout-error
+                                       :socket nil)))))
+    (ok (eq :error (cl-harness/src/orchestrator:develop-result-status
+                    result)))
+    (ok (eq :transport-timeout
+            (cl-harness/src/orchestrator:develop-result-reason result)))))
+
+(deftest develop-with-connection-refused-yields-error-transport-unavailable
+  ;; T6: usocket:connection-refused-error -> :transport-unavailable.
+  (let ((result (%drive-develop-with-canned-response
+                 (list (make-condition 'usocket:connection-refused-error
+                                       :socket nil)))))
+    (ok (eq :error (cl-harness/src/orchestrator:develop-result-status
+                    result)))
+    (ok (eq :transport-unavailable
+            (cl-harness/src/orchestrator:develop-result-reason result)))))
+
+(deftest develop-with-empty-content-yields-give-up-empty-content
+  ;; C2: planner LLM returns 200 with valid shape but empty content.
+  ;; Spec: develop-result-status :give-up, reason :empty-content.
+  (let* ((empty-body
+           "{\"choices\":[{\"message\":{\"content\":\"\"}}]}")
+         (result (%drive-develop-with-canned-response
+                  (list (list empty-body 200 nil)))))
+    (ok (eq :give-up (cl-harness/src/orchestrator:develop-result-status
+                      result)))
+    (ok (eq :empty-content
+            (cl-harness/src/orchestrator:develop-result-reason result)))))
