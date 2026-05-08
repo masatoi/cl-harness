@@ -982,6 +982,9 @@ fib プロジェクトの EXPORT name-conflict が :STUCK / :NO-PROGRESS で
 run-tests failures、および新設の `agent-state-last-tool-errors` ring
 (N=3、agent-LLM 起源の isError=true 結果のみ) を多段落形式で planner に
 届けるようになった。`:PLANNING` view も `## Active failures` ブロックを
-レンダリングし、`:IMPLEMENTATION` view との renderer 共有を再活用する。
-+11 deftests (397 → 408)。当初設計 `(c'-β)` の prompt-side recovery
-recipe は別 phase に温存。
+レンダリングし、`:IMPLEMENTATION` view と同じ %active-failures helper
+/ failure-record アクセサを共有する (renderer は別実装)。failed-verify
+を `agent-state-final-verify` に persist する `%record-failed-verify`
+を追加し、:give-up / :limit-exhausted 経路でも verify-error が planner
+まで届くようにした (C-1 fix)。+13 deftests (397 → 410)。当初設計
+`(c'-β)` の prompt-side recovery recipe は別 phase に温存。
