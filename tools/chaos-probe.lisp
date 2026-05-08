@@ -24,7 +24,7 @@
  (merge-pathnames "../cl-harness.asd"
                   (or *load-pathname*
                       (error "tools/chaos-probe.lisp must be loaded by --load"))))
-(ql:quickload :cl-harness :silent t)
+(asdf:load-system :cl-harness)
 
 (defun %tmp-fixture (label)
   "Create a fresh temp fixture directory mirroring 100-greet's shape.
