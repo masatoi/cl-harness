@@ -1,0 +1,25 @@
+#!/bin/sh
+#|-*- mode:lisp -*-|#
+#|
+exec ros -Q -- $0 "$@"
+|#
+(progn ;;init forms
+  (ros:ensure-asdf)
+  #+quicklisp(ql:quickload '(:cl-harness) :silent t)
+  )
+
+(defpackage :ros.script.cl-harness.3987235035
+  (:use :cl))
+(in-package :ros.script.cl-harness.3987235035)
+
+(defun main (&rest argv)
+  "Roswell entry point. Delegates to the clingon top-command defined in
+cl-harness/src/cli-main; ARGV is passed through verbatim so subcommand
+dispatch and option parsing match the standalone binary built via
+ASDF:MAKE on cl-harness/binary."
+  (handler-case
+      (clingon:run (cl-harness/src/cli-main:top-command) argv)
+    (error (c)
+      (format *error-output* "cl-harness: ~A~%" c)
+      (uiop:quit 2))))
+;;; vim: set ft=lisp lisp:
