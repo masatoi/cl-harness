@@ -717,3 +717,42 @@
            (str (cl-harness/src/context-view:context-view->string
                  view :implementation)))
       (ok (null (search "Recently resolved failures" str))))))
+
+(deftest planning-view-renders-active-failures
+  (let ((state (cl-harness/src/state:make-develop-state
+                :goal "g" :project-root "/tmp/p"
+                :system "p" :test-system "p/tests"))
+        (rec (make-failure-record
+              :kind :test-failed
+              :description "expected 1 got 2"
+              :verify-source :incremental
+              :test-name "p/tests::demo-fails"
+              :reason "assertion failed"
+              :source-file "src/main.lisp")))
+    (develop-state-record-failure state rec)
+    (let* ((view (make-context-view state :phase :planning))
+           (out (context-view->string view :planning)))
+      (ok (search "## Active failures" out))
+      (ok (search "demo-fails" out))
+      (ok (search "expected 1 got 2" out)))))
+
+(deftest planning-view-active-failures-handles-nil-test-name
+  ;; Regression for code-quality reviewer I-1: when failure-record's
+  ;; test-name slot is NIL, the planning view must render "(unnamed)"
+  ;; rather than the literal string "NIL", matching :implementation view.
+  (let ((state (make-develop-state
+                :goal "g" :project-root "/tmp/p"
+                :system "p" :test-system "p/tests"))
+        (rec (make-failure-record
+              :kind :test-failed
+              :verify-source :incremental
+              :test-name nil
+              :description "no test-name on this record")))
+    (develop-state-record-failure state rec)
+    (let* ((view (make-context-view state :phase :planning))
+           (out (context-view->string view :planning)))
+      (ok (search "## Active failures" out))
+      (ok (search "(unnamed)" out)
+          "NIL test-name renders as (unnamed)")
+      (ok (not (search "- NIL:" out))
+          "literal NIL must not leak into the bullet line"))))

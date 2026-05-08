@@ -91,6 +91,7 @@
                 #:develop-step-result-explore-result
                 #:develop-step-result-abstraction-decisions)
   (:import-from #:cl-harness/src/verify
+                #:verify-result-load
                 #:verify-result-test)
   (:import-from #:cl-harness/src/integration
                 #:gather-package-graph
@@ -102,7 +103,8 @@
   (:import-from #:cl-harness/src/agent
                 #:run-agent
                 #:agent-state
-                #:agent-state-final-verify)
+                #:agent-state-final-verify
+                #:agent-state-last-tool-errors)
   (:import-from #:cl-harness/src/model
                 #:model-error
                 #:model-error-type)
@@ -656,16 +658,80 @@ the mode and this layer is a no-op; misaligned plans get corrected."
 empty. Used for stuck detection."
   (and (consp plan) (plan-step-test-name (car plan))))
 
+(defun %extract-isError-text (result)
+  "Return the first content[].text from RESULT (a tool-result hash)
+truncated to 800 chars; NIL when RESULT is NIL or has no text. Used
+to extract the user-visible error text from a verify-task load-result
+or similar."
+  (when (hash-table-p result)
+    (let ((content (gethash "content" result)))
+      (when (and content (vectorp content) (plusp (length content)))
+        (let ((text (gethash "text" (aref content 0))))
+          (when (and (stringp text) (plusp (length text)))
+            (let ((flat (substitute #\Space #\Newline text)))
+              (if (> (length flat) 800)
+                  (subseq flat 0 800)
+                  flat))))))))
+
+(defun %render-tool-error-entry (idx entry)
+  "Format one tool-error ring entry for the failure-context block.
+IDX is 1-based for display ordering."
+  (format nil "~D. [turn ~A] ~A ~A → ~A"
+          idx
+          (getf entry :turn)
+          (getf entry :tool-name)
+          (getf entry :args-summary)
+          (getf entry :error-text)))
+
+(defun %render-failed-tests-summary (test-result)
+  "Emit a short human-readable summary of failed_tests from a
+run-tests RESULT hash. Returns NIL when no failed tests were
+recorded; otherwise a multi-line string with up to 3 entries."
+  (when (hash-table-p test-result)
+    (let ((failed (gethash "failed_tests" test-result)))
+      (when (and failed (or (listp failed) (vectorp failed)))
+        (let* ((seq (if (vectorp failed) (coerce failed 'list) failed))
+               (capped (subseq seq 0 (min 3 (length seq)))))
+          (when capped
+            (with-output-to-string (s)
+              (dolist (rec capped)
+                (let ((name (or (and (hash-table-p rec)
+                                     (gethash "test_name" rec))
+                                "(unknown)"))
+                      (desc (or (and (hash-table-p rec)
+                                     (gethash "description" rec))
+                                "")))
+                  (format s "- ~A: ~A~%" name desc))))))))))
+
 (defun %failure-context (failed-step-result)
-  "Build the human-readable Failure: paragraph fed back to the planner
-on a replan round. Includes the test_name and status of the failed
-step so the planner sees both the symptom and what was being
-attempted."
-  (format nil
-          "step ~A (test_name=~A) terminated with status ~A; the executor could not get the test to pass within its turn / patch budget."
-          (develop-step-result-step-index failed-step-result)
-          (develop-step-result-test-name failed-step-result)
-          (%symbol-status (develop-step-result-status failed-step-result))))
+  "Build the multi-paragraph failure-context block fed back to the
+planner on a replan round. Sections with empty data are omitted.
+Reads:
+  - the step-result's status / index / test-name (always present)
+  - run-agent-state's final-verify load-result and test-result
+  - run-agent-state's last-tool-errors ring (most recent first)"
+  (let* ((state (develop-step-result-run-agent-state failed-step-result))
+         (vr (and state (typep state 'agent-state)
+                  (agent-state-final-verify state)))
+         (load-text (and vr (%extract-isError-text (verify-result-load vr))))
+         (test-summary (and vr (%render-failed-tests-summary
+                                (verify-result-test vr))))
+         (ring (and state (typep state 'agent-state)
+                    (agent-state-last-tool-errors state))))
+    (with-output-to-string (s)
+      (format s "step ~A (test_name=~A) terminated with status :~A."
+              (develop-step-result-step-index failed-step-result)
+              (develop-step-result-test-name failed-step-result)
+              (%symbol-status (develop-step-result-status failed-step-result)))
+      (when load-text
+        (format s "~%~%### Last verify error (load-system)~%~A" load-text))
+      (when test-summary
+        (format s "~%~%### Last verify error (run-tests)~%~A" test-summary))
+      (when ring
+        (format s "~%~%### Recent tool errors (most recent first; agent-LLM-issued only)~%")
+        (loop for entry in ring
+              for idx from 1
+              do (format s "~A~%" (%render-tool-error-entry idx entry)))))))
 
 (defun develop (goal
                 &key project-root system test-system test-file
