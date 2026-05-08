@@ -13,6 +13,9 @@
                 #:http-request-failed
                 #:response-status
                 #:response-body)
+  (:import-from #:usocket
+                #:timeout-error
+                #:connection-refused-error)
   (:export #:model-provider
            #:openai-compatible-provider
            #:make-openai-provider
@@ -312,6 +315,23 @@ call-site passes NIL."))
                                extra-body
                                (provider-default-extra-body provider)))))
     (multiple-value-bind (resp-body status resp-headers)
-        (funcall (provider-transport provider) url headers body)
-      (declare (ignore status resp-headers))
+        (handler-case
+            (funcall (provider-transport provider) url headers body)
+          (timeout-error ()
+            (error 'model-error
+                   :kind :transport-timeout
+                   :message "LLM transport timed out reading the response"))
+          (connection-refused-error ()
+            (error 'model-error
+                   :kind :transport-unavailable
+                   :message "LLM endpoint refused connection")))
+      (declare (ignore resp-headers))
+      (let ((reason (%classify-llm-failure status resp-body)))
+        (when reason
+          (error 'model-error
+                 :kind reason
+                 :message (format nil
+                                  "LLM transport failure: ~A (status=~A)"
+                                  reason status)
+                 :raw resp-body)))
       (chat-parse-response resp-body))))

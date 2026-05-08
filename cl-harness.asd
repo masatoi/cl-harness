@@ -10,6 +10,7 @@
                "yason"
                "local-time"
                "dexador"
+               "usocket"
                "bordeaux-threads"
                "clingon"
                "cl-harness/src/main")
