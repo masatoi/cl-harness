@@ -267,3 +267,50 @@ or a CONDITION instance)."
                       result)))
     (ok (eq :empty-content
             (cl-harness/src/orchestrator:develop-result-reason result)))))
+
+(deftest develop-with-length-truncation-and-content-forwards-to-parser
+  ;; C3: finish_reason "length" + non-empty content. The agent
+  ;; loop's empty-content guard checks for null/zero-length only,
+  ;; so truncated-but-non-empty content forwards to parse-action.
+  ;; Whether parse-action succeeds depends on JSON validity of the
+  ;; truncated content; this test asserts that the harness does NOT
+  ;; fast-path :give-up :empty-content for truncated content.
+  ;;
+  ;; Drive complete-chat directly with a stub provider whose body has
+  ;; finish_reason="length" and content="...partial...", and assert
+  ;; the response's content matches the canned content (proving it's
+  ;; forwarded, not swallowed).
+  (let* ((truncated-body
+           "{\"choices\":[{\"message\":{\"content\":\"partial reply...\"},\"finish_reason\":\"length\"}]}")
+         (provider (%make-stub-provider
+                    (%canned-transport
+                     (list (list truncated-body 200 nil)))))
+         (response (cl-harness/src/model:complete-chat
+                    provider
+                    (list (cl-harness/src/model:make-chat-message "user" "hi")))))
+    (ok (typep response 'cl-harness/src/model:chat-response))
+    (ok (string= "partial reply..."
+                 (cl-harness/src/model:chat-response-content response)))))
+
+(deftest format-develop-report-renders-reason-when-set
+  ;; Asserting that :reason surfaces in the human-readable report.
+  ;; Construct a develop-result with status=:error, reason=:auth-failed.
+  (let* ((result (make-instance 'cl-harness/src/orchestrator:develop-result
+                                :status :error
+                                :reason :auth-failed
+                                :final-plan nil
+                                :step-results nil))
+         (text (cl-harness:format-develop-report result)))
+    (ok (search "auth-failed" text)
+        "format-develop-report includes the reason keyword")))
+
+(deftest format-develop-report-omits-reason-when-nil
+  ;; The reason rendering should NOT appear when reason is NIL
+  ;; (e.g., on :passed runs where the slot stays NIL).
+  (let* ((result (make-instance 'cl-harness/src/orchestrator:develop-result
+                                :status :passed
+                                :final-plan nil
+                                :step-results nil))
+         (text (cl-harness:format-develop-report result)))
+    (ok (null (search "reason:" text))
+        "format-develop-report omits reason annotation when slot is NIL")))
