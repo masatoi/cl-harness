@@ -388,7 +388,7 @@ current ad-hoc inventory + goal + replan block."
         (format s "~%## Active failures (test-level)~%")
         (dolist (rec failures)
           (format s "- ~A: ~A~@[~%  reason: ~A~]~%"
-                  (failure-record-test-name rec)
+                  (or (failure-record-test-name rec) "(unnamed)")
                   (failure-record-description rec)
                   (failure-record-reason rec)))))
     (let ((vocab (context-view-runtime-vocab view)))
