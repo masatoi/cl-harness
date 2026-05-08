@@ -1527,3 +1527,36 @@ success result with one text content block."
   ;; specific reason.
   (let ((s (cl-harness/src/agent::%make-agent-state-for-tests)))
     (ok (null (cl-harness/src/agent:agent-state-reason s)))))
+
+(deftest step-turn-with-empty-content-yields-give-up-empty-content
+  ;; Reviewer follow-up: locks the agent-loop empty-content path
+  ;; (src/agent.lisp:1133-1141) end-to-end via STEP-TURN driving with
+  ;; a stub provider that returns chat-completions with empty content.
+  ;; Asserts:
+  ;;   1. STEP-TURN's OUTCOME (second return) is :GIVE-UP.
+  ;;   2. AGENT-STATE-REASON is :EMPTY-CONTENT after the turn.
+  ;; The transport-test e2e covers the planner path; this test pins
+  ;; the agent-loop path independently.
+  (let* ((empty-body
+          "{\"choices\":[{\"message\":{\"content\":\"\"}}]}")
+         (canned-transport
+          (lambda (url headers body)
+            (declare (ignore url headers body))
+            (values empty-body 200 (make-hash-table :test 'equal))))
+         (provider (%make-stub-provider :transport canned-transport))
+         (config (%make-config))
+         (state (cl-harness/src/agent::%make-agent-state-for-tests))
+         (policy (make-tool-policy :generic-mcp))
+         (log-path (%temp-log-path)))
+    (unwind-protect
+         (let ((logger (open-run-logger log-path)))
+           (unwind-protect
+                (multiple-value-bind (new-messages outcome verify action)
+                    (cl-harness/src/agent::step-turn
+                     1 state config provider nil policy logger '())
+                  (declare (ignore new-messages verify action))
+                  (ok (eq :give-up outcome))
+                  (ok (eq :empty-content
+                          (cl-harness/src/agent:agent-state-reason state))))
+             (close-run-logger logger)))
+      (when (probe-file log-path) (delete-file log-path)))))
