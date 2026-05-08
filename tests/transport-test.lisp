@@ -119,3 +119,35 @@ MODEL-ERROR with :KIND = EXPECTED-KIND was signalled."
                    (%canned-transport
                     (list (make-condition 'usocket:connection-refused-error :socket nil))))))
     (ok (%expect-model-error-kind provider :transport-unavailable))))
+
+(deftest complete-chat-generic-socket-error-signals-transport-unavailable
+  ;; usocket:socket-error is the parent of connection-refused-error.
+  ;; This deftest fires the parent class to ensure the handler arm
+  ;; catches DNS / host-unreachable / network-unreachable / etc., not
+  ;; just connection-refused.
+  (let ((provider (%make-stub-provider
+                   (%canned-transport
+                    (list (make-condition 'usocket:socket-error
+                                          :socket nil))))))
+    (ok (%expect-model-error-kind provider :transport-unavailable))))
+
+(deftest complete-chat-200-with-error-envelope-preserves-openai-type
+  ;; %classify-llm-failure should DEFER to chat-parse-response when the
+  ;; body has an OpenAI {"error": {"type": ...}} envelope, so the
+  ;; pre-existing model-error :kind <openai-type> path stays
+  ;; reachable.
+  (let* ((envelope-body
+           "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"bad\"}}")
+         (provider (%make-stub-provider
+                    (%canned-transport
+                     (list (list envelope-body 200 nil))))))
+    (ok (handler-case
+            (progn
+              (cl-harness/src/model:complete-chat
+               provider
+               (list (cl-harness/src/model:make-chat-message "user" "hi")))
+              nil)
+          (cl-harness/src/model:model-error (c)
+            ;; The envelope's "type" string lands as the :kind value.
+            (equal "invalid_request_error"
+                   (cl-harness/src/model:model-error-type c)))))))

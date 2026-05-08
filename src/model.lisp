@@ -15,7 +15,8 @@
                 #:response-body)
   (:import-from #:usocket
                 #:timeout-error
-                #:connection-refused-error)
+                #:connection-refused-error
+                #:socket-error)
   (:export #:model-provider
            #:openai-compatible-provider
            #:make-openai-provider
@@ -168,13 +169,15 @@ underlying transport raised before producing a status."
      :malformed-response)
     (t
      (handler-case
-         (let* ((parsed (yason:parse body))
-                (choices (and (hash-table-p parsed)
-                              (gethash "choices" parsed))))
+         (let ((parsed (yason:parse body)))
            (cond
              ((not (hash-table-p parsed)) :malformed-response)
-             ((or (null choices)
-                  (and (vectorp choices) (zerop (length choices))))
+             ;; OpenAI envelope: defer to chat-parse-response so the
+             ;; envelope's "type" field surfaces as model-error :kind.
+             ((gethash "error" parsed) nil)
+             ((let ((choices (gethash "choices" parsed)))
+                (or (null choices)
+                    (and (vectorp choices) (zerop (length choices)))))
               :malformed-response)
              (t nil)))
        (error () :malformed-response)))))
@@ -324,7 +327,11 @@ call-site passes NIL."))
           (connection-refused-error ()
             (error 'model-error
                    :kind :transport-unavailable
-                   :message "LLM endpoint refused connection")))
+                   :message "LLM endpoint refused connection"))
+          (socket-error ()
+            (error 'model-error
+                   :kind :transport-unavailable
+                   :message "LLM endpoint unreachable (socket-level error)")))
       (declare (ignore resp-headers))
       (let ((reason (%classify-llm-failure status resp-body)))
         (when reason
