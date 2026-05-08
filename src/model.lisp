@@ -28,6 +28,7 @@
            #:provider-default-reasoning-effort
            #:provider-default-extra-body
            #:provider-transport
+           #:provider-retry-p
            #:make-chat-message
            #:chat-response
            #:chat-response-content
@@ -81,7 +82,13 @@
      :documentation "Default top-level extra fields merged into every
 request body (hash-table or alist of (string . value)). Useful for
 endpoint-specific quirks like \"tool_choice\":\"none\" on Groq gpt-oss.")
-   (transport :initarg :transport :reader provider-transport))
+   (transport :initarg :transport :reader provider-transport)
+   (retry-p :initarg :retry-p :initform t :reader provider-retry-p
+            :documentation "When non-NIL (default), COMPLETE-CHAT
+retries once on transient MODEL-ERRORs (those whose :KIND is in
++RETRIABLE-REASONS+). NIL disables retry entirely — used by
+chaos-probe runs and tests that intentionally trigger failures
+to keep the run time bounded."))
   (:documentation
    "Blocking OpenAI-compatible chat client (PRD §8.2 REQ-LLM-001).
 TRANSPORT is a function of (URL HEADERS BODY) returning
@@ -144,6 +151,16 @@ completion lands."
 keywords. Other statuses fall through to range checks
 (:http-server-error / :http-client-error) in %CLASSIFY-LLM-FAILURE.")
 
+(defparameter +retriable-reasons+
+  '(:http-server-error :rate-limited :transport-timeout)
+  "MODEL-ERROR :KIND values that COMPLETE-CHAT retries once when the
+provider's RETRY-P slot is true. The other reasons are deliberately
+NOT retried: :AUTH-FAILED and :HTTP-CLIENT-ERROR are caller-side
+issues; :MALFORMED-RESPONSE and :TRANSPORT-UNAVAILABLE are
+borderline-transient and excluded until production data shows
+otherwise; :EMPTY-CONTENT is already mapped to :GIVE-UP upstream
+and never surfaces from COMPLETE-CHAT directly.")
+
 (defun %classify-llm-failure (status body)
   "Map (HTTP STATUS, response BODY) into a reason keyword for
 MODEL-ERROR. Returns one of:
@@ -185,7 +202,7 @@ underlying transport raised before producing a status."
 (defun make-openai-provider (&key base-url api-key model
                                   temperature max-tokens
                                   reasoning-effort extra-body
-                                  transport)
+                                  transport (retry-p t))
   "Construct an OPENAI-COMPATIBLE-PROVIDER (PRD §10.2).
 
 REASONING-EFFORT and EXTRA-BODY become per-provider defaults that any
@@ -201,7 +218,8 @@ COMPLETE-CHAT call inherits unless the call-site overrides them."
                  :default-max-tokens max-tokens
                  :default-reasoning-effort reasoning-effort
                  :default-extra-body extra-body
-                 :transport (or transport #'default-llm-transport)))
+                 :transport (or transport #'default-llm-transport)
+                 :retry-p retry-p))
 
 (defun make-chat-message (role content)
   "Construct an OpenAI-style chat message hash-table."
@@ -317,28 +335,40 @@ call-site passes NIL."))
                :extra-body (if extra-body-supplied-p
                                extra-body
                                (provider-default-extra-body provider)))))
-    (multiple-value-bind (resp-body status resp-headers)
+    (let ((attempt 0)
+          (max-attempts 2))
+      (loop
         (handler-case
-            (funcall (provider-transport provider) url headers body)
-          (timeout-error ()
-            (error 'model-error
-                   :kind :transport-timeout
-                   :message "LLM transport timed out reading the response"))
-          (connection-refused-error ()
-            (error 'model-error
-                   :kind :transport-unavailable
-                   :message "LLM endpoint refused connection"))
-          (socket-error ()
-            (error 'model-error
-                   :kind :transport-unavailable
-                   :message "LLM endpoint unreachable (socket-level error)")))
-      (declare (ignore resp-headers))
-      (let ((reason (%classify-llm-failure status resp-body)))
-        (when reason
-          (error 'model-error
-                 :kind reason
-                 :message (format nil
-                                  "LLM transport failure: ~A (status=~A)"
-                                  reason status)
-                 :raw resp-body)))
-      (chat-parse-response resp-body))))
+            (return
+              (multiple-value-bind (resp-body status resp-headers)
+                  (handler-case
+                      (funcall (provider-transport provider) url headers body)
+                    (timeout-error ()
+                      (error 'model-error
+                             :kind :transport-timeout
+                             :message "LLM transport timed out reading the response"))
+                    (connection-refused-error ()
+                      (error 'model-error
+                             :kind :transport-unavailable
+                             :message "LLM endpoint refused connection"))
+                    (socket-error ()
+                      (error 'model-error
+                             :kind :transport-unavailable
+                             :message "LLM endpoint unreachable (socket-level error)")))
+                (declare (ignore resp-headers))
+                (let ((reason (%classify-llm-failure status resp-body)))
+                  (when reason
+                    (error 'model-error
+                           :kind reason
+                           :message (format nil
+                                            "LLM transport failure: ~A (status=~A)"
+                                            reason status)
+                           :raw resp-body)))
+                (chat-parse-response resp-body)))
+          (model-error (c)
+            (cond
+              ((and (provider-retry-p provider)
+                    (< attempt (1- max-attempts))
+                    (member (model-error-type c) +retriable-reasons+))
+               (incf attempt))
+              (t (error c)))))))))

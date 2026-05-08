@@ -61,6 +61,7 @@
                  base-url api-key model
                  (temperature 0.0) (max-tokens 1024)
                  reasoning-effort extra-body
+                 (retry-p t)
                  dry-run-p
                  log-path)
   "Run the Phase 2 basic fix loop.
@@ -112,7 +113,8 @@ Returns the populated AGENT-STATE."
                     :temperature temperature
                     :max-tokens max-tokens
                     :reasoning-effort reasoning-effort
-                    :extra-body extra-body))
+                    :extra-body extra-body
+                    :retry-p retry-p))
          (client (resolve-and-build-mcp-client
                   :mcp-url mcp-url
                   :mcp-stdio mcp-stdio
@@ -140,6 +142,7 @@ Returns the populated AGENT-STATE."
                    base-url api-key model
                    (temperature 0.0) (max-tokens 2048)
                    reasoning-effort extra-body
+                   (retry-p t)
                    log-dir)
   "Run the benchmark suite at SUITE across each condition.
 
@@ -177,7 +180,8 @@ report plus per-task detail to *STANDARD-OUTPUT*."
                     :temperature temperature
                     :max-tokens max-tokens
                     :reasoning-effort reasoning-effort
-                    :extra-body extra-body))
+                    :extra-body extra-body
+                    :retry-p retry-p))
          (client (resolve-and-build-mcp-client
                   :mcp-url mcp-url
                   :mcp-stdio mcp-stdio
@@ -322,6 +326,7 @@ trivial runs."
                      base-url api-key model
                      (temperature 0.0) (max-tokens 4096)
                      reasoning-effort extra-body
+                     (retry-p t)
                      (max-replans 3)
                      ;; Per-step run-limits overrides. Greenfield work
                      ;; often needs a higher patch budget than the
@@ -383,7 +388,8 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                     :temperature temperature
                     :max-tokens max-tokens
                     :reasoning-effort reasoning-effort
-                    :extra-body extra-body))
+                    :extra-body extra-body
+                    :retry-p retry-p))
          (client (resolve-and-build-mcp-client
                   :mcp-url mcp-url
                   :mcp-stdio mcp-stdio

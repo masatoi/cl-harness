@@ -42,16 +42,22 @@
 
 ;; --- complete-chat error wrapping ---------------------------------
 
-(defun %make-stub-provider (transport-fn &key (model "stub"))
+(defun %make-stub-provider (transport-fn &key (model "stub") (retry-p t))
   "Build an OPENAI-COMPATIBLE-PROVIDER whose transport is replaced
 by TRANSPORT-FN, a 3-arg function (URL HEADERS BODY) returning
 (values response-body status response-headers) or raising a
-condition."
+condition.
+
+RETRY-P forwards to MAKE-OPENAI-PROVIDER's :RETRY-P kwarg
+(default T, matching production). Tests that exercise single-shot
+failure classification (where retry would consume an extra canned
+response and exhaust the stub) should pass :RETRY-P NIL."
   (cl-harness/src/model:make-openai-provider
    :base-url "http://stub.invalid/v1"
    :api-key "stub-key"
    :model model
-   :transport transport-fn))
+   :transport transport-fn
+   :retry-p retry-p))
 
 (defun %canned-transport (responses)
   "Sequence-of-responses transport. Each call pops one entry. Each
@@ -68,6 +74,30 @@ to SIGNAL via ERROR."
            (values (first next) (second next)
                    (or (third next) (make-hash-table :test 'equal))))
           (t (error "bad stub response: ~S" next)))))))
+
+;; --- retry policy: introspectable transport stub ---------------
+
+(defun %counted-canned-transport (responses)
+  "Like %CANNED-TRANSPORT but ALSO returns a thunk reporting how
+many entries are still un-consumed. Returns (values transport-fn
+remaining-thunk).
+
+Used by tests that need to assert COMPLETE-CHAT did or did not
+retry. After the call: when retry didn't fire, the second canned
+entry remains in the queue."
+  (let ((remaining responses))
+    (values
+     (lambda (url headers body)
+       (declare (ignore url headers body))
+       (let ((next (or (pop remaining)
+                       (error "stub transport exhausted"))))
+         (cond
+           ((typep next 'condition) (error next))
+           ((listp next)
+            (values (first next) (second next)
+                    (or (third next) (make-hash-table :test 'equal))))
+           (t (error "bad stub response: ~S" next)))))
+     (lambda () (length remaining)))))
 
 (defun %expect-model-error-kind (provider expected-kind)
   "Drive PROVIDER through one COMPLETE-CHAT call. Return T iff a
@@ -92,14 +122,16 @@ MODEL-ERROR with :KIND = EXPECTED-KIND was signalled."
   (let ((provider (%make-stub-provider
                    (%canned-transport
                     (list (list "{\"error\":{\"message\":\"internal\"}}"
-                                500 nil))))))
+                                500 nil)))
+                   :retry-p nil)))
     (ok (%expect-model-error-kind provider :http-server-error))))
 
 (deftest complete-chat-429-signals-rate-limited
   (let ((provider (%make-stub-provider
                    (%canned-transport
                     (list (list "{\"error\":{\"message\":\"slow down\"}}"
-                                429 nil))))))
+                                429 nil)))
+                   :retry-p nil)))
     (ok (%expect-model-error-kind provider :rate-limited))))
 
 (deftest complete-chat-malformed-body-signals-malformed-response
@@ -111,7 +143,8 @@ MODEL-ERROR with :KIND = EXPECTED-KIND was signalled."
 (deftest complete-chat-timeout-signals-transport-timeout
   (let ((provider (%make-stub-provider
                    (%canned-transport
-                    (list (make-condition 'usocket:timeout-error :socket nil))))))
+                    (list (make-condition 'usocket:timeout-error :socket nil)))
+                   :retry-p nil)))
     (ok (%expect-model-error-kind provider :transport-timeout))))
 
 (deftest complete-chat-connection-refused-signals-transport-unavailable
@@ -182,7 +215,8 @@ returning RESPONSES. Returns the develop-result. RESPONSES is a list
 suitable for %CANNED-TRANSPORT (each entry is (BODY STATUS HEADERS)
 or a CONDITION instance)."
   (let ((tf (%make-test-file (%tmp-transport-test-path "develop")))
-        (provider (%make-stub-provider (%canned-transport responses))))
+        (provider (%make-stub-provider (%canned-transport responses)
+                                       :retry-p nil)))
     (unwind-protect
          (cl-harness/src/orchestrator:develop
           "smoke goal"
@@ -314,3 +348,117 @@ or a CONDITION instance)."
          (text (cl-harness:format-develop-report result)))
     (ok (null (search "reason:" text))
         "format-develop-report omits reason annotation when slot is NIL")))
+
+;; --- retry policy ----------------------------------------------
+
+(defun %success-body (content)
+  (format nil
+          "{\"choices\":[{\"message\":{\"content\":\"~A\",\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]}"
+          content))
+
+(defun %error-body (message)
+  (format nil "{\"error\":{\"message\":\"~A\"}}" message))
+
+(deftest complete-chat-retries-once-on-http-server-error-and-succeeds
+  (multiple-value-bind (transport remaining)
+      (%counted-canned-transport
+       (list (list (%error-body "internal") 500 nil)
+             (list (%success-body "ok") 200 nil)))
+    (let* ((provider (%make-stub-provider transport))
+           (response (cl-harness/src/model:complete-chat
+                      provider
+                      (list (cl-harness/src/model:make-chat-message
+                             "user" "hi")))))
+      (ok (typep response 'cl-harness/src/model:chat-response))
+      (ok (string= "ok"
+                   (cl-harness/src/model:chat-response-content response)))
+      (ok (zerop (funcall remaining))
+          "both canned entries consumed by initial+retry"))))
+
+(deftest complete-chat-retries-once-on-rate-limited-and-succeeds
+  (multiple-value-bind (transport remaining)
+      (%counted-canned-transport
+       (list (list (%error-body "slow down") 429 nil)
+             (list (%success-body "ok") 200 nil)))
+    (let* ((provider (%make-stub-provider transport))
+           (response (cl-harness/src/model:complete-chat
+                      provider
+                      (list (cl-harness/src/model:make-chat-message
+                             "user" "hi")))))
+      (ok (string= "ok"
+                   (cl-harness/src/model:chat-response-content response)))
+      (ok (zerop (funcall remaining))))))
+
+(deftest complete-chat-retries-once-on-timeout-and-succeeds
+  (multiple-value-bind (transport remaining)
+      (%counted-canned-transport
+       (list (make-condition 'usocket:timeout-error :socket nil)
+             (list (%success-body "ok") 200 nil)))
+    (let* ((provider (%make-stub-provider transport))
+           (response (cl-harness/src/model:complete-chat
+                      provider
+                      (list (cl-harness/src/model:make-chat-message
+                             "user" "hi")))))
+      (ok (string= "ok"
+                   (cl-harness/src/model:chat-response-content response)))
+      (ok (zerop (funcall remaining))))))
+
+(deftest complete-chat-raises-after-retry-exhausted
+  (multiple-value-bind (transport remaining)
+      (%counted-canned-transport
+       (list (list (%error-body "down") 500 nil)
+             (list (%error-body "still down") 500 nil)))
+    (let ((provider (%make-stub-provider transport)))
+      (ok (handler-case
+              (progn
+                (cl-harness/src/model:complete-chat
+                 provider
+                 (list (cl-harness/src/model:make-chat-message
+                        "user" "hi")))
+                nil)
+            (cl-harness/src/model:model-error (c)
+              (eq :http-server-error
+                  (cl-harness/src/model:model-error-type c)))))
+      (ok (zerop (funcall remaining))
+          "both attempts consumed; second still failed"))))
+
+(deftest complete-chat-does-not-retry-non-retriable-reasons
+  (multiple-value-bind (transport remaining)
+      (%counted-canned-transport
+       (list (list (%error-body "bad key") 401 nil)
+             ;; second entry should remain un-consumed
+             (list (%success-body "ok") 200 nil)))
+    (let ((provider (%make-stub-provider transport)))
+      (ok (handler-case
+              (progn (cl-harness/src/model:complete-chat
+                      provider
+                      (list (cl-harness/src/model:make-chat-message
+                             "user" "hi")))
+                     nil)
+            (cl-harness/src/model:model-error (c)
+              (eq :auth-failed
+                  (cl-harness/src/model:model-error-type c)))))
+      (ok (= 1 (funcall remaining))
+          "no retry on :auth-failed; second entry left in queue"))))
+
+(deftest complete-chat-retry-p-nil-disables-retry
+  (multiple-value-bind (transport remaining)
+      (%counted-canned-transport
+       (list (list (%error-body "down") 500 nil)
+             (list (%success-body "ok") 200 nil)))
+    (let ((provider (cl-harness/src/model:make-openai-provider
+                     :base-url "http://stub.invalid/v1"
+                     :api-key "k" :model "demo"
+                     :retry-p nil
+                     :transport transport)))
+      (ok (handler-case
+              (progn (cl-harness/src/model:complete-chat
+                      provider
+                      (list (cl-harness/src/model:make-chat-message
+                             "user" "hi")))
+                     nil)
+            (cl-harness/src/model:model-error (c)
+              (eq :http-server-error
+                  (cl-harness/src/model:model-error-type c)))))
+      (ok (= 1 (funcall remaining))
+          "retry-p=nil suppresses retry; second entry left in queue"))))
