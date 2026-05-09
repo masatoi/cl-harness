@@ -49,7 +49,8 @@
                "cl-harness/tests/transport-test"
                "cl-harness/tests/failure-ledger-test"
                "cl-harness/tests/context-view-test"
-               "cl-harness/tests/report-test")
+               "cl-harness/tests/report-test"
+               "cl-harness/tests/review-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages

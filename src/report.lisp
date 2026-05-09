@@ -24,7 +24,17 @@
                 #:develop-state-patch-records
                 #:develop-state-failure-ledger
                 #:develop-state-source-facts
-                #:develop-state-integration-issues)
+                #:develop-state-integration-issues
+                #:develop-state-develop-spec
+                #:develop-state-review-decisions
+                #:develop-state-test-change-requests)
+  (:import-from #:cl-harness/src/review
+                #:develop-spec-acceptance-criteria
+                #:review-decision-kind
+                #:review-decision-status
+                #:review-decision-feedback
+                #:test-change-record-step-index
+                #:test-change-record-rationale)
   (:import-from #:cl-harness/src/planner
                 #:plan-step-test-name
                 #:plan-step-issue)
@@ -130,6 +140,32 @@ description is always emitted."
       (format stream "~D fact~:P recorded; ~D stale~:P detected.~%"
               count stale-count))))
 
+(defun %render-review-section (stream state)
+  (let ((spec (develop-state-develop-spec state))
+        (decisions (develop-state-review-decisions state))
+        (changes (develop-state-test-change-requests state)))
+    (when (or spec decisions changes)
+      (%render-section-header stream "Review gates")
+      (when spec
+        (format stream "Acceptance criteria:~%")
+        (loop for ac in (develop-spec-acceptance-criteria spec)
+              for i from 1
+              do (format stream "- AC-~D: ~A~%" i ac)))
+      (when decisions
+        (format stream "~%Decisions:~%")
+        (dolist (d decisions)
+          (format stream "- ~(~A~): ~(~A~)~@[ - ~A~]~%"
+                  (review-decision-kind d)
+                  (review-decision-status d)
+                  (let ((feedback (review-decision-feedback d)))
+                    (and feedback (plusp (length feedback)) feedback)))))
+      (when changes
+        (format stream "~%Test change requests:~%")
+        (dolist (c changes)
+          (format stream "- step ~A: ~A~%"
+                  (test-change-record-step-index c)
+                  (or (test-change-record-rationale c) "")))))))
+
 (defun format-develop-state-report (state &key (stream nil))
   "Render STATE (a DEVELOP-STATE) as a structured markdown report.
 When STREAM is NIL (default), return the report as a string. When
@@ -159,5 +195,6 @@ its data is non-empty, except the Goal which is always present):
      (%render-failures-section stream state "Resolved failures"
                                #'failure-ledger-resolved)
      (%render-integration-issues-section stream state)
+     (%render-review-section stream state)
      (%render-source-facts-section stream state)
      (values))))

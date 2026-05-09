@@ -60,6 +60,15 @@
                 #:develop-state-integration-issues
                 #:develop-state-step-results
                 #:develop-state-reason
+                #:develop-state-develop-spec
+                #:develop-state-set-develop-spec
+                #:develop-state-review-policy
+                #:develop-state-test-revision-policy
+                #:develop-state-review-replan-count
+                #:develop-state-test-revision-count
+                #:develop-state-record-review-decision
+                #:develop-state-record-test-record
+                #:develop-state-record-test-change-request
                 #:develop-state-record-failure
                 #:develop-state-failure-ledger
                 #:develop-state-patch-records
@@ -104,7 +113,19 @@
                 #:run-agent
                 #:agent-state
                 #:agent-state-final-verify
+                #:agent-state-final-action
                 #:agent-state-last-tool-errors)
+  (:import-from #:cl-harness/src/action
+                #:agent-action-criteria
+                #:agent-action-rationale
+                #:agent-action-test-source)
+  (:import-from #:cl-harness/src/review
+                #:generate-develop-spec
+                #:review-development-artifact
+                #:review-decision-approved-p
+                #:review-decision-feedback
+                #:make-test-record
+                #:make-test-change-record)
   (:import-from #:cl-harness/src/model
                 #:model-error
                 #:model-error-type)
@@ -200,6 +221,13 @@ though it was on disk."
     (when (and fasl (probe-file fasl))
       (handler-case (delete-file fasl) (error () nil))))
   (values))
+
+(defun %resolve-test-file-path (project-root test-file)
+  "Resolve TEST-FILE relative to PROJECT-ROOT when it is not absolute."
+  (let ((path (pathname test-file)))
+    (if (uiop:absolute-pathname-p path)
+        path
+        (merge-pathnames path (uiop:ensure-directory-pathname project-root)))))
 
 (defun plan-step->run-config (step
                               &key project-root system test-system
@@ -367,10 +395,128 @@ Already-promoted findings are skipped; NIL DEVELOP-STATE is a no-op
             (repl-finding-mark-promoted finding :linked-patch patch))))))
   develop-state)
 
+;; --- review gates --------------------------------------------------------
+
+(defun %review-enabled-p (develop-state)
+  (and develop-state
+       (not (eq :none (develop-state-review-policy develop-state)))))
+
+(defun %call-review (review-fn kind
+                     &key develop-state provider plan step test-change-action
+                          implementation-summary)
+  "Run REVIEW-FN and record the decision on DEVELOP-STATE.
+Provider-less/stub paths are handled by REVIEW-FN's default
+implementation."
+  (let ((decision
+          (funcall review-fn kind
+                   :provider provider
+                   :develop-spec (and develop-state
+                                      (develop-state-develop-spec develop-state))
+                   :develop-state develop-state
+                   :plan plan
+                   :step step
+                   :test-change-action test-change-action
+                   :implementation-summary implementation-summary)))
+    (when develop-state
+      (develop-state-record-review-decision develop-state decision))
+    decision))
+
+(defun %record-plan-tests (develop-state plan)
+  "Record approved generated tests on DEVELOP-STATE."
+  (when develop-state
+    (dolist (step plan)
+      (develop-state-record-test-record
+       develop-state
+       (make-test-record
+        :step-index (plan-step-index step)
+        :test-name (plan-step-test-name step)
+        :source (plan-step-test-source step)
+        :criteria (cl-harness/src/planner:plan-step-acceptance-criteria
+                   step))))))
+
+(defun %review-plan-and-tests (plan review-fn provider develop-state)
+  "Return (VALUES APPROVED-P FEEDBACK). Runs plan then test review."
+  (if (not (%review-enabled-p develop-state))
+      (progn (%record-plan-tests develop-state plan)
+             (values t ""))
+      (let ((plan-decision (%call-review
+                            review-fn :plan
+                            :develop-state develop-state
+                            :provider provider
+                            :plan plan)))
+        (if (not (review-decision-approved-p plan-decision))
+            (values nil (review-decision-feedback plan-decision))
+            (let ((test-decision (%call-review
+                                  review-fn :tests
+                                  :develop-state develop-state
+                                  :provider provider
+                                  :plan plan)))
+              (if (review-decision-approved-p test-decision)
+                  (progn (%record-plan-tests develop-state plan)
+                         (values t ""))
+                  (values nil (review-decision-feedback test-decision))))))))
+
+(defun %state-status-from-agent-state (state)
+  (and (typep state 'agent-state)
+       (cl-harness/src/agent:agent-state-status state)))
+
+(defun %maybe-handle-test-change-request (step state test-file review-fn
+                                          provider develop-state)
+  "Approve and materialize an additive TEST_CHANGE_REQUEST.
+Returns true when a request was approved and the caller should rerun
+the same step."
+  (when (and (%review-enabled-p develop-state)
+             (eq :additive-only
+                 (develop-state-test-revision-policy develop-state))
+             (eq :test-change-request (%state-status-from-agent-state state)))
+    (let* ((action (agent-state-final-action state))
+           (source (and action (agent-action-test-source action)))
+           (request (make-test-change-record
+                     :step-index (plan-step-index step)
+                     :criteria (and action (agent-action-criteria action))
+                     :rationale (and action (agent-action-rationale action))
+                     :test-source source))
+           (decision (%call-review
+                      review-fn :test-change
+                      :develop-state develop-state
+                      :provider provider
+                      :step step
+                      :test-change-action request)))
+      (develop-state-record-test-change-request develop-state request)
+      (when (and (review-decision-approved-p decision)
+                 (stringp source)
+                 (search "(deftest " source))
+        (validate-test-source source (plan-step-index step))
+        (materialize-test-source (%resolve-test-file-path
+                                  (develop-state-project-root develop-state)
+                                  test-file)
+                                 source)
+        (incf (develop-state-test-revision-count develop-state))
+        t))))
+
+(defun %review-implementation (step state review-fn provider develop-state)
+  "Return true when implementation review approves STATE."
+  (if (or (not (%review-enabled-p develop-state))
+          (not (eq :passed (%read-status-from-state state))))
+      t
+      (let ((decision
+              (%call-review
+               review-fn :implementation
+               :develop-state develop-state
+               :provider provider
+               :step step
+               :implementation-summary
+               (format nil "Step ~D (~A) passed verification."
+                       (plan-step-index step)
+                       (plan-step-test-name step)))))
+        (review-decision-approved-p decision))))
+
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
                       provider mcp-client run-limits explore-fn
-                      &key develop-state)
+                      &key develop-state
+                           (review-fn #'review-development-artifact)
+                           (max-test-revisions 3))
   "Materialize the step's test, optionally run an exploration sub-agent,
 build a RUN-CONFIG (with the explore memo prepended to the issue
 when present), call RUN-FN, return a DEVELOP-STEP-RESULT. The
@@ -390,7 +536,8 @@ filter ledger entries to those bound to the active step. Inert when
 DEVELOP-STATE is NIL (e.g. test stubs that exercise %execute-step
 without a develop-state)."
   (validate-test-source (plan-step-test-source step) (plan-step-index step))
-  (materialize-test-source test-file (plan-step-test-source step))
+  (materialize-test-source (%resolve-test-file-path project-root test-file)
+                           (plan-step-test-source step))
   (when develop-state
     (setf (develop-state-current-step-index develop-state)
           (plan-step-index step)))
@@ -454,11 +601,35 @@ without a develop-state)."
                                      :limits (or run-limits
                                                  (cl-harness/src/config:make-default-limits))))
                 (policy (make-tool-policy condition))
-                (state (unwind-protect
-                            (funcall run-fn rc provider mcp-client policy step-logger
-                                     :develop-state develop-state)
-                         (close-run-logger step-logger)))
-                (status (%read-status-from-state state))
+                (state
+                 (unwind-protect
+                      (block run-step
+                        (loop
+                          for state = (funcall run-fn rc provider mcp-client
+                                               policy step-logger
+                                               :develop-state develop-state)
+                          do (if (and develop-state
+                                      (< (develop-state-test-revision-count
+                                          develop-state)
+                                          max-test-revisions)
+                                      (%maybe-handle-test-change-request
+                                       step state test-file review-fn provider
+                                       develop-state))
+                                 (progn
+                                   (%log-develop-event
+                                    logger :test-change-applied
+                                    (alist-hash-table
+                                     `(("step_index" . ,(plan-step-index step)))
+                                     :test 'equal)))
+                                 (return-from run-step state))))
+                   (close-run-logger step-logger)))
+                (status (let ((raw (%read-status-from-state state)))
+                          (if (and (eq :passed raw)
+                                   (not (%review-implementation
+                                         step state review-fn provider
+                                         develop-state)))
+                              :review-rejected
+                              raw)))
                 (result (make-instance
                          'develop-step-result
                          :step-index (plan-step-index step)
@@ -503,7 +674,9 @@ without a develop-state)."
                           log-path
                           (run-fn #'run-agent)
                           (explore-fn #'run-explore-agent)
-                          develop-state)
+                          develop-state
+                          (review-fn #'review-development-artifact)
+                          (max-test-revisions 3))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -555,7 +728,10 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                                             condition test-file logger
                                             provider mcp-client run-limits
                                             explore-fn
-                                            :develop-state develop-state)))
+                                            :develop-state develop-state
+                                            :review-fn review-fn
+                                            :max-test-revisions
+                                            max-test-revisions)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -733,6 +909,39 @@ Reads:
               for idx from 1
               do (format s "~A~%" (%render-tool-error-entry idx entry)))))))
 
+(defun %plan-with-review (goal planner-fn review-fn provider state mode
+                          project-root system test-system project-inventory
+                          prior-plan failure-context max-review-replans)
+  "Call PLANNER-FN until plan/test review approves or review budget
+is exhausted. Returns NIL after stamping STATE on budget exhaustion."
+  (loop
+    for plan = (%apply-mode-to-plan
+                (funcall planner-fn goal
+                         :project-root project-root
+                         :system system
+                         :test-system test-system
+                         :provider provider
+                         :project-inventory project-inventory
+                         :mode mode
+                         :prior-plan prior-plan
+                         :failure-context failure-context
+                         :develop-state state)
+                mode)
+    do (multiple-value-bind (approved-p feedback)
+           (%review-plan-and-tests plan review-fn provider state)
+         (when approved-p
+           (return plan))
+         (when (>= (develop-state-review-replan-count state)
+                   max-review-replans)
+           (setf (develop-state-status state) :limit-exhausted
+                 (develop-state-limit-hit state) :max-review-replans)
+           (return nil))
+         (incf (develop-state-review-replan-count state))
+         (setf prior-plan plan
+               failure-context
+               (format nil "Plan/test review rejected the previous output: ~A"
+                       feedback)))))
+
 (defun develop (goal
                 &key project-root system test-system test-file
                      provider mcp-client
@@ -742,6 +951,12 @@ Reads:
                      (mode :mixed)
                      log-path
                      (max-replans 3)
+                     (review-policy :none)
+                     (test-revision-policy :additive-only)
+                     (max-review-replans 2)
+                     (max-test-revisions 3)
+                     (spec-fn #'generate-develop-spec)
+                     (review-fn #'review-development-artifact)
                      (planner-fn #'plan-development)
                      (run-fn #'run-agent)
                      (explore-fn #'run-explore-agent))
@@ -805,7 +1020,10 @@ final DEVELOP-RESULT carries the reason through to callers."
                                    :condition condition
                                    :run-limits run-limits
                                    :project-inventory project-inventory
-                                   :mode mode)))
+                                   :mode mode
+                                   :review-policy review-policy
+                                   :test-revision-policy
+                                   test-revision-policy)))
     ;; Phase I auto-gather: populate the structured project-summary
     ;; slot from disk so the :planning view sees it alongside the
     ;; legacy project-inventory text. Best-effort -- a malformed
@@ -827,28 +1045,30 @@ final DEVELOP-RESULT carries the reason through to callers."
     ;; construction below.
     (handler-case
         (progn
+          (when (%review-enabled-p state)
+            (develop-state-set-develop-spec
+             state
+             (funcall spec-fn goal
+                      :provider provider
+                      :develop-state state
+                      :project-root project-root
+                      :system system
+                      :test-system test-system)))
           (setf (develop-state-current-plan state)
-                (%apply-mode-to-plan
-                 ;; Phase C wiring (active since the Phase C wiring follow-up):
-                 ;; thread :develop-state into PLAN-DEVELOPMENT so the planner's
-                 ;; user prompt is built via the :planning context-view formatter
-                 ;; (cl-harness/src/context-view) instead of the legacy ad-hoc
-                 ;; string assembly. Section ordering differs slightly from
-                 ;; legacy (mode-nudge now follows the context-view block rather
-                 ;; than appearing between Goal and project metadata), but the
-                 ;; rendered content is the same. The legacy branch in
-                 ;; %BUILD-USER-PROMPT remains intact for standalone callers
-                 ;; (test stubs, external callers, the bench harness's
-                 ;; planner-fn callback) that don't pass :develop-state.
-                 (funcall planner-fn goal
-                          :project-root project-root
-                          :system system
-                          :test-system test-system
-                          :provider provider
-                          :project-inventory project-inventory
-                          :mode mode
-                          :develop-state state)
-                 mode))
+                (%plan-with-review
+                 goal planner-fn review-fn provider state mode
+                 project-root system test-system project-inventory
+                 nil nil max-review-replans))
+          (when (null (develop-state-current-plan state))
+            (return-from develop
+              (make-instance 'develop-result
+                             :status (develop-state-status state)
+                             :reason (develop-state-reason state)
+                             :final-plan nil
+                             :step-results nil
+                             :replan-count (develop-state-replan-count state)
+                             :limit-hit (develop-state-limit-hit state)
+                             :develop-state state)))
           (loop
             (let* ((round-results (execute-plan
                                    (develop-state-current-plan state)
@@ -863,7 +1083,9 @@ final DEVELOP-RESULT carries the reason through to callers."
                                    :log-path log-path
                                    :run-fn run-fn
                                    :explore-fn explore-fn
-                                   :develop-state state))
+                                   :develop-state state
+                                   :review-fn review-fn
+                                   :max-test-revisions max-test-revisions))
                    (last-result (car (last round-results))))
               (dolist (r round-results)
                 (develop-state-record-step-result state r))
@@ -889,26 +1111,15 @@ final DEVELOP-RESULT carries the reason through to callers."
                    (setf (develop-state-last-failure-test-name state)
                          this-failure))
                  (incf (develop-state-replan-count state))
-                 (let ((new-plan (%apply-mode-to-plan
-                                  ;; Phase C wiring active: see the initial-plan
-                                  ;; call site above for rationale. Replan path
-                                  ;; threads :develop-state too so the planner's
-                                  ;; replan prompt is built via the :planning
-                                  ;; context-view formatter (which already
-                                  ;; renders prior-plan + failure-context as
-                                  ;; structured sub-sections of the view).
-                                  (funcall planner-fn goal
-                                           :project-root project-root
-                                           :system system
-                                           :test-system test-system
-                                           :provider provider
-                                           :project-inventory project-inventory
-                                           :mode mode
-                                           :prior-plan (develop-state-current-plan state)
-                                           :failure-context
-                                           (%failure-context last-result)
-                                           :develop-state state)
-                                  mode)))
+                 (let ((new-plan (%plan-with-review
+                                  goal planner-fn review-fn provider state mode
+                                  project-root system test-system
+                                  project-inventory
+                                  (develop-state-current-plan state)
+                                  (%failure-context last-result)
+                                  max-review-replans)))
+                   (when (null new-plan)
+                     (return))
                    (when (equal (%first-test-name new-plan)
                                 (develop-state-last-failure-test-name state))
                      (setf (develop-state-status state) :stuck

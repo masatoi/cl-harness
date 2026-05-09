@@ -65,6 +65,15 @@
          (r (parse-verify-result load test)))
     (ok (eq :test-failed (verify-result-status r)))))
 
+(deftest parse-verify-result-zero-tests-treated-as-failure
+  (let* ((load (%hash '(("isError" . :false))))
+         (test (%hash '(("isError" . :false)
+                        ("passed" . 0)
+                        ("failed" . 0))))
+         (r (parse-verify-result load test)))
+    (ok (eq :test-failed (verify-result-status r)))
+    (ok (not (verify-result-success-p r)))))
+
 (defun %canned-mcp-responder (body
                               &key load-error
                                    (passed 4) (failed 0))

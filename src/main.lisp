@@ -81,8 +81,24 @@
   (:import-from #:cl-harness/src/action
                 #:agent-action
                 #:agent-action-type
+                #:agent-action-criteria
+                #:agent-action-rationale
+                #:agent-action-test-source
                 #:parse-action
                 #:action-parse-error)
+  (:import-from #:cl-harness/src/review
+                #:develop-spec
+                #:make-develop-spec
+                #:develop-spec-goal
+                #:develop-spec-acceptance-criteria
+                #:review-decision
+                #:make-review-decision
+                #:review-decision-kind
+                #:review-decision-status
+                #:review-decision-feedback
+                #:review-decision-approved-p
+                #:generate-develop-spec
+                #:review-development-artifact)
   (:import-from #:cl-harness/src/policy
                 #:tool-policy
                 #:make-tool-policy
@@ -242,8 +258,23 @@
            #:model-error
            #:agent-action
            #:agent-action-type
+           #:agent-action-criteria
+           #:agent-action-rationale
+           #:agent-action-test-source
            #:parse-action
            #:action-parse-error
+           #:develop-spec
+           #:make-develop-spec
+           #:develop-spec-goal
+           #:develop-spec-acceptance-criteria
+           #:review-decision
+           #:make-review-decision
+           #:review-decision-kind
+           #:review-decision-status
+           #:review-decision-feedback
+           #:review-decision-approved-p
+           #:generate-develop-spec
+           #:review-development-artifact
            #:tool-policy
            #:make-tool-policy
            #:policy-mode

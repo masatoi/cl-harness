@@ -20,6 +20,9 @@
                 #:agent-action-probe
                 #:agent-action-finding
                 #:agent-action-decision
+                #:agent-action-criteria
+                #:agent-action-rationale
+                #:agent-action-test-source
                 #:parse-action
                 #:action-parse-error
                 #:action-parse-error-message))
@@ -154,5 +157,29 @@
           (progn
             (parse-action
              "{\"type\":\"finding\",\"hypothesis\":\"\",\"probe\":\"p\",\"finding\":\"f\",\"decision\":\"d\"}")
+            nil)
+        (action-parse-error () t))))
+
+(deftest parse-action-recognises-test-change-request
+  (let ((a (parse-action
+            "{\"type\":\"test_change_request\",\"criteria\":[\"AC-1\"],\"rationale\":\"missing edge case\",\"test_source\":\"(deftest edge (ok t))\"}")))
+    (ok (eq :test-change-request (agent-action-type a)))
+    (ok (equal '("AC-1") (agent-action-criteria a)))
+    (ok (string= "missing edge case" (agent-action-rationale a)))
+    (ok (search "(deftest edge" (agent-action-test-source a)))))
+
+(deftest parse-action-rejects-test-change-request-with-non-additive-shape
+  (ok (handler-case
+          (progn
+            (parse-action
+             "{\"type\":\"test_change_request\",\"criteria\":[42],\"rationale\":\"r\",\"test_source\":\"(deftest t)\"}")
+            nil)
+        (action-parse-error () t))))
+
+(deftest parse-action-rejects-test-change-request-with-missing-test-source
+  (ok (handler-case
+          (progn
+            (parse-action
+             "{\"type\":\"test_change_request\",\"criteria\":[\"AC-1\"],\"rationale\":\"r\"}")
             nil)
         (action-parse-error () t))))

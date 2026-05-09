@@ -60,6 +60,8 @@
                 #:agent-action-arguments
                 #:agent-action-status
                 #:agent-action-summary
+                #:agent-action-rationale
+                #:agent-action-test-source
                 #:action-parse-error
                 #:action-parse-error-message)
   (:import-from #:cl-harness/src/policy
@@ -561,6 +563,8 @@ tests by editing source files via cl-mcp tools.~%~%")
     (format s "Respond with exactly one JSON object per turn:~%")
     (format s "  {\"type\":\"tool_call\",\"tool\":\"<name>\",\"arguments\":{...}, \"thought\":\"...\"}~%")
     (format s "  {\"type\":\"finish\",\"status\":\"fixed\"|\"give_up\",\"summary\":\"...\"}~%~%")
+    (format s "  {\"type\":\"test_change_request\",\"criteria\":[\"AC-...\"],\"rationale\":\"...\",\"test_source\":\"(deftest ...)\"}~%~%")
+    (format s "Use test_change_request only when the generated test is insufficient for the goal. It must be additive-only: add coverage, never weaken or delete tests.~%~%")
     (format s "Workflow:~%")
     (case (policy-mode policy)
       (:runtime-native
@@ -919,7 +923,11 @@ text or JSON-dumps the result."
        (append base
                `(("status" . ,(string-downcase
                                (symbol-name (agent-action-status action))))
-                 ("summary" . ,(or (agent-action-summary action) ""))))))))
+                 ("summary" . ,(or (agent-action-summary action) "")))))
+      (:test-change-request
+       (append base
+               `(("rationale" . ,(or (agent-action-rationale action) ""))
+                 ("test_source" . ,(or (agent-action-test-source action) ""))))))))
 
 (defun finalize (state status &key verify action limit-hit)
   "Stamp STATE's terminal fields and return STATE."
@@ -1267,7 +1275,9 @@ the loop should continue, otherwise a terminal status keyword
                  (:tool-call
                   (handle-tool-call turn state config mcp-client policy logger
                                     with-assistant action
-                                    :dry-run-p dry-run-p)))))
+                                    :dry-run-p dry-run-p))
+                 (:test-change-request
+                  (values with-assistant :test-change-request nil action)))))
          (action-parse-error (c)
            (incf (agent-state-parse-error-streak state))
            (log-event logger :action-error
@@ -1404,7 +1414,10 @@ offending slot."
                                              :clean-verify-p clean-verify-p
                                              :before-clean-verify-fn effective-before-clean-verify-fn))
                            (:give-up
-                            (finalize state :give-up :action action)))
+                            (finalize state :give-up :action action))
+                           (:test-change-request
+                            (finalize state :test-change-request
+                                      :action action)))
                          logger)))
                      (t (setf messages next-messages))))
                  (let ((limit-hit (check-limits state limits)))

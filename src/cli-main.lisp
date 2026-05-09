@@ -135,8 +135,8 @@ NIL or empty string defaults to (:generic-mcp)."
                         :description "LLM model name (default $CL_HARNESS_LLM_MODEL)"
                         :key :model)
    (clingon:make-option :integer :long-name "max-tokens"
-                        :description "max_tokens per LLM call (default 1024)"
-                        :initial-value 1024 :key :max-tokens)
+                        :description "max_tokens per LLM call (default: API default; omitted unless specified)"
+                        :key :max-tokens)
    (clingon:make-option :string :long-name "temperature"
                         :description "LLM temperature as a string (default 0.0)"
                         :initial-value "0.0" :key :temperature)
@@ -184,8 +184,8 @@ NIL or empty string defaults to (:generic-mcp)."
                         :description "LLM model name (default $CL_HARNESS_LLM_MODEL)"
                         :key :model)
    (clingon:make-option :integer :long-name "max-tokens"
-                        :description "max_tokens per LLM call (default 2048)"
-                        :initial-value 2048 :key :max-tokens)
+                        :description "max_tokens per LLM call (default: API default; omitted unless specified)"
+                        :key :max-tokens)
    (clingon:make-option :string :long-name "temperature"
                         :description "LLM temperature as a string (default 0.0)"
                         :initial-value "0.0" :key :temperature)
@@ -274,8 +274,8 @@ NIL or empty string defaults to (:generic-mcp)."
                         :description "LLM model name (default $CL_HARNESS_LLM_MODEL)"
                         :key :model)
    (clingon:make-option :integer :long-name "max-tokens"
-                        :description "max_tokens per LLM call (default 4096)"
-                        :initial-value 4096 :key :max-tokens)
+                        :description "max_tokens per LLM call (default: API default; omitted unless specified)"
+                        :key :max-tokens)
    (clingon:make-option :string :long-name "temperature"
                         :description "LLM temperature as a string (default 0.0)"
                         :initial-value "0.0" :key :temperature)

@@ -38,6 +38,18 @@
            #:develop-state-limit-hit
            #:develop-state-integration-issues
            #:develop-state-record-step-result
+           #:develop-state-develop-spec
+           #:develop-state-set-develop-spec
+           #:develop-state-review-policy
+           #:develop-state-test-revision-policy
+           #:develop-state-review-replan-count
+           #:develop-state-test-revision-count
+           #:develop-state-review-decisions
+           #:develop-state-record-review-decision
+           #:develop-state-test-records
+           #:develop-state-record-test-record
+           #:develop-state-test-change-requests
+           #:develop-state-record-test-change-request
            #:develop-state-source-facts
            #:develop-state-record-source-fact
            #:develop-state-patch-records
@@ -126,6 +138,37 @@ the final DEVELOP-RESULT status when the loop exits.")
                        :accessor develop-state-integration-issues
                        :documentation "INTEGRATION-ISSUE list found
 by the post-success static check, or NIL when none ran.")
+   (develop-spec :initform nil :accessor develop-state-develop-spec
+                 :documentation "Optional DEVELOP-SPEC generated from
+the user goal. When review gates are enabled, this is the source of
+truth above planner-authored tests.")
+   (review-policy :initarg :review-policy
+                  :reader develop-state-review-policy
+                  :initform :auto
+                  :documentation "Review-gate policy keyword. :AUTO
+uses the configured provider/reviewer, :NONE disables gates.")
+   (test-revision-policy :initarg :test-revision-policy
+                         :reader develop-state-test-revision-policy
+                         :initform :additive-only
+                         :documentation "Policy for implementer-requested
+test revisions. v0.6 starts with :ADDITIVE-ONLY.")
+   (review-replan-count :initform 0
+                        :accessor develop-state-review-replan-count
+                        :documentation "How many plan/test review
+rejection replans have been consumed.")
+   (test-revision-count :initform 0
+                        :accessor develop-state-test-revision-count
+                        :documentation "How many approved additive
+test revisions have been materialized.")
+   (review-decisions :initform nil :accessor %review-decisions
+                     :documentation "Reverse-chronological
+REVIEW-DECISION records.")
+   (test-records :initform nil :accessor %test-records
+                 :documentation "Reverse-chronological TEST-RECORDs
+for approved generated tests.")
+   (test-change-requests :initform nil :accessor %test-change-requests
+                         :documentation "Reverse-chronological
+TEST-CHANGE-RECORDs requested during implementation.")
    (source-facts :initform nil :accessor %source-facts
                  :documentation "Reverse-chronological list of
 SOURCE-FACT instances. Internal; public reader is
@@ -173,7 +216,9 @@ runtime-vocabulary) without touching the existing slot set."))
 (defun make-develop-state (&key goal project-root system test-system
                              (condition :generic-mcp)
                              run-limits project-inventory
-                             (mode :mixed))
+                             (mode :mixed)
+                             (review-policy :auto)
+                             (test-revision-policy :additive-only))
   "Construct a DEVELOP-STATE for one DEVELOP run. GOAL must be a
 non-empty string; PROJECT-ROOT, SYSTEM, TEST-SYSTEM must be
 non-NIL. MODE defaults to :MIXED and must be one of
@@ -192,6 +237,11 @@ one of +SUPPORTED-CONDITIONS+."
   (unless (member condition +supported-conditions+)
     (error "develop-state: unsupported :condition ~S; expected one of ~S"
            condition +supported-conditions+))
+  (unless (member review-policy '(:auto :none))
+    (error "develop-state: unsupported :review-policy ~S" review-policy))
+  (unless (member test-revision-policy '(:additive-only :none))
+    (error "develop-state: unsupported :test-revision-policy ~S"
+           test-revision-policy))
   (make-instance 'develop-state
                  :goal goal
                  :project-root project-root
@@ -200,7 +250,9 @@ one of +SUPPORTED-CONDITIONS+."
                  :condition condition
                  :run-limits run-limits
                  :project-inventory project-inventory
-                 :mode mode))
+                 :mode mode
+                 :review-policy review-policy
+                 :test-revision-policy test-revision-policy))
 
 (defun develop-state-record-step-result (state step-result)
   "Append STEP-RESULT (typically a DEVELOP-STEP-RESULT) to STATE's
@@ -215,6 +267,38 @@ see execution order. Returns STATE."
 (oldest first). Mirrors DEVELOP-RESULT-STEP-RESULTS so the two
 are interchangeable for downstream readers."
   (reverse (%step-results state)))
+
+(defun develop-state-set-develop-spec (state spec)
+  "Replace STATE's DEVELOP-SPEC slot with SPEC. Returns STATE."
+  (setf (slot-value state 'develop-spec) spec)
+  state)
+
+(defun develop-state-record-review-decision (state decision)
+  "Push DECISION onto STATE's review-decision list. Returns STATE."
+  (push decision (%review-decisions state))
+  state)
+
+(defun develop-state-review-decisions (state)
+  "Return STATE's review decisions in observation order."
+  (reverse (%review-decisions state)))
+
+(defun develop-state-record-test-record (state record)
+  "Push generated-test RECORD onto STATE. Returns STATE."
+  (push record (%test-records state))
+  state)
+
+(defun develop-state-test-records (state)
+  "Return STATE's generated test records in observation order."
+  (reverse (%test-records state)))
+
+(defun develop-state-record-test-change-request (state request)
+  "Push additive test-change REQUEST onto STATE. Returns STATE."
+  (push request (%test-change-requests state))
+  state)
+
+(defun develop-state-test-change-requests (state)
+  "Return STATE's test-change requests in observation order."
+  (reverse (%test-change-requests state)))
 
 (defmethod initialize-instance :after ((s develop-state) &key)
   "Allocate a fresh FAILURE-LEDGER for each new DEVELOP-STATE.

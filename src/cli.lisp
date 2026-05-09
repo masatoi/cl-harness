@@ -59,7 +59,7 @@
                  (condition :generic-mcp)
                  mcp-url mcp-stdio mcp-command
                  base-url api-key model
-                 (temperature 0.0) (max-tokens 1024)
+                 (temperature 0.0) max-tokens
                  reasoning-effort extra-body
                  (retry-p t)
                  dry-run-p
@@ -140,7 +140,7 @@ Returns the populated AGENT-STATE."
                    (conditions '(:generic-mcp))
                    mcp-url mcp-stdio mcp-command
                    base-url api-key model
-                   (temperature 0.0) (max-tokens 2048)
+                   (temperature 0.0) max-tokens
                    reasoning-effort extra-body
                    (retry-p t)
                    log-dir)
@@ -324,7 +324,7 @@ trivial runs."
                      (condition :generic-mcp)
                      mcp-url mcp-stdio mcp-command
                      base-url api-key model
-                     (temperature 0.0) (max-tokens 4096)
+                     (temperature 0.0) max-tokens
                      reasoning-effort extra-body
                      (retry-p t)
                      (max-replans 3)
@@ -344,6 +344,11 @@ trivial runs."
                      (inventory-byte-budget 5000)
                      ;; v0.4 Phase 6: mode selector.
                      (mode :mixed)
+                     ;; Goal-backed review gates.
+                     (review-policy :auto)
+                     (test-revision-policy :additive-only)
+                     (max-review-replans 2)
+                     (max-test-revisions 3)
                      log-path)
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
@@ -449,6 +454,10 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                             :run-limits effective-limits
                             :project-inventory effective-inventory
                             :mode mode
+                            :review-policy review-policy
+                            :test-revision-policy test-revision-policy
+                            :max-review-replans max-review-replans
+                            :max-test-revisions max-test-revisions
                             :max-replans max-replans
                             :log-path path)))
                (format t "~A" (format-develop-report result :log-path path))

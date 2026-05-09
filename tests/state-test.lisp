@@ -31,6 +31,18 @@
                 #:develop-state-limit-hit
                 #:develop-state-integration-issues
                 #:develop-state-record-step-result
+                #:develop-state-develop-spec
+                #:develop-state-set-develop-spec
+                #:develop-state-review-policy
+                #:develop-state-test-revision-policy
+                #:develop-state-review-replan-count
+                #:develop-state-test-revision-count
+                #:develop-state-review-decisions
+                #:develop-state-record-review-decision
+                #:develop-state-test-records
+                #:develop-state-record-test-record
+                #:develop-state-test-change-requests
+                #:develop-state-record-test-change-request
                 #:develop-state-source-facts
                 #:develop-state-record-source-fact
                 #:develop-state-patch-records
@@ -82,7 +94,14 @@
     (ok (null (develop-state-limit-hit s)))
     (ok (null (develop-state-integration-issues s)))
     (ok (null (develop-state-run-limits s)))
-    (ok (null (develop-state-project-inventory s)))))
+    (ok (null (develop-state-project-inventory s)))
+    (ok (eq :auto (develop-state-review-policy s)))
+    (ok (eq :additive-only (develop-state-test-revision-policy s)))
+    (ok (zerop (develop-state-review-replan-count s)))
+    (ok (zerop (develop-state-test-revision-count s)))
+    (ok (null (develop-state-review-decisions s)))
+    (ok (null (develop-state-test-records s)))
+    (ok (null (develop-state-test-change-requests s)))))
 
 (deftest make-develop-state-rejects-bad-mode
   (ok (handler-case
@@ -112,6 +131,23 @@
     (develop-state-record-step-result s :third)
     (let ((results (develop-state-step-results s)))
       (ok (equal '(:first :second :third) results)))))
+
+(deftest develop-state-records-review-ledgers-in-order
+  (let ((s (%make)))
+    (develop-state-set-develop-spec s :spec)
+    (develop-state-record-review-decision s :review-1)
+    (develop-state-record-review-decision s :review-2)
+    (develop-state-record-test-record s :test-1)
+    (develop-state-record-test-record s :test-2)
+    (develop-state-record-test-change-request s :change-1)
+    (develop-state-record-test-change-request s :change-2)
+    (ok (eq :spec (develop-state-develop-spec s)))
+    (ok (equal '(:review-1 :review-2)
+               (develop-state-review-decisions s)))
+    (ok (equal '(:test-1 :test-2)
+               (develop-state-test-records s)))
+    (ok (equal '(:change-1 :change-2)
+               (develop-state-test-change-requests s)))))
 
 (deftest develop-state-mutators-are-writable
   (let ((s (%make)))

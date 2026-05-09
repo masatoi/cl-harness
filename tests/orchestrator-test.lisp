@@ -216,6 +216,42 @@ test can verify the explorer was invoked with the right plan-step."
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 
+(deftest execute-plan-resolves-relative-test-file-under-project-root
+  (let* ((project-root (merge-pathnames
+                        (format nil "cl-harness-orch-root-~A/"
+                                (get-universal-time))
+                        (uiop:temporary-directory)))
+         (relative (format nil "tests/relative-~A.lisp"
+                           (get-universal-time)))
+         (project-test-file (merge-pathnames relative project-root))
+         (cwd-test-file (merge-pathnames relative *default-pathname-defaults*))
+         (log-path (%tmp-path "develop-log-relative"))
+         (steps (list (%make-step :index 0
+                                  :test-name "relative-test"
+                                  :test-source "(deftest relative-test (ok t))")))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (when (probe-file cwd-test-file) (delete-file cwd-test-file))
+           (%make-test-file project-test-file)
+           (execute-plan steps
+                         :project-root (namestring project-root)
+                         :system "demo"
+                         :test-system "demo/tests"
+                         :test-file relative
+                         :log-path log-path
+                         :run-fn runner)
+           (ok (probe-file project-test-file))
+           (ok (not (probe-file cwd-test-file))
+               "relative test-file must not be materialized under cwd")
+           (let ((content (uiop:read-file-string project-test-file)))
+             (ok (search "(deftest relative-test" content))))
+      (when (probe-file cwd-test-file) (delete-file cwd-test-file))
+      (when (probe-file project-test-file) (delete-file project-test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
 (deftest execute-plan-stops-on-first-failure
   (let* ((project-root (uiop:temporary-directory))
          (test-file (merge-pathnames
@@ -458,6 +494,95 @@ plan (so a stuck loop test can keep getting the same response)."
              (ok (zerop (develop-result-replan-count result)))
              (ok (null (develop-result-limit-hit result)))
              (ok (= 1 (length (develop-result-step-results result))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest develop-replans-when-plan-review-rejects
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-review-replan"))
+         (plan-1 (list (%make-step :index 0 :test-name "weak-test")))
+         (plan-2 (list (%make-step :index 0 :test-name "strong-test")))
+         (planner-fn (%canned-planner (list plan-1 plan-2)))
+         (decisions (cons (list :rejected :approved :approved) nil))
+         (review-fn
+           (lambda (kind &key &allow-other-keys)
+             (let ((status (or (pop (car decisions)) :approved)))
+               (cl-harness/src/review:make-review-decision
+                :kind kind
+                :status status
+                :feedback (if (eq :rejected status)
+                              "missing acceptance criterion"
+                              "")))))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner (cons '() nil) outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let* ((result (develop "reviewed goal"
+                                   :project-root (namestring project-root)
+                                   :system "demo"
+                                   :test-system "demo/tests"
+                                   :test-file test-file
+                                   :log-path log-path
+                                   :review-policy :auto
+                                   :planner-fn planner-fn
+                                   :review-fn review-fn
+                                   :run-fn runner))
+                  (state (develop-result-develop-state result)))
+             (ok (eq :passed (develop-result-status result)))
+             (ok (= 1 (cl-harness/src/state:develop-state-review-replan-count
+                       state)))
+             (ok (= 4 (length
+                       (cl-harness/src/state:develop-state-review-decisions
+                        state))))
+             (ok (string= "strong-test"
+                          (cl-harness/src/planner:plan-step-test-name
+                           (first (cl-harness/src/orchestrator:develop-result-final-plan
+                                   result)))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest execute-plan-marks-step-review-rejected
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "execute-review-rejected"))
+         (state (make-develop-state :goal "review implementation"
+                                    :project-root (namestring project-root)
+                                    :system "demo"
+                                    :test-system "demo/tests"
+                                    :review-policy :auto))
+         (step (%make-step :index 0 :test-name "alpha"))
+         (review-fn
+           (lambda (kind &key &allow-other-keys)
+             (cl-harness/src/review:make-review-decision
+              :kind kind
+              :status (if (eq kind :implementation) :rejected :approved)
+              :feedback "implementation overfits the test")))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner (cons '() nil) outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((results (execute-plan
+                           (list step)
+                           :project-root (namestring project-root)
+                           :system "demo"
+                           :test-system "demo/tests"
+                           :test-file test-file
+                           :log-path log-path
+                           :run-fn runner
+                           :review-fn review-fn
+                           :develop-state state)))
+             (ok (= 1 (length results)))
+             (ok (eq :review-rejected
+                     (develop-step-result-status (first results))))))
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 

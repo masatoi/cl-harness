@@ -57,8 +57,8 @@ on configuration; treat T or :TRUE as the error sentinel."
 
 LOAD-RESULT is the load-system tools/call result. TEST-RESULT is the
 run-tests tools/call result, or NIL when load failed and tests were
-skipped. Missing pass/fail counts in TEST-RESULT are treated as a
-failure so a confused test runner cannot silently pass."
+skipped. Missing or zero pass counts in TEST-RESULT are treated as a
+failure so an empty or confused test runner cannot silently pass."
   (cond
     ((or (null load-result) (%is-error load-result))
      (make-instance 'verify-result
@@ -72,7 +72,8 @@ failure so a confused test runner cannot silently pass."
      (let ((failed (gethash "failed" test-result))
            (passed (gethash "passed" test-result)))
        (make-instance 'verify-result
-                      :status (if (and (numberp failed) (zerop failed))
+                      :status (if (and (numberp failed) (zerop failed)
+                                       (numberp passed) (plusp passed))
                                   :passed
                                   :test-failed)
                       :passed passed

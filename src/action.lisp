@@ -29,6 +29,9 @@
            #:agent-action-probe
            #:agent-action-finding
            #:agent-action-decision
+           #:agent-action-criteria
+           #:agent-action-rationale
+           #:agent-action-test-source
            #:parse-action
            #:action-parse-error
            #:action-parse-error-message
@@ -67,8 +70,22 @@ of the probe (non-empty string). NIL for other action types.")
    (decision :initarg :decision :initform nil
              :reader agent-action-decision
              :documentation "For :FINDING actions, the design decision
-the finding drives (non-empty string). NIL for other action types."))
-  (:documentation "Parsed LLM action; TYPE is :TOOL-CALL, :FINISH, or :FINDING."))
+the finding drives (non-empty string). NIL for other action types.")
+   (criteria :initarg :criteria :initform nil
+             :reader agent-action-criteria
+             :documentation "For :TEST-CHANGE-REQUEST actions, a list
+of acceptance-criteria identifiers or descriptions affected by the
+request.")
+   (rationale :initarg :rationale :initform nil
+              :reader agent-action-rationale
+              :documentation "For :TEST-CHANGE-REQUEST actions, why the
+test needs additive coverage.")
+   (test-source :initarg :test-source :initform nil
+                :reader agent-action-test-source
+                :documentation "For :TEST-CHANGE-REQUEST actions, the
+proposed additive rove test source."))
+  (:documentation "Parsed LLM action; TYPE is :TOOL-CALL, :FINISH,
+:FINDING, or :TEST-CHANGE-REQUEST."))
 
 ;; --- Stubs ---------------------------------------------------------------
 ;; Intentionally wrong return values so the failing tests surface
@@ -97,7 +114,8 @@ is also dropped. TEXT without fences is returned unchanged."
 
 (defparameter +envelope-keys+
   '("type" "tool" "thought" "arguments" "status" "summary"
-    "hypothesis" "probe" "finding" "decision")
+    "hypothesis" "probe" "finding" "decision"
+    "criteria" "rationale" "test_source")
   "Top-level action-envelope keys that must NOT be treated as implicit
 arguments when the LLM emits a flat tool_call payload (no nested
 \"arguments\" object). Phase H added the four :FINDING sub-fields.")
@@ -183,6 +201,38 @@ declares an unknown TYPE, or is missing a required field for its variant."
                           :decision decision
                           :thought (and (stringp thought) thought)
                           :raw parsed)))
+        ((equal type "test_change_request")
+         (let ((criteria (gethash "criteria" parsed))
+               (rationale (gethash "rationale" parsed))
+               (test-source (gethash "test_source" parsed)))
+           (unless (or (null criteria) (vectorp criteria) (listp criteria))
+             (error 'action-parse-error
+                    :message "test_change_request 'criteria' must be an array"
+                    :raw parsed))
+           (let ((criteria-list (cond
+                                  ((null criteria) nil)
+                                  ((vectorp criteria) (coerce criteria 'list))
+                                  (t criteria))))
+             (dolist (item criteria-list)
+               (unless (stringp item)
+                 (error 'action-parse-error
+                        :message "test_change_request criteria entries must be strings"
+                        :raw parsed)))
+             (unless (and (stringp rationale) (plusp (length rationale)))
+               (error 'action-parse-error
+                      :message "test_change_request requires non-empty 'rationale'"
+                      :raw parsed))
+             (unless (and (stringp test-source) (plusp (length test-source)))
+               (error 'action-parse-error
+                      :message "test_change_request requires non-empty 'test_source'"
+                      :raw parsed))
+             (make-instance 'agent-action
+                            :type :test-change-request
+                            :criteria criteria-list
+                            :rationale rationale
+                            :test-source test-source
+                            :thought (and (stringp thought) thought)
+                            :raw parsed))))
         (t (error 'action-parse-error
                   :message (format nil "unknown action type: ~A"
                                    (or type "<missing>"))
