@@ -22,7 +22,8 @@
            #:run-limits-max-repl-evals
            #:run-limits-max-wall-clock-seconds
            #:run-limits-max-action-parse-errors
-           #:run-limits-max-context-tokens))
+           #:run-limits-max-context-tokens
+           #:run-config-log-llm-requests-p))
 
 (in-package #:cl-harness/src/config)
 
@@ -72,14 +73,22 @@ context window from blowing, not minimising tokens."))
    (test-system :initarg :test-system :reader run-config-test-system)
    (issue :initarg :issue :reader run-config-issue)
    (condition :initarg :condition :reader run-config-condition)
-   (limits :initarg :limits :reader run-config-limits))
+   (limits :initarg :limits :reader run-config-limits)
+   (log-llm-requests-p :initarg :log-llm-requests
+                       :initform nil
+                       :reader run-config-log-llm-requests-p
+                       :documentation "When true, the agent loop emits a
+:llm-request event before each COMPLETE-CHAT call, recording the full
+chat history. Opt-in because the payload may contain sensitive context.
+Default NIL."))
   (:documentation
    "Inputs to one cl-harness fix invocation. CONDITION is one of
 :FILE-ONLY, :GENERIC-MCP, or :RUNTIME-NATIVE (PRD §8.5)."))
 
 (defun make-run-config (&key project-root system test-system issue
                             (condition :runtime-native)
-                            (limits (make-default-limits)))
+                            (limits (make-default-limits))
+                            (log-llm-requests nil))
   "Construct a RUN-CONFIG. All keyword arguments except LIMITS/CONDITION are required."
   (check-type project-root (or string pathname))
   (check-type system string)
@@ -92,4 +101,5 @@ context window from blowing, not minimising tokens."))
                  :test-system test-system
                  :issue issue
                  :condition condition
-                 :limits limits))
+                 :limits limits
+                 :log-llm-requests log-llm-requests))

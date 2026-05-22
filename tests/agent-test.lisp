@@ -1817,3 +1817,18 @@ return the parsed events as a list of hash-tables."
       (ok (equal t (gethash "is_error" event)))
       (ok (equal "BOOM" (gethash "error_text" event)))
       (ok (null (gethash "content_summary" event))))))
+
+(deftest run-config-log-llm-requests-p-slot
+  (testing "default initform is NIL"
+    (let ((c (cl-harness/src/config:make-run-config
+              :project-root "/tmp/x" :system "demo"
+              :test-system "demo/tests" :issue "x"
+              :condition :generic-mcp)))
+      (ok (null (cl-harness/src/config:run-config-log-llm-requests-p c)))))
+  (testing "kwarg lets caller opt in"
+    (let ((c (cl-harness/src/config:make-run-config
+              :project-root "/tmp/x" :system "demo"
+              :test-system "demo/tests" :issue "x"
+              :condition :generic-mcp
+              :log-llm-requests t)))
+      (ok (eq t (cl-harness/src/config:run-config-log-llm-requests-p c))))))

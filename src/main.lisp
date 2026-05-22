@@ -11,7 +11,8 @@
   (:use #:cl)
   (:import-from #:cl-harness/src/config
                 #:run-config
-                #:make-run-config)
+                #:make-run-config
+                #:run-config-log-llm-requests-p)
   (:import-from #:cl-harness/src/log
                 #:run-logger
                 #:open-run-logger
@@ -241,6 +242,7 @@
            #:main
            #:run-config
            #:make-run-config
+           #:run-config-log-llm-requests-p
            #:run-logger
            #:open-run-logger
            #:close-run-logger
