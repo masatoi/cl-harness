@@ -190,3 +190,14 @@
           (let ((asd (%file-full-content asd-path)))
             (ok (search ":class :package-inferred-system" asd))
             (ok (not (search "stub" asd)))))))))
+
+(deftest creates-project-root-if-missing
+  (let ((tmp (%tmp-dir)))
+    (let* ((deep (merge-pathnames "deeply/nested/dir/" tmp))
+           (result (scaffold :project-root deep :system "demo")))
+      (testing ":written status"
+        (ok (eq :written (scaffold-result-status result))))
+      (testing "deep dir exists"
+        (ok (uiop:directory-exists-p deep)))
+      (testing "asd file at correct path"
+        (ok (probe-file (merge-pathnames "demo.asd" deep)))))))
