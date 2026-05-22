@@ -8,7 +8,6 @@
   (:use #:cl #:rove)
   (:import-from #:cl-harness/src/scaffold
                 #:scaffold
-                #:scaffold-result
                 #:scaffold-result-status
                 #:scaffold-result-paths-written
                 #:scaffold-result-conflicts

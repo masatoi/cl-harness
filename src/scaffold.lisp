@@ -192,9 +192,9 @@ Returns PATH."
 (defun %write-all-scaffold-files (project-root system test-system test-file-path)
   "Write the four scaffold files and return their pathnames as a list.
 Order: asd, src/main.lisp, tests/main-test.lisp, .gitignore."
-  (let* ((asd-path  (%asd-path project-root system))
-         (src-path  (%src-main-path project-root))
-         (gitignore (%gitignore-path project-root)))
+  (let ((asd-path  (%asd-path project-root system))
+        (src-path  (%src-main-path project-root))
+        (gitignore (%gitignore-path project-root)))
     (list (%write-file asd-path  (%render-asd system test-system))
           (%write-file src-path  (%render-src-main system))
           (%write-file test-file-path (%render-tests-main test-system))
