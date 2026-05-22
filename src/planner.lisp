@@ -124,6 +124,30 @@
    (string #\Newline)
    "      (ok (<predicate that calls the function under test>))))"
    (string #\Newline) (string #\Newline)
+   "IMPORTANT: planner-authored test_source is appended to an existing "
+   "test file whose defpackage is `<system>/tests/main-test (:use :cl "
+   ":rove)`. This package does NOT import symbols from the implementation "
+   "package automatically. Always reference target symbols with their "
+   "package-qualified form so the test reads correctly without any "
+   "defpackage edits."
+   (string #\Newline) (string #\Newline)
+   "Example (assuming `:system \"counter\"`):"
+   (string #\Newline)
+   "  (deftest test-make-counter"
+   (string #\Newline)
+   "    (testing \"default initial value\""
+   (string #\Newline)
+   "      (ok (eql 0 (counter:counter-value (counter:make-counter))))))"
+   (string #\Newline) (string #\Newline)
+   "NOT:"
+   (string #\Newline)
+   "  (deftest test-make-counter"
+   (string #\Newline)
+   "    (testing \"default initial value\""
+   (string #\Newline)
+   "      (ok (eql 0 (counter-value (make-counter))))))  ; will error: "
+   "COUNTER/TESTS/MAIN-TEST::MAKE-COUNTER is undefined."
+   (string #\Newline) (string #\Newline)
    "Rules:"
    (string #\Newline)
    "- 3 to 7 steps is typical; refuse >12 (return one REQUIREMENT GAP step)."
