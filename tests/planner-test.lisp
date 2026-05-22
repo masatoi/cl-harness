@@ -345,3 +345,11 @@
           "context-view :planning Project inventory heading present")
       (ok (search "[INVENTORY-MARKER]" content)
           "inventory body verbatim in user prompt"))))
+
+(deftest default-planner-system-prompt-includes-qualified-guidance
+  (testing "system prompt mentions package-qualified test references"
+    (ok (search "package-qualified"
+                cl-harness/src/planner::+default-planner-system-prompt+)))
+  (testing "system prompt includes the counter:make-counter example"
+    (ok (search "counter:make-counter"
+                cl-harness/src/planner::+default-planner-system-prompt+))))
