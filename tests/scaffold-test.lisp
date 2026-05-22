@@ -148,3 +148,17 @@
       (testing "src defpackage has :nicknames #:demo"
         (let ((src (%file-full-content (merge-pathnames "src/main.lisp" tmp))))
           (ok (search "(:nicknames #:demo)" src)))))))
+
+(deftest idempotent-on-already-scaffolded
+  (let ((tmp (%tmp-dir)))
+    (scaffold :project-root tmp :system "demo")
+    (let ((mtime-before (file-write-date
+                         (merge-pathnames "demo.asd" tmp)))
+          (result (scaffold :project-root tmp :system "demo")))
+      (testing "second invocation returns :already-present"
+        (ok (eq :already-present (scaffold-result-status result))))
+      (testing "paths-written is NIL on :already-present"
+        (ok (null (scaffold-result-paths-written result))))
+      (testing "file mtime unchanged"
+        (ok (= mtime-before
+               (file-write-date (merge-pathnames "demo.asd" tmp))))))))
