@@ -7,7 +7,16 @@
 (defpackage #:cl-harness/src/cli
   (:use #:cl)
   (:import-from #:cl-harness/src/config
-                #:make-run-config)
+                #:make-run-config
+                #:run-limits
+                #:make-default-limits
+                #:run-limits-max-turns
+                #:run-limits-max-tool-calls
+                #:run-limits-max-patches
+                #:run-limits-max-read-files
+                #:run-limits-max-repl-evals
+                #:run-limits-max-wall-clock-seconds
+                #:run-limits-max-action-parse-errors)
   (:import-from #:cl-harness/src/log
                 #:open-run-logger
                 #:close-run-logger)
@@ -410,7 +419,8 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                     (error nil nil))))))
         (unwind-protect
             (let ((result
-                   (develop goal :project-root project-root :system system
+                   (cl-harness/src/orchestrator:develop
+                    goal :project-root project-root :system system
                     :test-system test-system :test-file test-file :provider
                     provider :mcp-client client :condition condition
                     :run-limits effective-limits :project-inventory

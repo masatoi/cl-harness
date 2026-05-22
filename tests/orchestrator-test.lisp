@@ -1194,18 +1194,18 @@ multi-paragraph branches without spinning up a real run-agent."
         (ok (null approved-p))
         (ok (equal "rename X to Y" feedback)))))
   (testing "disabled review returns (values t nil)"
-    (let* ((state (make-instance 'cl-harness/src/agent:agent-state))
-           (devstate (cl-harness/src/state:make-develop-state
-                      :goal "g"
-                      :project-root "/tmp"
-                      :system "demo"
-                      :test-system "demo/tests"
-                      :review-policy :none))
-           (step (make-instance 'cl-harness/src/planner:plan-step
-                                :index 0
-                                :issue "x"
-                                :test-name "tx"
-                                :test-source "(deftest tx)")))
+    (let ((state (make-instance 'cl-harness/src/agent:agent-state))
+          (devstate (cl-harness/src/state:make-develop-state
+                     :goal "g"
+                     :project-root "/tmp"
+                     :system "demo"
+                     :test-system "demo/tests"
+                     :review-policy :none))
+          (step (make-instance 'cl-harness/src/planner:plan-step
+                               :index 0
+                               :issue "x"
+                               :test-name "tx"
+                               :test-source "(deftest tx)")))
       (setf (cl-harness/src/agent:agent-state-status state) :passed)
       (multiple-value-bind (approved-p feedback)
           (cl-harness/src/orchestrator::%review-implementation

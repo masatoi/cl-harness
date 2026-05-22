@@ -313,9 +313,9 @@ recent and most specific signal). When MEMO is non-empty, prepend
 the explore memo as a `Prior exploration:' block. The original
 issue is shown last under `## Task'. Sections with empty content
 are omitted."
-  (let* ((fb (and review-feedback (plusp (length review-feedback))
-                  review-feedback))
-         (mm (and memo (plusp (length memo)) memo)))
+  (let ((fb (and review-feedback (plusp (length review-feedback))
+                 review-feedback))
+        (mm (and memo (plusp (length memo)) memo)))
     (cond
       ((and (null fb) (null mm))
        (plan-step-issue step))
