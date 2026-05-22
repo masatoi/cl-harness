@@ -18,3 +18,15 @@
                 #:scaffold-partial-state-missing))
 
 (in-package #:cl-harness/tests/scaffold-test)
+
+(deftest system-name-validation
+  (testing "valid system names pass"
+    (ok (cl-harness/src/scaffold::%validate-system-name "demo"))
+    (ok (cl-harness/src/scaffold::%validate-system-name "foo-bar"))
+    (ok (cl-harness/src/scaffold::%validate-system-name "a1")))
+  (testing "invalid system names raise scaffold-bad-system-name"
+    (dolist (bad '("Demo" "foo_bar" "" "0name" "-leading" "trailing-"))
+      (ok (handler-case
+              (progn (cl-harness/src/scaffold::%validate-system-name bad) nil)
+            (scaffold-bad-system-name () t))
+          (format nil "~S should be rejected" bad)))))
