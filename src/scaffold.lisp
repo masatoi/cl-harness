@@ -166,17 +166,18 @@ scaffold-tracked files). The .gitignore file is NOT tracked."
                       (t               :partial))))
     (values state existing missing)))
 
-(defclass scaffold-result ()
+(defclass scaffold-result nil
   ((status :initarg :status :reader scaffold-result-status)
-   (paths-written :initarg :paths-written :initform nil
-                  :reader scaffold-result-paths-written)
-   (conflicts :initarg :conflicts :initform nil
-              :reader scaffold-result-conflicts))
+   (paths-written :initarg :paths-written :initform nil :reader
+    scaffold-result-paths-written)
+   (conflicts :initarg :conflicts :initform nil :reader
+    scaffold-result-conflicts))
   (:documentation
-   "Return value of SCAFFOLD. STATUS is one of :WRITTEN, :ALREADY-PRESENT,
-or :REFUSED. PATHS-WRITTEN is the list of files actually written; NIL
-for :ALREADY-PRESENT and :REFUSED. CONFLICTS is the list of pre-existing
-files that triggered a :REFUSED; NIL otherwise."))
+   "Return value of SCAFFOLD. STATUS is one of :WRITTEN or :ALREADY-PRESENT.
+PATHS-WRITTEN is the list of files actually written; NIL for
+:ALREADY-PRESENT. Partial-state refusals raise SCAFFOLD-PARTIAL-STATE
+rather than returning a :REFUSED result. The CONFLICTS slot is reserved
+for future use."))
 
 (defun %write-file (path content)
   "Write CONTENT string to PATH, creating directories as needed.
