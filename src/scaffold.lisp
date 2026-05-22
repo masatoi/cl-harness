@@ -165,3 +165,73 @@ scaffold-tracked files). The .gitignore file is NOT tracked."
                       ((null missing)  :complete)
                       (t               :partial))))
     (values state existing missing)))
+
+(defclass scaffold-result ()
+  ((status :initarg :status :reader scaffold-result-status)
+   (paths-written :initarg :paths-written :initform nil
+                  :reader scaffold-result-paths-written)
+   (conflicts :initarg :conflicts :initform nil
+              :reader scaffold-result-conflicts))
+  (:documentation
+   "Return value of SCAFFOLD. STATUS is one of :WRITTEN, :ALREADY-PRESENT,
+or :REFUSED. PATHS-WRITTEN is the list of files actually written; NIL
+for :ALREADY-PRESENT and :REFUSED. CONFLICTS is the list of pre-existing
+files that triggered a :REFUSED; NIL otherwise."))
+
+(defun %write-file (path content)
+  "Write CONTENT string to PATH, creating directories as needed.
+Uses :if-exists :supersede so re-running scaffold overwrites safely.
+Returns PATH."
+  (ensure-directories-exist path)
+  (with-open-file (out path :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+    (write-string content out))
+  path)
+
+(defun %write-all-scaffold-files (project-root system test-system test-file-path)
+  "Write the four scaffold files and return their pathnames as a list.
+Order: asd, src/main.lisp, tests/main-test.lisp, .gitignore."
+  (let* ((asd-path  (%asd-path project-root system))
+         (src-path  (%src-main-path project-root))
+         (gitignore (%gitignore-path project-root)))
+    (list (%write-file asd-path  (%render-asd system test-system))
+          (%write-file src-path  (%render-src-main system))
+          (%write-file test-file-path (%render-tests-main test-system))
+          (%write-file gitignore (%render-gitignore)))))
+
+(defun scaffold (&key project-root system test-system test-file force)
+  "Emit a 4-file ASDF + rove project skeleton under PROJECT-ROOT.
+
+Required: PROJECT-ROOT (pathname designator) and SYSTEM (string).
+Optional: TEST-SYSTEM (defaults to \"<system>/tests\"),
+TEST-FILE (defaults to <project-root>/tests/main-test.lisp),
+FORCE (override the partial-state refuse and overwrite all files).
+
+Return a SCAFFOLD-RESULT. See spec
+docs/superpowers/specs/2026-05-22-scaffold-command-design.md."
+  (%validate-system-name system)
+  (let* ((root (uiop:ensure-directory-pathname project-root))
+         (ts   (or test-system (%default-test-system system)))
+         (tf   (or (and test-file (pathname test-file))
+                   (%default-test-file-path root))))
+    (ensure-directories-exist root)
+    (multiple-value-bind (state existing missing)
+        (%detect-state root system tf)
+      (declare (ignore missing))
+      (cond
+        ((eq state :complete)
+         (make-instance 'scaffold-result :status :already-present))
+        ((or (eq state :fresh) force)
+         (make-instance 'scaffold-result
+                        :status :written
+                        :paths-written
+                        (%write-all-scaffold-files root system ts tf)))
+        (t
+         (error 'scaffold-partial-state
+                :existing existing
+                :missing missing
+                :message
+                (format nil
+                        "refusing to scaffold ~A: ~D file(s) already exist; pass :FORCE T to overwrite"
+                        root (length existing))))))))

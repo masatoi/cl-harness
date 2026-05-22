@@ -19,12 +19,16 @@
 
 (in-package #:cl-harness/tests/scaffold-test)
 
-(defun %tmp-dir ()
-  (let ((d (merge-pathnames
-            (format nil "cl-harness-scaffold-test-~A/" (get-internal-real-time))
-            (uiop:temporary-directory))))
-    (ensure-directories-exist d)
-    d))
+(let ((%tmp-counter 0))
+  (defun %tmp-dir ()
+    "Return a fresh, unique temporary directory pathname for each call."
+    (let ((d (merge-pathnames
+              (format nil "cl-harness-scaffold-test-~A-~A/"
+                      (get-internal-real-time)
+                      (incf %tmp-counter))
+              (uiop/stream:temporary-directory))))
+      (ensure-directories-exist d)
+      d)))
 
 (deftest system-name-validation
   (testing "valid system names pass"
@@ -112,3 +116,33 @@
         (ok (eq :complete state))
         (ok (= 3 (length existing)))
         (ok (null missing))))))
+
+(defun %file-content (path)
+  (with-open-file (in path) (read-line in nil "")))
+
+(defun %file-full-content (path)
+  (with-output-to-string (out)
+    (with-open-file (in path)
+      (loop for line = (read-line in nil) while line
+            do (write-line line out)))))
+
+(deftest fresh-scaffold-writes-four-files
+  (let ((tmp (%tmp-dir)))
+    (let ((result (scaffold :project-root tmp :system "demo")))
+      (testing "status is :written"
+        (ok (eq :written (scaffold-result-status result))))
+      (testing "4 files appear on disk"
+        (ok (probe-file (merge-pathnames "demo.asd" tmp)))
+        (ok (probe-file (merge-pathnames "src/main.lisp" tmp)))
+        (ok (probe-file (merge-pathnames "tests/main-test.lisp" tmp)))
+        (ok (probe-file (merge-pathnames ".gitignore" tmp))))
+      (testing "paths-written lists 4 entries"
+        (ok (= 4 (length (scaffold-result-paths-written result)))))
+      (testing "conflicts is NIL on fresh"
+        (ok (null (scaffold-result-conflicts result))))
+      (testing "asd content references package-inferred-system"
+        (let ((asd (%file-full-content (merge-pathnames "demo.asd" tmp))))
+          (ok (search ":class :package-inferred-system" asd))))
+      (testing "src defpackage has :nicknames #:demo"
+        (let ((src (%file-full-content (merge-pathnames "src/main.lisp" tmp))))
+          (ok (search "(:nicknames #:demo)" src)))))))
