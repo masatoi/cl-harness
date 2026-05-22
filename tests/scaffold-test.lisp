@@ -269,3 +269,14 @@
       (testing "tests defpackage uses custom test-system"
         (let ((tst (%file-full-content custom-test-file)))
           (ok (search "(defpackage #:demo/integration/main-test" tst)))))))
+
+(deftest facade-re-exports
+  (testing "cl-harness:scaffold is exported"
+    (ok (eq 'cl-harness/src/scaffold:scaffold
+            (find-symbol "SCAFFOLD" :cl-harness))))
+  (testing "cl-harness:scaffold-result-status is exported"
+    (ok (eq 'cl-harness/src/scaffold:scaffold-result-status
+            (find-symbol "SCAFFOLD-RESULT-STATUS" :cl-harness))))
+  (testing "cl-harness:scaffold-bad-system-name is exported"
+    (ok (eq 'cl-harness/src/scaffold:scaffold-bad-system-name
+            (find-symbol "SCAFFOLD-BAD-SYSTEM-NAME" :cl-harness)))))
