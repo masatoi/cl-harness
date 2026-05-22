@@ -904,6 +904,23 @@ text or JSON-dumps the result."
     ((null result) "(no result)")
     (t (summarize-tool-by-key (%tool-name-to-key tool-name) result))))
 
+(defun %verify-failed-tests-payload (verify-result)
+  "Extract the failed_tests array from VERIFY-RESULT for JSONL emission.
+Returns NIL when none failed (so the caller can omit the field).
+
+VERIFY-RESULT's TEST slot is the hash-table that run-tests tool
+returned; its \"failed_tests\" entry is a vector of per-test
+hash-tables with keys test_name / description / form / values /
+reason / source. Pass-through as-is so future fields on
+test-runner-core ride along automatically."
+  (let* ((tr (verify-result-test verify-result))
+         (failed (and tr (gethash "failed_tests" tr))))
+    (cond
+      ((null failed) nil)
+      ((and (vectorp failed) (zerop (length failed))) nil)
+      ((and (listp failed) (null failed)) nil)
+      (t failed))))
+
 (defun verify-event-payload (turn verify-result)
   "Return an alist describing VERIFY-RESULT for the JSONL transcript."
   `(("turn" . ,turn)

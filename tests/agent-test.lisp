@@ -1690,3 +1690,40 @@ success result with one text content block."
                           (cl-harness/src/agent:agent-state-reason state))))
              (close-run-logger logger)))
       (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest verify-failed-tests-payload-extraction
+  (testing "returns NIL when verify-result has no failed tests"
+    (let ((vr (make-instance 'cl-harness/src/verify:verify-result
+                             :status :passed
+                             :passed 3
+                             :failed 0
+                             :test-result nil)))
+      (ok (null (cl-harness/src/agent::%verify-failed-tests-payload vr)))))
+  (testing "returns NIL when test field present but failed_tests is empty"
+    (let* ((tr (alexandria:plist-hash-table
+                `("failed_tests" ,(vector))
+                :test 'equal))
+           (vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :passed
+                              :passed 3
+                              :failed 0
+                              :test-result tr)))
+      (ok (null (cl-harness/src/agent::%verify-failed-tests-payload vr)))))
+  (testing "returns the failed_tests array verbatim when present"
+    (let* ((ft (alexandria:plist-hash-table
+                `("test_name" "demo-test"
+                  "description" "demo description"
+                  "reason" "got 3 instead of \"Fizz\"")
+                :test 'equal))
+           (tr (alexandria:plist-hash-table
+                `("failed_tests" ,(vector ft))
+                :test 'equal))
+           (vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :test-failed
+                              :passed 0
+                              :failed 1
+                              :test-result tr))
+           (payload (cl-harness/src/agent::%verify-failed-tests-payload vr)))
+      (ok payload)
+      (ok (= 1 (length payload)))
+      (ok (equal "demo-test" (gethash "test_name" (elt payload 0)))))))
