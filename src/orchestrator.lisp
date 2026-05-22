@@ -588,7 +588,7 @@ exit via UNWIND-PROTECT."
                         (plan-step-index step)
                         (plan-step-test-name step)
                         (get-internal-real-time))
-                (uiop/stream:temporary-directory)))
+                (uiop:temporary-directory)))
               (explore-orient-config
                (when do-explore
                  (make-run-config :project-root project-root
@@ -745,6 +745,7 @@ exit via UNWIND-PROTECT."
             logger :step-end
             (alist-hash-table
              `(("step_index" . ,(plan-step-index step))
+               ("test_name" . ,(plan-step-test-name step))
                ("status" . ,(string-downcase (symbol-name status)))
                ("review_retries" . ,impl-retry-count)
                ("review_final_outcome"
@@ -793,7 +794,7 @@ events emitted are:
   :develop-start { project_root, system, test_system, plan_size }
   :plan          { steps: [...] }
   :step-start    { step_index, test_name, issue, transcript_path }
-  :step-end      { step_index, test_name, status }
+  :step-end      { step_index, test_name, status, review_retries, review_final_outcome }
   :develop-end   { status, completed_steps, total_steps }
 
 RUN-FN, when overridden, replaces RUN-AGENT for the duration. Tests
