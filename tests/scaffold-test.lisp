@@ -246,3 +246,23 @@
         (ok (equal '(asdf:defsystem "demo") (subseq (first forms) 0 2)))
         (ok (equal '(asdf:defsystem "demo/tests")
                    (subseq (second forms) 0 2)))))))
+
+(deftest test-system-and-test-file-overrides
+  (let ((tmp (%tmp-dir)))
+    (let* ((custom-test-file (merge-pathnames "altdir/integration.lisp" tmp))
+           (result (scaffold :project-root tmp
+                             :system "demo"
+                             :test-system "demo/integration"
+                             :test-file custom-test-file)))
+      (testing ":written status"
+        (ok (eq :written (scaffold-result-status result))))
+      (testing "custom test file used"
+        (ok (probe-file custom-test-file))
+        (ok (not (probe-file (merge-pathnames "tests/main-test.lisp" tmp)))))
+      (testing "asd references custom test-system"
+        (let ((asd (%file-full-content (merge-pathnames "demo.asd" tmp))))
+          (ok (search "(asdf:defsystem \"demo/integration\"" asd))
+          (ok (search "\"demo/integration/main-test\"" asd))))
+      (testing "tests defpackage uses custom test-system"
+        (let ((tst (%file-full-content custom-test-file)))
+          (ok (search "(defpackage #:demo/integration/main-test" tst)))))))
