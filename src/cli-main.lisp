@@ -302,6 +302,10 @@ NIL or empty string defaults to (:generic-mcp)."
 ;; --- scaffold -------------------------------------------------------------
 
 (defun scaffold-handler (cmd)
+  "Clingon handler for the `scaffold` subcommand."
+  (when (clingon:getopt cmd :force)
+    (format *error-output*
+            "warning: --force will overwrite existing files without backup~%"))
   (handler-case
       (let* ((result (cl-harness/src/scaffold:scaffold
                       :project-root (clingon:getopt cmd :project-root)
@@ -319,7 +323,10 @@ NIL or empty string defaults to (:generic-mcp)."
            (uiop:quit 0))
           (:already-present
            (format t "already scaffolded — no changes~%")
-           (uiop:quit 0))))
+           (uiop:quit 0))
+          (otherwise
+           (format *error-output* "scaffold: unexpected status ~S~%" status)
+           (uiop:quit 2))))
     (cl-harness/src/scaffold:scaffold-bad-system-name (c)
       (format *error-output* "~A~%" c)
       (uiop:quit 2))
@@ -337,6 +344,7 @@ NIL or empty string defaults to (:generic-mcp)."
       (uiop:quit 2))))
 
 (defun scaffold-options ()
+  "Clingon options for the `scaffold` subcommand."
   (list
    (clingon:make-option :string :description "target project directory (created if missing)"
                         :short-name #\p :long-name "project-root"
@@ -347,7 +355,7 @@ NIL or empty string defaults to (:generic-mcp)."
    (clingon:make-option :string :description "ASDF test-system name (default <system>/tests)"
                         :short-name #\t :long-name "test-system"
                         :key :test-system)
-   (clingon:make-option :string :description "rove test file path (default <project-root>/tests/main-test.lisp)"
+   (clingon:make-option :string :description "rove test file (default <project-root>/tests/main-test.lisp)"
                         :short-name #\f :long-name "test-file"
                         :key :test-file)
    (clingon:make-option :flag :long-name "force"
@@ -355,6 +363,7 @@ NIL or empty string defaults to (:generic-mcp)."
                         :key :force)))
 
 (defun scaffold-command ()
+  "Clingon command object for the `scaffold` subcommand."
   (clingon:make-command
    :name "scaffold"
    :description "Emit a 4-file ASDF + rove project skeleton."
