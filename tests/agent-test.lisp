@@ -1880,3 +1880,14 @@ return the parsed events as a list of hash-tables."
       (let ((types (mapcar (lambda (e) (gethash "type" e)) events)))
         (ok (not (member "llm-request" types :test #'equal)))
         (ok (member "llm-response" types :test #'equal))))))
+
+(deftest log-llm-requests-warning-once
+  (testing "warning emitted to *error-output* when flag is true"
+    (let ((stderr (with-output-to-string (*error-output*)
+                    (cl-harness/src/cli-main::%maybe-warn-log-llm-requests t))))
+      (ok (search "WARNING:" stderr))
+      (ok (search "--log-llm-requests" stderr))))
+  (testing "no warning when flag is false"
+    (let ((stderr (with-output-to-string (*error-output*)
+                    (cl-harness/src/cli-main::%maybe-warn-log-llm-requests nil))))
+      (ok (zerop (length stderr))))))

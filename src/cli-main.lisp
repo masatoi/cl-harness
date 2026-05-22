@@ -25,6 +25,17 @@
 
 (in-package #:cl-harness/src/cli-main)
 
+(defun %maybe-warn-log-llm-requests (flag)
+  "Emit a one-line WARNING to *ERROR-OUTPUT* when FLAG is truthy.
+Called from each CLI handler head once the opt-in source is resolved
+(kwarg / --log-llm-requests / CL_HARNESS_LOG_LLM_REQUESTS)."
+  (when flag
+    (format *error-output*
+            "WARNING: --log-llm-requests is enabled. LLM message history (including~%~
+             source code, file paths, and any other context the agent reads) will be~%~
+             written verbatim to the JSONL transcript. Do NOT share the transcript~%~
+             without review.~%")))
+
 (defun parse-condition (s)
   "Map a CLI string to the corresponding TOOL-POLICY mode keyword."
   (cond
