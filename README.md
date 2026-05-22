@@ -332,6 +332,23 @@ Terminal status:
 - `:stuck` (`limit-hit :no-progress`) — replanner returned the same
   failing test twice in a row
 
+### Postmortem logging
+
+Each develop / fix / bench run writes a JSONL transcript (default
+under `(uiop:temporary-directory)`; override with `--log-path`).
+Events include:
+
+- `:verify` — counts plus a `failed_tests` array per test (test_name /
+  description / form / values / reason / source).
+- `:tool-result` — `is_error` plus `content_summary` (the summarized
+  string the agent's next user message saw, ~1500 chars).
+- `:llm-request` — **opt-in** via `--log-llm-requests` flag,
+  `:log-llm-requests t` kwarg, or `CL_HARNESS_LOG_LLM_REQUESTS=1`
+  env. Records the full chat history sent to the LLM each turn.
+  Emits a one-line stderr warning on activation because the payload
+  may contain source code, file paths, and any other context the
+  agent has read. Do NOT share these transcripts unreviewed.
+
 When an LLM review is enabled (default), `develop` runs an
 implementation-review gate after each step's verification passes. If
 the review rejects, `develop` re-runs the same step with the review

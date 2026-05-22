@@ -811,6 +811,21 @@ metric
 run_end
 ```
 
+### §8.10.1 拡張: postmortem-logging (2026-05-23)
+
+- `:verify` event payload に `failed_tests` 配列を追加(rove framework が
+  返す test_name / description / form / values / reason / source キー)。
+  passed 時はキー省略。
+- `:tool-result` event payload に `content_summary`(成功時、~1500 char
+  まで truncate)を追加。エラー時は従来通り `error_text` のみ(排他)。
+- 新規 event `:llm-request` を追加。`run-config-log-llm-requests-p` が
+  truthy のときのみ `complete-chat` 直前に emit、payload は
+  `messages`(role/content の配列)と `messages_count`。
+- Opt-in 制御: kwarg `:log-llm-requests` / CLI flag `--log-llm-requests` /
+  env `CL_HARNESS_LOG_LLM_REQUESTS`。CLI 起動時に有効化を検出すると
+  stderr に一度だけ警告。
+- 設計詳細: `docs/superpowers/specs/2026-05-23-postmortem-logging-design.md`
+
 ---
 
 ### REQ-LOG-002: Metrics
