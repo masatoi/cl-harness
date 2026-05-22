@@ -19,6 +19,13 @@
 
 (in-package #:cl-harness/tests/scaffold-test)
 
+(defun %tmp-dir ()
+  (let ((d (merge-pathnames
+            (format nil "cl-harness-scaffold-test-~A/" (get-internal-real-time))
+            (uiop:temporary-directory))))
+    (ensure-directories-exist d)
+    d))
+
 (deftest system-name-validation
   (testing "valid system names pass"
     (ok (cl-harness/src/scaffold::%validate-system-name "demo"))
@@ -77,11 +84,7 @@
       (ok (search ".cache/" ign)))))
 
 (deftest detect-state
-  (let* ((tmp (let ((d (merge-pathnames
-                        (format nil "cl-harness-scaffold-test-~A/" (get-internal-real-time))
-                        (uiop:temporary-directory))))
-                (ensure-directories-exist d)
-                d))
+  (let* ((tmp (%tmp-dir))
          (asd  (cl-harness/src/scaffold::%asd-path tmp "demo"))
          (src  (cl-harness/src/scaffold::%src-main-path tmp))
          (test (cl-harness/src/scaffold::%default-test-file-path tmp)))
