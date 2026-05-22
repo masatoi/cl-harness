@@ -73,7 +73,8 @@
                 #:develop-state-failure-ledger
                 #:develop-state-patch-records
                 #:develop-state-repl-findings
-                #:develop-state-set-project-summary)
+                #:develop-state-set-project-summary
+                #:develop-state-project-root)
   (:import-from #:cl-harness/src/project-summary
                 #:gather-project-summary)
   (:import-from #:cl-harness/src/failure-ledger

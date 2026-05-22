@@ -13,6 +13,7 @@
                "usocket"
                "bordeaux-threads"
                "clingon"
+               "cl-harness/src/scaffold"
                "cl-harness/src/main")
   :in-order-to ((test-op (test-op "cl-harness/tests"))))
 
