@@ -218,3 +218,31 @@
       (ok (asdf:find-system "scaffolddemoasd" nil)))
     (testing "test system is registered"
       (ok (asdf:find-system "scaffolddemoasd/tests" nil)))))
+
+(defun %read-all-forms (path)
+  "Read every top-level form from PATH; return them as a list."
+  (with-open-file (in path)
+    (loop for form = (read in nil :eof)
+          until (eq form :eof)
+          collect form)))
+
+(deftest generated-defpackage-forms-parse
+  (let ((tmp (%tmp-dir)))
+    (scaffold :project-root tmp :system "demo")
+    (testing "src/main.lisp parses to 2 forms (defpackage + in-package)"
+      (let ((forms (%read-all-forms (merge-pathnames "src/main.lisp" tmp))))
+        (ok (= 2 (length forms)))
+        (ok (eq 'defpackage (caar forms)))
+        (ok (eq 'in-package (caadr forms)))))
+    (testing "tests/main-test.lisp parses to 2 forms"
+      (let ((forms (%read-all-forms
+                    (merge-pathnames "tests/main-test.lisp" tmp))))
+        (ok (= 2 (length forms)))
+        (ok (eq 'defpackage (caar forms)))
+        (ok (eq 'in-package (caadr forms)))))
+    (testing "asd parses to 2 defsystem forms"
+      (let ((forms (%read-all-forms (merge-pathnames "demo.asd" tmp))))
+        (ok (= 2 (length forms)))
+        (ok (equal '(asdf:defsystem "demo") (subseq (first forms) 0 2)))
+        (ok (equal '(asdf:defsystem "demo/tests")
+                   (subseq (second forms) 0 2)))))))
