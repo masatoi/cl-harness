@@ -1832,3 +1832,51 @@ return the parsed events as a list of hash-tables."
               :condition :generic-mcp
               :log-llm-requests t)))
       (ok (eq t (cl-harness/src/config:run-config-log-llm-requests-p c))))))
+
+(defclass %stub-provider () ())
+
+(defmethod cl-harness/src/model:complete-chat ((p %stub-provider) messages
+                                               &key &allow-other-keys)
+  (declare (ignore messages))
+  (make-instance 'cl-harness/src/model:chat-response
+                 :content "{\"type\":\"finish\",\"status\":\"give-up\",\"summary\":\"stub\"}"
+                 :total-tokens 1))
+
+(deftest llm-request-event-emit-and-suppress
+  (testing "opt-in true emits :llm-request before :llm-response"
+    (let* ((messages (list (cl-harness/src/model:make-chat-message "system" "sys")
+                           (cl-harness/src/model:make-chat-message "user" "hello")))
+           (config (cl-harness/src/config:make-run-config
+                    :project-root "/tmp/x" :system "demo"
+                    :test-system "demo/tests" :issue "x"
+                    :condition :generic-mcp
+                    :log-llm-requests t))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (provider (make-instance '%stub-provider))
+           (events (%capture-jsonl-events
+                    (lambda (logger)
+                      (cl-harness/src/agent::%complete-chat-with-logging
+                       provider messages config state logger 1)))))
+      (let ((types (mapcar (lambda (e) (gethash "type" e)) events)))
+        (ok (member "llm-request" types :test #'equal))
+        (ok (member "llm-response" types :test #'equal))
+        ;; ordering: llm-request fires before llm-response
+        (let ((req-pos (position "llm-request" types :test #'equal))
+              (resp-pos (position "llm-response" types :test #'equal)))
+          (ok (< req-pos resp-pos))))))
+  (testing "opt-in false suppresses :llm-request"
+    (let* ((messages (list (cl-harness/src/model:make-chat-message "system" "sys")
+                           (cl-harness/src/model:make-chat-message "user" "hello")))
+           (config (cl-harness/src/config:make-run-config
+                    :project-root "/tmp/x" :system "demo"
+                    :test-system "demo/tests" :issue "x"
+                    :condition :generic-mcp))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (provider (make-instance '%stub-provider))
+           (events (%capture-jsonl-events
+                    (lambda (logger)
+                      (cl-harness/src/agent::%complete-chat-with-logging
+                       provider messages config state logger 1)))))
+      (let ((types (mapcar (lambda (e) (gethash "type" e)) events)))
+        (ok (not (member "llm-request" types :test #'equal)))
+        (ok (member "llm-response" types :test #'equal))))))

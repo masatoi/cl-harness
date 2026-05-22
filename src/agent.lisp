@@ -27,6 +27,7 @@
                 #:run-config-test-system
                 #:run-config-issue
                 #:run-config-limits
+                #:run-config-log-llm-requests-p
                 #:run-limits-max-turns
                 #:run-limits-max-tool-calls
                 #:run-limits-max-patches
@@ -117,7 +118,8 @@
            #:summarize-tool-result
            #:summarize-tool-by-key
            #:+source-mutating-tools+
-           #:verify-event-payload))
+           #:verify-event-payload
+           #:%complete-chat-with-logging))
 
 (in-package #:cl-harness/src/agent)
 
@@ -1265,6 +1267,40 @@ HANDLE-TOOL-CALL's post-patch verify branch."
   (when verify
     (setf (agent-state-final-verify state) verify)))
 
+(defun %complete-chat-with-logging (provider messages config state logger turn)
+  "Call COMPLETE-CHAT and emit a :llm-response event. When
+RUN-CONFIG-LOG-LLM-REQUESTS-P is true on CONFIG, also emit a
+:llm-request event BEFORE the chat call carrying the full messages
+history. STATE's token-total is incremented from the response.
+Returns the CHAT-RESPONSE.
+
+Extracted from inline use in the agent loop so the dual logging
+boundary is unit-testable without standing up the whole loop."
+  (let ((effective-messages
+         (%maybe-compact-messages messages (run-config-limits config))))
+    (when (run-config-log-llm-requests-p config)
+      (log-event
+       logger :llm-request
+       `(("turn" . ,turn)
+         ("messages" . ,(coerce
+                         (mapcar (lambda (m)
+                                   (alist-hash-table
+                                    `(("role" . ,(gethash "role" m))
+                                      ("content" . ,(gethash "content" m)))
+                                    :test 'equal))
+                                 effective-messages)
+                         'vector))
+         ("messages_count" . ,(length effective-messages)))))
+    (let* ((chat (complete-chat provider effective-messages))
+           (text (chat-response-content chat)))
+      (incf (agent-state-token-total state)
+            (or (chat-response-total-tokens chat) 0))
+      (log-event logger :llm-response
+                 `(("turn" . ,turn)
+                   ("content" . ,text)
+                   ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
+      chat)))
+
 (defun step-turn (turn state config provider mcp-client policy logger messages
                   &key dry-run-p)
   "Run one turn of the agent loop.
@@ -1272,17 +1308,9 @@ HANDLE-TOOL-CALL's post-patch verify branch."
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
 the loop should continue, otherwise a terminal status keyword
 (:PASSED / :GIVE-UP)."
-  (let* ((effective-messages
-          (%maybe-compact-messages messages
-                                   (run-config-limits config)))
-         (chat (complete-chat provider effective-messages))
+  (let* ((chat (%complete-chat-with-logging provider messages config state
+                                            logger turn))
          (text (chat-response-content chat)))
-    (incf (agent-state-token-total state)
-          (or (chat-response-total-tokens chat) 0))
-    (log-event logger :llm-response
-               `(("turn" . ,turn)
-                 ("content" . ,text)
-                 ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
     (cond
       ((or (null text) (zerop (length text)))
        ;; C2 empty-content path: immediate :give-up :empty-content,
