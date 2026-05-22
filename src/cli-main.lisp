@@ -299,15 +299,78 @@ NIL or empty string defaults to (:generic-mcp)."
    :options (develop-options)
    :handler #'develop-handler))
 
+;; --- scaffold -------------------------------------------------------------
+
+(defun scaffold-handler (cmd)
+  (handler-case
+      (let* ((result (cl-harness/src/scaffold:scaffold
+                      :project-root (clingon:getopt cmd :project-root)
+                      :system (clingon:getopt cmd :system)
+                      :test-system (clingon:getopt cmd :test-system)
+                      :test-file (clingon:getopt cmd :test-file)
+                      :force (clingon:getopt cmd :force)))
+             (status (cl-harness/src/scaffold:scaffold-result-status result)))
+        (case status
+          (:written
+           (format t "scaffolded:~%")
+           (dolist (p (cl-harness/src/scaffold:scaffold-result-paths-written
+                       result))
+             (format t "  ~A~%" p))
+           (uiop:quit 0))
+          (:already-present
+           (format t "already scaffolded — no changes~%")
+           (uiop:quit 0))))
+    (cl-harness/src/scaffold:scaffold-bad-system-name (c)
+      (format *error-output* "~A~%" c)
+      (uiop:quit 2))
+    (cl-harness/src/scaffold:scaffold-partial-state (c)
+      (format *error-output* "~A~%" c)
+      (format *error-output* "  existing:~%")
+      (dolist (p (cl-harness/src/scaffold:scaffold-partial-state-existing c))
+        (format *error-output* "    ~A~%" p))
+      (format *error-output* "  missing:~%")
+      (dolist (p (cl-harness/src/scaffold:scaffold-partial-state-missing c))
+        (format *error-output* "    ~A~%" p))
+      (uiop:quit 1))
+    (error (c)
+      (format *error-output* "scaffold failed: ~A~%" c)
+      (uiop:quit 2))))
+
+(defun scaffold-options ()
+  (list
+   (clingon:make-option :string :description "target project directory (created if missing)"
+                        :short-name #\p :long-name "project-root"
+                        :required t :key :project-root)
+   (clingon:make-option :string :description "ASDF system name (also package nickname)"
+                        :short-name #\s :long-name "system"
+                        :required t :key :system)
+   (clingon:make-option :string :description "ASDF test-system name (default <system>/tests)"
+                        :short-name #\t :long-name "test-system"
+                        :key :test-system)
+   (clingon:make-option :string :description "rove test file path (default <project-root>/tests/main-test.lisp)"
+                        :short-name #\f :long-name "test-file"
+                        :key :test-file)
+   (clingon:make-option :flag :long-name "force"
+                        :description "overwrite partially-existing scaffold (NO BACKUP)"
+                        :key :force)))
+
+(defun scaffold-command ()
+  (clingon:make-command
+   :name "scaffold"
+   :description "Emit a 4-file ASDF + rove project skeleton."
+   :options (scaffold-options)
+   :handler #'scaffold-handler))
+
 (defun top-command ()
-  "Top-level clingon command: subcommands fix, bench, and develop."
+  "Top-level clingon command: subcommands fix, bench, develop, and scaffold."
   (clingon:make-command
    :name "cl-harness"
    :description "Runtime-native coding agent harness for Common Lisp."
    :version "0.5.2"
    :sub-commands (list (fix-command)
                        (bench-command)
-                       (develop-command))))
+                       (develop-command)
+                       (scaffold-command))))
 
 (defun main ()
   "Shell entry point. Parses argv via clingon and dispatches to fix / bench.
