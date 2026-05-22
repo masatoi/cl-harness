@@ -162,3 +162,18 @@
       (testing "file mtime unchanged"
         (ok (= mtime-before
                (file-write-date (merge-pathnames "demo.asd" tmp))))))))
+
+(deftest refuses-partial-state
+  (let ((tmp (%tmp-dir)))
+    (let ((asd-path (merge-pathnames "demo.asd" tmp)))
+      (ensure-directories-exist asd-path)
+      (with-open-file (s asd-path :direction :output) (write-string "stub" s))
+      (testing "scaffold-partial-state raised"
+        (let ((raised
+               (handler-case (progn (scaffold :project-root tmp :system "demo") nil)
+                 (scaffold-partial-state (c) c))))
+          (ok raised "condition was raised")
+          (ok (= 1 (length (scaffold-partial-state-existing raised)))
+              "1 existing file")
+          (ok (= 2 (length (scaffold-partial-state-missing raised)))
+              "2 missing files"))))))
