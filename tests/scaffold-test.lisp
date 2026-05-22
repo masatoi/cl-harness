@@ -201,3 +201,20 @@
         (ok (uiop:directory-exists-p deep)))
       (testing "asd file at correct path"
         (ok (probe-file (merge-pathnames "demo.asd" deep)))))))
+
+(deftest generated-asd-loads-via-asdf
+  (let ((tmp (%tmp-dir)))
+    (scaffold :project-root tmp :system "scaffolddemoasd")
+    (testing "asdf:load-asd succeeds"
+      (ok (handler-case
+              (progn
+                (asdf:load-asd
+                 (merge-pathnames "scaffolddemoasd.asd" tmp))
+                t)
+            (error (c)
+              (format *error-output* "asd load failed: ~A~%" c)
+              nil))))
+    (testing "main system is registered"
+      (ok (asdf:find-system "scaffolddemoasd" nil)))
+    (testing "test system is registered"
+      (ok (asdf:find-system "scaffolddemoasd/tests" nil)))))
