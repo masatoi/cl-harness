@@ -1891,3 +1891,23 @@ return the parsed events as a list of hash-tables."
     (let ((stderr (with-output-to-string (*error-output*)
                     (cl-harness/src/cli-main::%maybe-warn-log-llm-requests nil))))
       (ok (zerop (length stderr))))))
+
+(deftest log-llm-requests-cli-flag-parses
+  (testing "develop-options includes --log-llm-requests flag"
+    (let* ((cmd (cl-harness/src/cli-main::develop-command))
+           (option-names
+             (mapcar (lambda (o) (clingon:option-long-name o))
+                     (clingon:command-options cmd))))
+      (ok (member "log-llm-requests" option-names :test #'equal))))
+  (testing "fix-options includes --log-llm-requests flag"
+    (let* ((cmd (cl-harness/src/cli-main::fix-command))
+           (option-names
+             (mapcar (lambda (o) (clingon:option-long-name o))
+                     (clingon:command-options cmd))))
+      (ok (member "log-llm-requests" option-names :test #'equal))))
+  (testing "bench-options includes --log-llm-requests flag"
+    (let* ((cmd (cl-harness/src/cli-main::bench-command))
+           (option-names
+             (mapcar (lambda (o) (clingon:option-long-name o))
+                     (clingon:command-options cmd))))
+      (ok (member "log-llm-requests" option-names :test #'equal)))))

@@ -71,8 +71,14 @@ NIL or empty string defaults to (:generic-mcp)."
     (otherwise 2)))
 
 (defun fix-handler (cmd)
-  (let* ((state (fix
-                 :project-root (clingon:getopt cmd :project-root)
+  (let ((log-llm-requests
+         (or (clingon:getopt cmd :log-llm-requests)
+             (let ((env (uiop:getenv "CL_HARNESS_LOG_LLM_REQUESTS")))
+               (and env (not (member env '("" "0" "false" "FALSE")
+                                     :test #'equal)))))))
+    (%maybe-warn-log-llm-requests log-llm-requests)
+    (let* ((state
+            (fix :project-root (clingon:getopt cmd :project-root)
                  :system (clingon:getopt cmd :system)
                  :test-system (clingon:getopt cmd :test-system)
                  :issue (clingon:getopt cmd :issue)
@@ -87,13 +93,20 @@ NIL or empty string defaults to (:generic-mcp)."
                  :max-tokens (clingon:getopt cmd :max-tokens)
                  :reasoning-effort (clingon:getopt cmd :reasoning-effort)
                  :dry-run-p (clingon:getopt cmd :dry-run)
-                 :log-path (clingon:getopt cmd :log-path)))
-         (status (agent-state-status state)))
-    (uiop:quit (status-to-exit-code status))))
+                 :log-path (clingon:getopt cmd :log-path)
+                 :log-llm-requests log-llm-requests))
+           (status (agent-state-status state)))
+      (uiop:quit (status-to-exit-code status)))))
 
 (defun bench-handler (cmd)
-  (let* ((results (bench
-                   :suite (clingon:getopt cmd :suite)
+  (let ((log-llm-requests
+         (or (clingon:getopt cmd :log-llm-requests)
+             (let ((env (uiop:getenv "CL_HARNESS_LOG_LLM_REQUESTS")))
+               (and env (not (member env '("" "0" "false" "FALSE")
+                                     :test #'equal)))))))
+    (%maybe-warn-log-llm-requests log-llm-requests)
+    (let* ((results
+            (bench :suite (clingon:getopt cmd :suite)
                    :conditions (parse-conditions
                                 (clingon:getopt cmd :conditions))
                    :mcp-url (clingon:getopt cmd :mcp-url)
@@ -105,10 +118,11 @@ NIL or empty string defaults to (:generic-mcp)."
                    :temperature (clingon:getopt cmd :temperature)
                    :max-tokens (clingon:getopt cmd :max-tokens)
                    :reasoning-effort (clingon:getopt cmd :reasoning-effort)
-                   :log-dir (clingon:getopt cmd :log-dir)))
-         (failed (count-if-not (lambda (r) (eq :passed (bench-result-status r)))
-                               results)))
-    (uiop:quit (if (zerop failed) 0 1))))
+                   :log-dir (clingon:getopt cmd :log-dir)
+                   :log-llm-requests log-llm-requests))
+           (failed (count-if-not (lambda (r) (eq :passed (bench-result-status r)))
+                                 results)))
+      (uiop:quit (if (zerop failed) 0 1)))))
 
 (defun fix-options ()
   (list
@@ -159,7 +173,10 @@ NIL or empty string defaults to (:generic-mcp)."
                         :key :dry-run)
    (clingon:make-option :string :long-name "log-path"
                         :description "JSONL transcript path (default tmpdir)"
-                        :key :log-path)))
+                        :key :log-path)
+   (clingon:make-option :flag :long-name "log-llm-requests"
+                        :description "emit :llm-request JSONL events with full chat history (verbose, may contain secrets)"
+                        :key :log-llm-requests)))
 
 (defun fix-command ()
   (clingon:make-command
@@ -205,7 +222,10 @@ NIL or empty string defaults to (:generic-mcp)."
                         :key :reasoning-effort)
    (clingon:make-option :string :long-name "log-dir"
                         :description "directory to write per-(task × condition) JSONL transcripts"
-                        :key :log-dir)))
+                        :key :log-dir)
+   (clingon:make-option :flag :long-name "log-llm-requests"
+                        :description "emit :llm-request JSONL events with full chat history (verbose, may contain secrets)"
+                        :key :log-llm-requests)))
 
 (defun bench-command ()
   (clingon:make-command
@@ -224,22 +244,36 @@ NIL or empty string defaults to (:generic-mcp)."
     (otherwise 2)))
 
 (defun develop-handler (cmd)
-  (let* ((result
-          (develop :goal (clingon:getopt cmd :goal) :project-root
-           (clingon:getopt cmd :project-root) :system (clingon:getopt cmd :system) :test-system
-           (clingon:getopt cmd :test-system) :test-file (clingon:getopt cmd :test-file)
-           :condition (parse-condition (clingon:getopt cmd :condition)) :mcp-url
-           (clingon:getopt cmd :mcp-url) :mcp-stdio (clingon:getopt cmd :mcp-stdio)
-           :mcp-command (clingon:getopt cmd :mcp-command) :base-url
-           (clingon:getopt cmd :base-url) :api-key (clingon:getopt cmd :api-key) :model
-           (clingon:getopt cmd :model) :temperature (clingon:getopt cmd :temperature)
-           :max-tokens (clingon:getopt cmd :max-tokens) :reasoning-effort
-           (clingon:getopt cmd :reasoning-effort) :max-replans
-           (clingon:getopt cmd :max-replans) :max-impl-review-revisions
-           (clingon:getopt cmd :max-impl-review-revisions) :mode
-           (parse-mode (clingon:getopt cmd :mode)) :log-path (clingon:getopt cmd :log-path)))
-         (status (develop-result-status result)))
-    (uiop/image:quit (develop-status-to-exit-code status))))
+  (let ((log-llm-requests
+         (or (clingon:getopt cmd :log-llm-requests)
+             (let ((env (uiop:getenv "CL_HARNESS_LOG_LLM_REQUESTS")))
+               (and env (not (member env '("" "0" "false" "FALSE")
+                                     :test #'equal)))))))
+    (%maybe-warn-log-llm-requests log-llm-requests)
+    (let* ((result
+            (develop :goal (clingon:getopt cmd :goal)
+                     :project-root (clingon:getopt cmd :project-root)
+                     :system (clingon:getopt cmd :system)
+                     :test-system (clingon:getopt cmd :test-system)
+                     :test-file (clingon:getopt cmd :test-file)
+                     :condition (parse-condition (clingon:getopt cmd :condition))
+                     :mcp-url (clingon:getopt cmd :mcp-url)
+                     :mcp-stdio (clingon:getopt cmd :mcp-stdio)
+                     :mcp-command (clingon:getopt cmd :mcp-command)
+                     :base-url (clingon:getopt cmd :base-url)
+                     :api-key (clingon:getopt cmd :api-key)
+                     :model (clingon:getopt cmd :model)
+                     :temperature (clingon:getopt cmd :temperature)
+                     :max-tokens (clingon:getopt cmd :max-tokens)
+                     :reasoning-effort (clingon:getopt cmd :reasoning-effort)
+                     :max-replans (clingon:getopt cmd :max-replans)
+                     :max-impl-review-revisions
+                     (clingon:getopt cmd :max-impl-review-revisions)
+                     :mode (parse-mode (clingon:getopt cmd :mode))
+                     :log-path (clingon:getopt cmd :log-path)
+                     :log-llm-requests log-llm-requests))
+           (status (develop-result-status result)))
+      (uiop/image:quit (develop-status-to-exit-code status)))))
 
 (defun develop-options ()
   (list
@@ -290,7 +324,10 @@ NIL or empty string defaults to (:generic-mcp)."
     "development mode (top-down|bottom-up|mixed) — implement-first, explore-first, or planner-driven (default mixed)"
     :initial-value "mixed" :key :mode)
    (clingon:make-option :string :long-name "log-path" :description
-    "develop-level JSONL transcript path (default tmpdir)" :key :log-path)))
+    "develop-level JSONL transcript path (default tmpdir)" :key :log-path)
+   (clingon:make-option :flag :long-name "log-llm-requests" :description
+    "emit :llm-request JSONL events with full chat history (verbose, may contain secrets)"
+    :key :log-llm-requests)))
 
 (defun develop-command ()
   (clingon:make-command
