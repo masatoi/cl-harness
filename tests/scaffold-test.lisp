@@ -30,3 +30,21 @@
               (progn (cl-harness/src/scaffold::%validate-system-name bad) nil)
             (scaffold-bad-system-name () t))
           (format nil "~S should be rejected" bad)))))
+
+(deftest path-derivation
+  (let ((root #P"/tmp/demo/"))
+    (testing "asd path"
+      (ok (equal #P"/tmp/demo/demo.asd"
+                 (cl-harness/src/scaffold::%asd-path root "demo"))))
+    (testing "src/main.lisp path"
+      (ok (equal #P"/tmp/demo/src/main.lisp"
+                 (cl-harness/src/scaffold::%src-main-path root))))
+    (testing "tests/main-test.lisp default path"
+      (ok (equal #P"/tmp/demo/tests/main-test.lisp"
+                 (cl-harness/src/scaffold::%default-test-file-path root))))
+    (testing ".gitignore path"
+      (ok (equal #P"/tmp/demo/.gitignore"
+                 (cl-harness/src/scaffold::%gitignore-path root))))
+    (testing "default test-system from system"
+      (ok (equal "demo/tests"
+                 (cl-harness/src/scaffold::%default-test-system "demo"))))))

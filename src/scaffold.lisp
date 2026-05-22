@@ -58,3 +58,27 @@ Raise SCAFFOLD-BAD-SYSTEM-NAME otherwise."
     (when (char= (char name (1- (length name))) #\-)
       (funcall reject))
     t))
+
+(defun %ensure-pathname (root)
+  "Coerce ROOT to a directory pathname (trailing slash enforced)."
+  (uiop:ensure-directory-pathname root))
+
+(defun %asd-path (root system)
+  "Return the pathname for ROOT/SYSTEM.asd."
+  (merge-pathnames (format nil "~A.asd" system) (%ensure-pathname root)))
+
+(defun %src-main-path (root)
+  "Return the pathname for ROOT/src/main.lisp."
+  (merge-pathnames "src/main.lisp" (%ensure-pathname root)))
+
+(defun %default-test-file-path (root)
+  "Return the pathname for ROOT/tests/main-test.lisp."
+  (merge-pathnames "tests/main-test.lisp" (%ensure-pathname root)))
+
+(defun %gitignore-path (root)
+  "Return the pathname for ROOT/.gitignore."
+  (merge-pathnames ".gitignore" (%ensure-pathname root)))
+
+(defun %default-test-system (system)
+  "Return the conventional test system name for SYSTEM (i.e., SYSTEM/tests)."
+  (format nil "~A/tests" system))
