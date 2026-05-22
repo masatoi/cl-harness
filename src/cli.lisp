@@ -64,15 +64,12 @@
              (format stream "cl-harness ~A: not implemented yet (Phase 0 skeleton)."
                      (not-implemented-error-command c)))))
 
-(defun fix (&key project-root system test-system issue
-                 (condition :generic-mcp)
-                 mcp-url mcp-stdio mcp-command
-                 base-url api-key model
-                 (temperature 0.0) max-tokens
-                 reasoning-effort extra-body
-                 (retry-p t)
-                 dry-run-p
-                 log-path)
+(defun fix
+       (
+        &key project-root system test-system issue (condition :generic-mcp)
+        mcp-url mcp-stdio mcp-command base-url api-key model (temperature 0.0)
+        max-tokens reasoning-effort extra-body (retry-p t) dry-run-p log-path
+        (log-llm-requests nil))
   "Run the Phase 2 basic fix loop.
 
 Required keyword arguments mirror PRD §11.1: PROJECT-ROOT, SYSTEM,
@@ -97,62 +94,54 @@ request body (hash-table or alist of (string . value)) — useful for
 endpoint quirks like Groq gpt-oss-20b's need for explicit
 \"tool_choice\":\"none\" / \"tools\":[].
 
+LOG-LLM-REQUESTS, when non-NIL, instructs the run logger to emit full
+:llm-request JSONL events containing the complete message history
+sent to the model on each chat completion call.
+
 Returns the populated AGENT-STATE."
-  (let* ((config (make-run-config :project-root project-root
-                                  :system system
-                                  :test-system test-system
-                                  :issue issue
-                                  :condition condition))
+  (let* ((config
+          (make-run-config :project-root project-root :system system
+           :test-system test-system :issue issue :condition condition
+           :log-llm-requests log-llm-requests))
          (effective-base-url
-          (or base-url
-              (uiop:getenv "CL_HARNESS_LLM_BASE_URL")
+          (or base-url (uiop/os:getenv "CL_HARNESS_LLM_BASE_URL")
               (error "fix: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
          (effective-api-key
-          (or api-key
-              (uiop:getenv "CL_HARNESS_LLM_API_KEY")
+          (or api-key (uiop/os:getenv "CL_HARNESS_LLM_API_KEY")
               (error "fix: :api-key or CL_HARNESS_LLM_API_KEY is required")))
          (effective-model
-          (or model
-              (uiop:getenv "CL_HARNESS_LLM_MODEL")
+          (or model (uiop/os:getenv "CL_HARNESS_LLM_MODEL")
               (error "fix: :model or CL_HARNESS_LLM_MODEL is required")))
-         (provider (make-openai-provider
-                    :base-url effective-base-url
-                    :api-key effective-api-key
-                    :model effective-model
-                    :temperature temperature
-                    :max-tokens max-tokens
-                    :reasoning-effort reasoning-effort
-                    :extra-body extra-body
-                    :retry-p retry-p))
-         (client (resolve-and-build-mcp-client
-                  :mcp-url mcp-url
-                  :mcp-stdio mcp-stdio
-                  :mcp-command mcp-command
-                  :client-name "cl-harness"
-                  :client-version "0.4.0"))
+         (provider
+          (make-openai-provider :base-url effective-base-url :api-key
+           effective-api-key :model effective-model :temperature temperature
+           :max-tokens max-tokens :reasoning-effort reasoning-effort
+           :extra-body extra-body :retry-p retry-p))
+         (client
+          (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
+           :mcp-command mcp-command :client-name "cl-harness" :client-version
+           "0.4.0"))
          (policy (make-tool-policy condition))
-         (path (or log-path
-                   (merge-pathnames
-                    (format nil "cl-harness-fix-~A.jsonl"
-                            (get-universal-time))
-                    (uiop:temporary-directory)))))
+         (path
+          (or log-path
+              (merge-pathnames
+               (format nil "cl-harness-fix-~A.jsonl" (get-universal-time))
+               (uiop/stream:temporary-directory)))))
     (let ((logger (open-run-logger path)))
       (unwind-protect
-           (let ((state (run-agent config provider client policy logger
-                                   :dry-run-p dry-run-p)))
-             (format t "~A" (format-final-report state :log-path path))
-             state)
+          (let ((state
+                 (run-agent config provider client policy logger :dry-run-p
+                  dry-run-p)))
+            (format t "~A" (format-final-report state :log-path path))
+            state)
         (close-run-logger logger)
         (close-mcp-client client)))))
 
-(defun bench (&key suite
-                   (conditions '(:generic-mcp))
-                   mcp-url mcp-stdio mcp-command
-                   base-url api-key model
-                   (temperature 0.0) max-tokens
-                   reasoning-effort extra-body
-                   (retry-p t)
-                   log-dir)
+(defun bench
+       (
+        &key suite (conditions '(:generic-mcp)) mcp-url mcp-stdio mcp-command
+        base-url api-key model (temperature 0.0) max-tokens reasoning-effort
+        extra-body (retry-p t) log-dir (log-llm-requests nil))
   "Run the benchmark suite at SUITE across each condition.
 
 SUITE is the path to a directory containing per-task subdirectories, each
@@ -166,50 +155,46 @@ mcp-command / mcp-stdio / env-command / built-in HTTP default).
 REASONING-EFFORT and EXTRA-BODY pass through to MAKE-OPENAI-PROVIDER for
 reasoning models / endpoint quirks; see FIX's docstring.
 
+LOG-LLM-REQUESTS, when non-NIL, instructs each per-task run logger to emit
+full :llm-request JSONL events containing the complete message history.
+
 Returns the flat list of BENCH-RESULTs and prints a one-paragraph aggregate
 report plus per-task detail to *STANDARD-OUTPUT*."
   (unless suite
     (error "bench: :suite (path to a directory of tasks) is required"))
   (let* ((effective-base-url
-          (or base-url
-              (uiop:getenv "CL_HARNESS_LLM_BASE_URL")
-              (error "bench: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
+          (or base-url (uiop/os:getenv "CL_HARNESS_LLM_BASE_URL")
+              (error
+               "bench: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
          (effective-api-key
-          (or api-key
-              (uiop:getenv "CL_HARNESS_LLM_API_KEY")
+          (or api-key (uiop/os:getenv "CL_HARNESS_LLM_API_KEY")
               (error "bench: :api-key or CL_HARNESS_LLM_API_KEY is required")))
          (effective-model
-          (or model
-              (uiop:getenv "CL_HARNESS_LLM_MODEL")
+          (or model (uiop/os:getenv "CL_HARNESS_LLM_MODEL")
               (error "bench: :model or CL_HARNESS_LLM_MODEL is required")))
-         (provider (make-openai-provider
-                    :base-url effective-base-url
-                    :api-key effective-api-key
-                    :model effective-model
-                    :temperature temperature
-                    :max-tokens max-tokens
-                    :reasoning-effort reasoning-effort
-                    :extra-body extra-body
-                    :retry-p retry-p))
-         (client (resolve-and-build-mcp-client
-                  :mcp-url mcp-url
-                  :mcp-stdio mcp-stdio
-                  :mcp-command mcp-command
-                  :client-name "cl-harness-bench"
-                  :client-version "0.4.0"))
+         (provider
+          (make-openai-provider :base-url effective-base-url :api-key
+           effective-api-key :model effective-model :temperature temperature
+           :max-tokens max-tokens :reasoning-effort reasoning-effort
+           :extra-body extra-body :retry-p retry-p))
+         (client
+          (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
+           :mcp-command mcp-command :client-name "cl-harness-bench"
+           :client-version "0.4.0"))
          (effective-log-dir
           (or log-dir
               (merge-pathnames
                (format nil "cl-harness-bench-~A/" (get-universal-time))
-               (uiop:temporary-directory)))))
+               (uiop/stream:temporary-directory)))))
     (ensure-directories-exist effective-log-dir)
     (unwind-protect
-         (let ((results (run-benchmark-suite suite provider client
-                                             :conditions conditions
-                                             :log-dir effective-log-dir)))
-           (format t "~A" (format-suite-report results))
-           (format t "~%Logs: ~A~%" effective-log-dir)
-           results)
+        (let ((results
+               (run-benchmark-suite suite provider client :conditions
+                conditions :log-dir effective-log-dir :log-llm-requests
+                log-llm-requests)))
+          (format t "~A" (format-suite-report results))
+          (format t "~%Logs: ~A~%" effective-log-dir)
+          results)
       (close-mcp-client client))))
 
 (defun %symbol-down (s)
@@ -339,7 +324,7 @@ trivial runs."
         (gather-inventory-p t) (inventory-byte-budget 5000) (mode :mixed)
         (review-policy :auto) (test-revision-policy :additive-only)
         (max-review-replans 2) (max-test-revisions 3)
-        (max-impl-review-revisions 2) log-path)
+        (max-impl-review-revisions 2) log-path (log-llm-requests nil))
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
 
@@ -360,6 +345,10 @@ MODE (v0.4 Phase 6) is :TOP-DOWN, :BOTTOM-UP, or :MIXED (default).
 (implement-first), :BOTTOM-UP promotes :NONE / NIL needs to
 :LIGHTWEIGHT (explore-first), :MIXED leaves the planner's choice
 intact.
+
+LOG-LLM-REQUESTS, when non-NIL, instructs each step's run logger to
+emit full :llm-request JSONL events containing the complete message
+history sent to the model.
 
 Returns the populated DEVELOP-RESULT. Caller is responsible for
 inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
@@ -419,17 +408,17 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                     (error nil nil))))))
         (unwind-protect
             (let ((result
-                   (cl-harness/src/orchestrator:develop
-                    goal :project-root project-root :system system
-                    :test-system test-system :test-file test-file :provider
-                    provider :mcp-client client :condition condition
-                    :run-limits effective-limits :project-inventory
-                    effective-inventory :mode mode :review-policy review-policy
-                    :test-revision-policy test-revision-policy
-                    :max-review-replans max-review-replans :max-test-revisions
-                    max-test-revisions :max-replans max-replans
-                    :max-impl-review-revisions max-impl-review-revisions
-                    :log-path path)))
+                   (cl-harness/src/orchestrator:develop goal :project-root
+                    project-root :system system :test-system test-system
+                    :test-file test-file :provider provider :mcp-client client
+                    :condition condition :run-limits effective-limits
+                    :project-inventory effective-inventory :mode mode
+                    :review-policy review-policy :test-revision-policy
+                    test-revision-policy :max-review-replans max-review-replans
+                    :max-test-revisions max-test-revisions :max-replans
+                    max-replans :max-impl-review-revisions
+                    max-impl-review-revisions :log-path path
+                    :log-llm-requests log-llm-requests)))
               (format t "~A" (format-develop-report result :log-path path))
               result)
           (close-mcp-client client))))))

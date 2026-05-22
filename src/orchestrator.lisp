@@ -542,7 +542,8 @@ Returns NIL when TEXT is NIL."
                       &key develop-state
                            (review-fn #'review-development-artifact)
                            (max-test-revisions 3)
-                           (max-impl-review-revisions 2))
+                           (max-impl-review-revisions 2)
+                           (log-llm-requests nil))
   "Materialize the step's test, optionally run an exploration sub-agent,
 build a RUN-CONFIG (with the explore memo prepended to the issue
 when present), call RUN-FN, return a DEVELOP-STEP-RESULT.
@@ -647,7 +648,8 @@ exit via UNWIND-PROTECT."
                                     :issue issue
                                     :condition condition
                                     :limits (or run-limits
-                                                (cl-harness/src/config:make-default-limits)))
+                                                (cl-harness/src/config:make-default-limits))
+                                    :log-llm-requests log-llm-requests)
                           for state = (funcall run-fn rc provider mcp-client
                                                policy step-logger
                                                :develop-state develop-state)
@@ -776,7 +778,8 @@ exit via UNWIND-PROTECT."
                           develop-state
                           (review-fn #'review-development-artifact)
                           (max-test-revisions 3)
-                          (max-impl-review-revisions 2))
+                          (max-impl-review-revisions 2)
+                          (log-llm-requests nil))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -833,7 +836,9 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                                             :max-test-revisions
                                             max-test-revisions
                                             :max-impl-review-revisions
-                                            max-impl-review-revisions)))
+                                            max-impl-review-revisions
+                                            :log-llm-requests
+                                            log-llm-requests)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -1062,7 +1067,8 @@ is exhausted. Returns NIL after stamping STATE on budget exhaustion."
                      (review-fn #'review-development-artifact)
                      (planner-fn #'plan-development)
                      (run-fn #'run-agent)
-                     (explore-fn #'run-explore-agent))
+                     (explore-fn #'run-explore-agent)
+                     (log-llm-requests nil))
   "Plan, execute, and replan-on-failure end-to-end.
 
 Workflow:
@@ -1189,7 +1195,8 @@ final DEVELOP-RESULT carries the reason through to callers."
                                    :develop-state state
                                    :review-fn review-fn
                                    :max-test-revisions max-test-revisions
-                                   :max-impl-review-revisions max-impl-review-revisions))
+                                   :max-impl-review-revisions max-impl-review-revisions
+                                   :log-llm-requests log-llm-requests))
                    (last-result (car (last round-results))))
               (dolist (r round-results)
                 (develop-state-record-step-result state r))

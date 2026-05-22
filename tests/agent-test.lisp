@@ -1690,3 +1690,224 @@ success result with one text content block."
                           (cl-harness/src/agent:agent-state-reason state))))
              (close-run-logger logger)))
       (when (probe-file log-path) (delete-file log-path)))))
+
+(deftest verify-failed-tests-payload-extraction
+  (testing "returns NIL when verify-result has no failed tests"
+    (let ((vr (make-instance 'cl-harness/src/verify:verify-result
+                             :status :passed
+                             :passed 3
+                             :failed 0
+                             :test-result nil)))
+      (ok (null (cl-harness/src/agent::%verify-failed-tests-payload vr)))))
+  (testing "returns NIL when test field present but failed_tests is empty"
+    (let* ((tr (alexandria:plist-hash-table
+                `("failed_tests" ,(vector))
+                :test 'equal))
+           (vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :passed
+                              :passed 3
+                              :failed 0
+                              :test-result tr)))
+      (ok (null (cl-harness/src/agent::%verify-failed-tests-payload vr)))))
+  (testing "returns the failed_tests array verbatim when present"
+    (let* ((ft (alexandria:plist-hash-table
+                `("test_name" "demo-test"
+                  "description" "demo description"
+                  "reason" "got 3 instead of \"Fizz\"")
+                :test 'equal))
+           (tr (alexandria:plist-hash-table
+                `("failed_tests" ,(vector ft))
+                :test 'equal))
+           (vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :test-failed
+                              :passed 0
+                              :failed 1
+                              :test-result tr))
+           (payload (cl-harness/src/agent::%verify-failed-tests-payload vr)))
+      (ok payload)
+      (ok (= 1 (length payload)))
+      (ok (equal "demo-test" (gethash "test_name" (elt payload 0)))))))
+
+(deftest verify-event-payload-includes-failed-tests
+  (testing "passed verify has no failed_tests key"
+    (let* ((vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :passed
+                              :passed 3
+                              :failed 0
+                              :test-result nil))
+           (payload (cl-harness/src/agent:verify-event-payload 6 vr)))
+      (ok (not (assoc "failed_tests" payload :test #'equal)))))
+  (testing "failed verify includes failed_tests array"
+    (let* ((ft (alexandria:plist-hash-table
+                `("test_name" "t1" "reason" "boom")
+                :test 'equal))
+           (tr (alexandria:plist-hash-table
+                `("failed_tests" ,(vector ft))
+                :test 'equal))
+           (vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :test-failed
+                              :passed 0
+                              :failed 1
+                              :test-result tr))
+           (payload (cl-harness/src/agent:verify-event-payload 6 vr))
+           (entry (assoc "failed_tests" payload :test #'equal)))
+      (ok entry)
+      (ok (= 1 (length (cdr entry))))
+      (ok (equal "t1" (gethash "test_name" (elt (cdr entry) 0)))))))
+
+(defun %capture-jsonl-events (thunk)
+  "Run THUNK with a fresh logger pointing to a tmp JSONL file and
+return the parsed events as a list of hash-tables."
+  (let* ((path (merge-pathnames
+                (format nil "agent-log-capture-~A.jsonl"
+                        (get-internal-real-time))
+                (uiop:temporary-directory)))
+         (logger (cl-harness/src/log:open-run-logger path))
+         (events (list)))
+    (unwind-protect
+         (progn
+           (funcall thunk logger)
+           (cl-harness/src/log:close-run-logger logger)
+           (with-open-file (in path)
+             (loop for line = (read-line in nil nil)
+                   while line
+                   do (push (yason:parse line) events))))
+      (when (probe-file path) (delete-file path)))
+    (nreverse events)))
+
+(deftest tool-result-event-content-summary
+  (testing "successful tool-result has content_summary field"
+    (let* ((result (alexandria:plist-hash-table
+                    `("isError" nil
+                      "content" ,(vector
+                                  (alexandria:plist-hash-table
+                                   `("type" "text" "text" "READ-OK-CONTENT")
+                                   :test 'equal)))
+                    :test 'equal))
+           (events
+             (%capture-jsonl-events
+              (lambda (logger)
+                (let* ((is-error (and (gethash "isError" result) t))
+                       (summary (cl-harness/src/agent:summarize-tool-result
+                                 "lisp-read-file" result))
+                       (payload `(("turn" . 2)
+                                  ("tool" . "lisp-read-file")
+                                  ("is_error" . ,is-error)
+                                  ,@(unless is-error
+                                      `(("content_summary" . ,summary))))))
+                  (cl-harness/src/log:log-event
+                   logger :tool-result payload)))))
+           (event (first events)))
+      (ok (= 1 (length events)))
+      (ok (equal "tool-result" (gethash "type" event)))
+      (ok (gethash "content_summary" event))
+      (ok (search "READ-OK-CONTENT" (gethash "content_summary" event)))))
+  (testing "error tool-result has error_text but no content_summary"
+    (let* ((events
+             (%capture-jsonl-events
+              (lambda (logger)
+                (cl-harness/src/log:log-event
+                 logger :tool-result
+                 `(("turn" . 4)
+                   ("tool" . "lisp-patch-form")
+                   ("is_error" . t)
+                   ("error_text" . "BOOM"))))))
+           (event (first events)))
+      (ok (equal "lisp-patch-form" (gethash "tool" event)))
+      (ok (equal t (gethash "is_error" event)))
+      (ok (equal "BOOM" (gethash "error_text" event)))
+      (ok (null (gethash "content_summary" event))))))
+
+(deftest run-config-log-llm-requests-p-slot
+  (testing "default initform is NIL"
+    (let ((c (cl-harness/src/config:make-run-config
+              :project-root "/tmp/x" :system "demo"
+              :test-system "demo/tests" :issue "x"
+              :condition :generic-mcp)))
+      (ok (null (cl-harness/src/config:run-config-log-llm-requests-p c)))))
+  (testing "kwarg lets caller opt in"
+    (let ((c (cl-harness/src/config:make-run-config
+              :project-root "/tmp/x" :system "demo"
+              :test-system "demo/tests" :issue "x"
+              :condition :generic-mcp
+              :log-llm-requests t)))
+      (ok (eq t (cl-harness/src/config:run-config-log-llm-requests-p c))))))
+
+(defclass %stub-provider () ())
+
+(defmethod cl-harness/src/model:complete-chat ((p %stub-provider) messages
+                                               &key &allow-other-keys)
+  (declare (ignore messages))
+  (make-instance 'cl-harness/src/model:chat-response
+                 :content "{\"type\":\"finish\",\"status\":\"give-up\",\"summary\":\"stub\"}"
+                 :total-tokens 1))
+
+(deftest llm-request-event-emit-and-suppress
+  (testing "opt-in true emits :llm-request before :llm-response"
+    (let* ((messages (list (cl-harness/src/model:make-chat-message "system" "sys")
+                           (cl-harness/src/model:make-chat-message "user" "hello")))
+           (config (cl-harness/src/config:make-run-config
+                    :project-root "/tmp/x" :system "demo"
+                    :test-system "demo/tests" :issue "x"
+                    :condition :generic-mcp
+                    :log-llm-requests t))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (provider (make-instance '%stub-provider))
+           (events (%capture-jsonl-events
+                    (lambda (logger)
+                      (cl-harness/src/agent::%complete-chat-with-logging
+                       provider messages config state logger 1)))))
+      (let ((types (mapcar (lambda (e) (gethash "type" e)) events)))
+        (ok (member "llm-request" types :test #'equal))
+        (ok (member "llm-response" types :test #'equal))
+        ;; ordering: llm-request fires before llm-response
+        (let ((req-pos (position "llm-request" types :test #'equal))
+              (resp-pos (position "llm-response" types :test #'equal)))
+          (ok (< req-pos resp-pos))))))
+  (testing "opt-in false suppresses :llm-request"
+    (let* ((messages (list (cl-harness/src/model:make-chat-message "system" "sys")
+                           (cl-harness/src/model:make-chat-message "user" "hello")))
+           (config (cl-harness/src/config:make-run-config
+                    :project-root "/tmp/x" :system "demo"
+                    :test-system "demo/tests" :issue "x"
+                    :condition :generic-mcp))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (provider (make-instance '%stub-provider))
+           (events (%capture-jsonl-events
+                    (lambda (logger)
+                      (cl-harness/src/agent::%complete-chat-with-logging
+                       provider messages config state logger 1)))))
+      (let ((types (mapcar (lambda (e) (gethash "type" e)) events)))
+        (ok (not (member "llm-request" types :test #'equal)))
+        (ok (member "llm-response" types :test #'equal))))))
+
+(deftest log-llm-requests-warning-once
+  (testing "warning emitted to *error-output* when flag is true"
+    (let ((stderr (with-output-to-string (*error-output*)
+                    (cl-harness/src/cli-main::%maybe-warn-log-llm-requests t))))
+      (ok (search "WARNING:" stderr))
+      (ok (search "--log-llm-requests" stderr))))
+  (testing "no warning when flag is false"
+    (let ((stderr (with-output-to-string (*error-output*)
+                    (cl-harness/src/cli-main::%maybe-warn-log-llm-requests nil))))
+      (ok (zerop (length stderr))))))
+
+(deftest log-llm-requests-cli-flag-parses
+  (testing "develop-options includes --log-llm-requests flag"
+    (let* ((cmd (cl-harness/src/cli-main::develop-command))
+           (option-names
+             (mapcar (lambda (o) (clingon:option-long-name o))
+                     (clingon:command-options cmd))))
+      (ok (member "log-llm-requests" option-names :test #'equal))))
+  (testing "fix-options includes --log-llm-requests flag"
+    (let* ((cmd (cl-harness/src/cli-main::fix-command))
+           (option-names
+             (mapcar (lambda (o) (clingon:option-long-name o))
+                     (clingon:command-options cmd))))
+      (ok (member "log-llm-requests" option-names :test #'equal))))
+  (testing "bench-options includes --log-llm-requests flag"
+    (let* ((cmd (cl-harness/src/cli-main::bench-command))
+           (option-names
+             (mapcar (lambda (o) (clingon:option-long-name o))
+                     (clingon:command-options cmd))))
+      (ok (member "log-llm-requests" option-names :test #'equal)))))

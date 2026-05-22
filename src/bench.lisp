@@ -181,8 +181,10 @@ the copied files so ASDF re-compiles correctly."
                       :output :string :error-output :string)
     dst))
 
-(defun run-benchmark-task (task provider mcp-client condition
-                           &key (log-dir (uiop:temporary-directory)))
+(defun run-benchmark-task
+       (task provider mcp-client condition
+        &key (log-dir (uiop/stream:temporary-directory))
+        (log-llm-requests nil))
   "Run one BENCH-TASK against PROVIDER + MCP-CLIENT under CONDITION.
 
 Copies the task's fixture to a fresh sandbox tmpdir, kills the agent's
@@ -193,65 +195,55 @@ original), invokes RUN-AGENT with clean-verify disabled (a worker reset
 mid-run would lose the registration), and captures the outcome into a
 BENCH-RESULT. Errors during the run are caught and returned as a :ERROR
 status so a single broken task does not abort the whole suite (PRD §8.11)."
-  (let* ((sandbox (%sandbox-fixture (bench-task-fixture-path task)
-                                    (format nil "cl-harness-bench-~A"
-                                            (bench-task-id task))))
-         (transcript (merge-pathnames
-                      (format nil "bench-~A-~A-~A.jsonl"
-                              (bench-task-id task)
-                              (string-downcase (symbol-name condition))
-                              (get-internal-real-time))
-                      log-dir))
-         (config (make-run-config
-                  :project-root sandbox
-                  :system (bench-task-system task)
-                  :test-system (bench-task-test-system task)
-                  :issue (bench-task-issue task)
-                  :condition condition))
+  (let* ((sandbox
+          (%sandbox-fixture (bench-task-fixture-path task)
+           (format nil "cl-harness-bench-~A" (bench-task-id task))))
+         (transcript
+          (merge-pathnames
+           (format nil "bench-~A-~A-~A.jsonl" (bench-task-id task)
+                   (string-downcase (symbol-name condition))
+                   (get-internal-real-time))
+           log-dir))
+         (config
+          (make-run-config :project-root sandbox :system
+           (bench-task-system task) :test-system (bench-task-test-system task)
+           :issue (bench-task-issue task) :condition condition
+           :log-llm-requests log-llm-requests))
          (policy (make-tool-policy condition))
          (start-time (get-internal-real-time)))
     (handler-case
-        (let ((logger (open-run-logger transcript)))
-          (unwind-protect
-               ;; pool-kill-worker + ASDF source-registry scoping is handled
-               ;; inside run-agent via :ISOLATE-ASDF-P (default T), and the
-               ;; clean-verify rescope is composed automatically.
-               (let ((state (run-agent config provider mcp-client policy
-                                       logger
-                                       :clean-verify-p t)))
-                 (make-instance 'bench-result
-                                :task task
-                                :condition condition
-                                :status (agent-state-status state)
-                                :limit-hit (agent-state-limit-hit state)
-                                :turns (agent-state-turn state)
-                                :patches (agent-state-patch-count state)
-                                :patch-attempts (agent-state-patch-attempts state)
-                                :tool-call-count (agent-state-tool-call-count state)
-                                :read-file-count (agent-state-read-file-count state)
-                                :repl-eval-count (agent-state-repl-eval-count state)
-                                :tokens (agent-state-token-total state)
-                                :elapsed-ms
-                                (* 1000.0
-                                   (/ (- (get-internal-real-time) start-time)
-                                      internal-time-units-per-second))
-                                :transcript-path transcript))
-            (close-run-logger logger)))
-      (error (c)
-        (make-instance 'bench-result
-                       :task task
-                       :condition condition
-                       :status :error
-                       :turns 0 :patches 0 :patch-attempts 0
-                       :tool-call-count 0 :read-file-count 0
-                       :repl-eval-count 0
-                       :tokens 0
-                       :elapsed-ms
-                       (* 1000.0
-                          (/ (- (get-internal-real-time) start-time)
-                             internal-time-units-per-second))
-                       :transcript-path transcript
-                       :error (princ-to-string c))))))
+     (let ((logger (open-run-logger transcript)))
+       (unwind-protect
+           (let ((state
+                  (run-agent config provider mcp-client policy logger
+                   :clean-verify-p t)))
+             (make-instance 'bench-result :task task :condition condition
+                            :status (agent-state-status state) :limit-hit
+                            (agent-state-limit-hit state) :turns
+                            (agent-state-turn state) :patches
+                            (agent-state-patch-count state) :patch-attempts
+                            (agent-state-patch-attempts state) :tool-call-count
+                            (agent-state-tool-call-count state)
+                            :read-file-count
+                            (agent-state-read-file-count state)
+                            :repl-eval-count
+                            (agent-state-repl-eval-count state) :tokens
+                            (agent-state-token-total state) :elapsed-ms
+                            (* 1000.0
+                               (/ (- (get-internal-real-time) start-time)
+                                  internal-time-units-per-second))
+                            :transcript-path transcript))
+         (close-run-logger logger)))
+     (error (c)
+            (make-instance 'bench-result :task task :condition condition
+                           :status :error :turns 0 :patches 0 :patch-attempts 0
+                           :tool-call-count 0 :read-file-count 0
+                           :repl-eval-count 0 :tokens 0 :elapsed-ms
+                           (* 1000.0
+                              (/ (- (get-internal-real-time) start-time)
+                                 internal-time-units-per-second))
+                           :transcript-path transcript :error
+                           (princ-to-string c))))))
 
 (defun run-benchmark-task-trials (task provider mcp-client condition trials
                                   &key (log-dir (uiop:temporary-directory)))
@@ -287,21 +279,23 @@ do not need to special-case it."
           (%mean (mapcar #'bench-result-elapsed-ms results)))
     tbl))
 
-(defun run-benchmark-suite (suite-dir provider mcp-client
-                            &key (conditions '(:generic-mcp))
-                                 (log-dir (uiop:temporary-directory)))
+(defun run-benchmark-suite
+       (suite-dir provider mcp-client
+        &key (conditions '(:generic-mcp))
+        (log-dir (uiop/stream:temporary-directory))
+        (log-llm-requests nil))
   "Run every task discovered under SUITE-DIR across each CONDITION.
 
 Returns the flat list of BENCH-RESULTs, one per (task × condition)
 combination, in (task-1 × cond-1) (task-1 × cond-2) ... (task-N × cond-K)
 order. PRD §8.11 REQ-BENCH-002."
-  (let ((tasks (discover-tasks suite-dir))
-        (results '()))
+  (let ((tasks (discover-tasks suite-dir)) (results 'nil))
     (dolist (task tasks (nreverse results))
       (dolist (run-condition conditions)
-        (push (run-benchmark-task task provider mcp-client run-condition
-                                  :log-dir log-dir)
-              results)))))
+        (push
+         (run-benchmark-task task provider mcp-client run-condition :log-dir
+          log-dir :log-llm-requests log-llm-requests)
+         results)))))
 
 (defun format-suite-report (results)
   "Return a human-readable, multi-line summary of RESULTS plus an

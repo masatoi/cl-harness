@@ -27,6 +27,7 @@
                 #:run-config-test-system
                 #:run-config-issue
                 #:run-config-limits
+                #:run-config-log-llm-requests-p
                 #:run-limits-max-turns
                 #:run-limits-max-tool-calls
                 #:run-limits-max-patches
@@ -116,7 +117,9 @@
            #:format-final-report
            #:summarize-tool-result
            #:summarize-tool-by-key
-           #:+source-mutating-tools+))
+           #:+source-mutating-tools+
+           #:verify-event-payload
+           #:%complete-chat-with-logging))
 
 (in-package #:cl-harness/src/agent)
 
@@ -904,12 +907,37 @@ text or JSON-dumps the result."
     ((null result) "(no result)")
     (t (summarize-tool-by-key (%tool-name-to-key tool-name) result))))
 
+(defun %verify-failed-tests-payload (verify-result)
+  "Extract the failed_tests array from VERIFY-RESULT for JSONL emission.
+Returns NIL when none failed (so the caller can omit the field).
+
+VERIFY-RESULT's TEST slot is the hash-table that run-tests tool
+returned; its \"failed_tests\" entry is a vector of per-test
+hash-tables with keys test_name / description / form / values /
+reason / source. Pass-through as-is so future fields on
+test-runner-core ride along automatically."
+  (let* ((tr (verify-result-test verify-result))
+         (failed (and tr (gethash "failed_tests" tr))))
+    (cond
+      ((null failed) nil)
+      ((and (vectorp failed) (zerop (length failed))) nil)
+      ((and (listp failed) (null failed)) nil)
+      (t failed))))
+
 (defun verify-event-payload (turn verify-result)
-  "Return an alist describing VERIFY-RESULT for the JSONL transcript."
-  `(("turn" . ,turn)
-    ("status" . ,(string-downcase (symbol-name (verify-result-status verify-result))))
-    ("passed" . ,(or (verify-result-passed verify-result) 0))
-    ("failed" . ,(or (verify-result-failed verify-result) 0))))
+  "Return an alist describing VERIFY-RESULT for the JSONL transcript.
+When VERIFY-RESULT has failed tests, the alist also carries a
+\"failed_tests\" entry (vector of per-test hash-tables, see
+%VERIFY-FAILED-TESTS-PAYLOAD). On pass the field is omitted."
+  (let ((base `(("turn" . ,turn)
+                ("status" . ,(string-downcase
+                              (symbol-name (verify-result-status verify-result))))
+                ("passed" . ,(or (verify-result-passed verify-result) 0))
+                ("failed" . ,(or (verify-result-failed verify-result) 0))))
+        (failed (%verify-failed-tests-payload verify-result)))
+    (if failed
+        (append base `(("failed_tests" . ,failed)))
+        base)))
 
 (defun action-event-payload (turn action)
   "Return an alist describing ACTION for the JSONL transcript."
@@ -1093,11 +1121,15 @@ step since no real patch was applied."
                        :test 'equal)))))))
          (let* ((is-error (and (gethash "isError" result) t))
                 (error-text (and is-error (extract-content-text result))))
-           (log-event logger :tool-result
-                      `(("turn" . ,turn) ("tool" . ,tool)
-                        ("is_error" . ,is-error)
-                        ,@(when (and error-text (plusp (length error-text)))
-                            `(("error_text" . ,error-text)))))
+           (let ((tool-summary (when (not is-error)
+                                 (summarize-tool-result tool result))))
+             (log-event logger :tool-result
+                        `(("turn" . ,turn) ("tool" . ,tool)
+                          ("is_error" . ,is-error)
+                          ,@(when (and error-text (plusp (length error-text)))
+                              `(("error_text" . ,error-text)))
+                          ,@(when (and tool-summary (plusp (length tool-summary)))
+                              `(("content_summary" . ,tool-summary))))))
            ;; Populate the per-step tool-error ring on isError=true. Only
            ;; LLM-issued tool calls land here (HANDLE-TOOL-CALL is on that
            ;; path); harness-internal calls (verify-task setup,
@@ -1235,6 +1267,40 @@ HANDLE-TOOL-CALL's post-patch verify branch."
   (when verify
     (setf (agent-state-final-verify state) verify)))
 
+(defun %complete-chat-with-logging (provider messages config state logger turn)
+  "Call COMPLETE-CHAT and emit a :llm-response event. When
+RUN-CONFIG-LOG-LLM-REQUESTS-P is true on CONFIG, also emit a
+:llm-request event BEFORE the chat call carrying the full messages
+history. STATE's token-total is incremented from the response.
+Returns the CHAT-RESPONSE.
+
+Extracted from inline use in the agent loop so the dual logging
+boundary is unit-testable without standing up the whole loop."
+  (let ((effective-messages
+         (%maybe-compact-messages messages (run-config-limits config))))
+    (when (run-config-log-llm-requests-p config)
+      (log-event
+       logger :llm-request
+       `(("turn" . ,turn)
+         ("messages" . ,(coerce
+                         (mapcar (lambda (m)
+                                   (alist-hash-table
+                                    `(("role" . ,(gethash "role" m))
+                                      ("content" . ,(gethash "content" m)))
+                                    :test 'equal))
+                                 effective-messages)
+                         'vector))
+         ("messages_count" . ,(length effective-messages)))))
+    (let* ((chat (complete-chat provider effective-messages))
+           (text (chat-response-content chat)))
+      (incf (agent-state-token-total state)
+            (or (chat-response-total-tokens chat) 0))
+      (log-event logger :llm-response
+                 `(("turn" . ,turn)
+                   ("content" . ,text)
+                   ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
+      chat)))
+
 (defun step-turn (turn state config provider mcp-client policy logger messages
                   &key dry-run-p)
   "Run one turn of the agent loop.
@@ -1242,17 +1308,9 @@ HANDLE-TOOL-CALL's post-patch verify branch."
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
 the loop should continue, otherwise a terminal status keyword
 (:PASSED / :GIVE-UP)."
-  (let* ((effective-messages
-          (%maybe-compact-messages messages
-                                   (run-config-limits config)))
-         (chat (complete-chat provider effective-messages))
+  (let* ((chat (%complete-chat-with-logging provider messages config state
+                                            logger turn))
          (text (chat-response-content chat)))
-    (incf (agent-state-token-total state)
-          (or (chat-response-total-tokens chat) 0))
-    (log-event logger :llm-response
-               `(("turn" . ,turn)
-                 ("content" . ,text)
-                 ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
     (cond
       ((or (null text) (zerop (length text)))
        ;; C2 empty-content path: immediate :give-up :empty-content,
