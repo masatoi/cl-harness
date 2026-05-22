@@ -1470,4 +1470,17 @@ the design rationale and behavior matrix.
 - Multi-file src layouts.
 - Backups on `--force`.
 
+### Implementation review feedback loop
+
+After each plan-step's verification passes (`run-tests` returns
+green), an LLM-driven implementation review gate runs. If the
+review rejects, `%execute-step` re-runs the same step with the
+review feedback prepended to the issue string (under a "## Prior
+implementation review feedback" header). The retry budget is
+controlled by `:max-impl-review-revisions` (default 2; CLI flag
+`--max-impl-review-revisions`). On budget exhaustion the step is
+marked `:review-rejected` and the outer replan loop takes over.
+This avoids regenerating the entire plan when the reviewer's
+correction is local to a single step's implementation.
+
 この原則を満たす MVP ができれば、`cl-harness` は単なる Common Lisp 用 agent wrapper ではなく、runtime-native coding agent architecture の研究・実用基盤として成立する。
