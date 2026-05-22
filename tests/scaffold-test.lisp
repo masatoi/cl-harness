@@ -152,16 +152,14 @@
 (deftest idempotent-on-already-scaffolded
   (let ((tmp (%tmp-dir)))
     (scaffold :project-root tmp :system "demo")
-    (let ((mtime-before (file-write-date
-                         (merge-pathnames "demo.asd" tmp)))
-          (result (scaffold :project-root tmp :system "demo")))
-      (testing "second invocation returns :already-present"
-        (ok (eq :already-present (scaffold-result-status result))))
-      (testing "paths-written is NIL on :already-present"
-        (ok (null (scaffold-result-paths-written result))))
-      (testing "file mtime unchanged"
-        (ok (= mtime-before
-               (file-write-date (merge-pathnames "demo.asd" tmp))))))))
+    (let ((mtime-before (file-write-date (merge-pathnames "demo.asd" tmp))))
+      (let ((result (scaffold :project-root tmp :system "demo")))
+        (testing "second invocation returns :already-present"
+          (ok (eq :already-present (scaffold-result-status result))))
+        (testing "paths-written is NIL on :already-present"
+          (ok (null (scaffold-result-paths-written result))))
+        (testing "file mtime unchanged"
+          (ok (= mtime-before (file-write-date (merge-pathnames "demo.asd" tmp)))))))))
 
 (deftest refuses-partial-state
   (let ((tmp (%tmp-dir)))
@@ -205,19 +203,24 @@
 (deftest generated-asd-loads-via-asdf
   (let ((tmp (%tmp-dir)))
     (scaffold :project-root tmp :system "scaffolddemoasd")
-    (testing "asdf:load-asd succeeds"
-      (ok (handler-case
-              (progn
-                (asdf:load-asd
-                 (merge-pathnames "scaffolddemoasd.asd" tmp))
-                t)
-            (error (c)
-              (format *error-output* "asd load failed: ~A~%" c)
-              nil))))
-    (testing "main system is registered"
-      (ok (asdf:find-system "scaffolddemoasd" nil)))
-    (testing "test system is registered"
-      (ok (asdf:find-system "scaffolddemoasd/tests" nil)))))
+    (unwind-protect
+         (progn
+           (testing "asdf:load-asd succeeds"
+             (ok (handler-case
+                     (progn
+                       (asdf:load-asd
+                        (merge-pathnames "scaffolddemoasd.asd" tmp))
+                       t)
+                   (error (c)
+                     (format *error-output* "asd load failed: ~A~%" c)
+                     nil))))
+           (testing "main system is registered"
+             (ok (asdf:find-system "scaffolddemoasd" nil)))
+           (testing "test system is registered"
+             (ok (asdf:find-system "scaffolddemoasd/tests" nil))))
+      ;; cleanup: avoid asdf:*defined-systems* pollution
+      (asdf:clear-system "scaffolddemoasd")
+      (asdf:clear-system "scaffolddemoasd/tests"))))
 
 (defun %read-all-forms (path)
   "Read every top-level form from PATH; return them as a list."
