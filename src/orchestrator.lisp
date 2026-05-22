@@ -495,10 +495,12 @@ the same step."
         t))))
 
 (defun %review-implementation (step state review-fn provider develop-state)
-  "Return true when implementation review approves STATE."
+  "Return (VALUES APPROVED-P FEEDBACK) for the implementation review of
+STEP. When review is disabled or STATE is not :passed, returns
+(VALUES T NIL) (the no-op approve)."
   (if (or (not (%review-enabled-p develop-state))
           (not (eq :passed (%read-status-from-state state))))
-      t
+      (values t nil)
       (let ((decision
               (%call-review
                review-fn :implementation
@@ -509,7 +511,8 @@ the same step."
                (format nil "Step ~D (~A) passed verification."
                        (plan-step-index step)
                        (plan-step-test-name step)))))
-        (review-decision-approved-p decision))))
+        (values (review-decision-approved-p decision)
+                (review-decision-feedback decision)))))
 
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger

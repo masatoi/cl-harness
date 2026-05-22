@@ -1139,3 +1139,79 @@ multi-paragraph branches without spinning up a real run-agent."
            (out (cl-harness/src/orchestrator::%failure-context sr)))
       (ok (not (search "### Last verify error (load-system)" out))
           "empty error text → subheader omitted"))))
+
+(deftest review-implementation-returns-feedback
+  (testing "approved decision returns (values t nil-or-feedback)"
+    (let* ((decision (cl-harness/src/review:make-review-decision
+                      :kind :implementation
+                      :status :approved
+                      :feedback "looks good"))
+           (review-fn (lambda (kind &key &allow-other-keys)
+                        (declare (ignore kind))
+                        decision))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (devstate (cl-harness/src/state:make-develop-state
+                      :goal "g"
+                      :project-root "/tmp"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :review-policy :auto))
+           (step (make-instance 'cl-harness/src/planner:plan-step
+                                :index 0
+                                :issue "x"
+                                :test-name "tx"
+                                :test-source "(deftest tx)")))
+      (setf (cl-harness/src/agent:agent-state-status state) :passed)
+      (multiple-value-bind (approved-p feedback)
+          (cl-harness/src/orchestrator::%review-implementation
+           step state review-fn nil devstate)
+        (ok (eq t approved-p))
+        (ok (or (null feedback) (stringp feedback))))))
+  (testing "rejected decision returns (values nil feedback-string)"
+    (let* ((decision (cl-harness/src/review:make-review-decision
+                      :kind :implementation
+                      :status :rejected
+                      :feedback "rename X to Y"))
+           (review-fn (lambda (kind &key &allow-other-keys)
+                        (declare (ignore kind))
+                        decision))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (devstate (cl-harness/src/state:make-develop-state
+                      :goal "g"
+                      :project-root "/tmp"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :review-policy :auto))
+           (step (make-instance 'cl-harness/src/planner:plan-step
+                                :index 0
+                                :issue "x"
+                                :test-name "tx"
+                                :test-source "(deftest tx)")))
+      (setf (cl-harness/src/agent:agent-state-status state) :passed)
+      (multiple-value-bind (approved-p feedback)
+          (cl-harness/src/orchestrator::%review-implementation
+           step state review-fn nil devstate)
+        (ok (null approved-p))
+        (ok (equal "rename X to Y" feedback)))))
+  (testing "disabled review returns (values t nil)"
+    (let* ((state (make-instance 'cl-harness/src/agent:agent-state))
+           (devstate (cl-harness/src/state:make-develop-state
+                      :goal "g"
+                      :project-root "/tmp"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :review-policy :none))
+           (step (make-instance 'cl-harness/src/planner:plan-step
+                                :index 0
+                                :issue "x"
+                                :test-name "tx"
+                                :test-source "(deftest tx)")))
+      (setf (cl-harness/src/agent:agent-state-status state) :passed)
+      (multiple-value-bind (approved-p feedback)
+          (cl-harness/src/orchestrator::%review-implementation
+           step state (lambda (k &key &allow-other-keys)
+                        (declare (ignore k))
+                        (error "should not be called"))
+           nil devstate)
+        (ok (eq t approved-p))
+        (ok (null feedback))))))
