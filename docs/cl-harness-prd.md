@@ -1434,4 +1434,40 @@ source file が唯一の永続的変更である。
 最終判定は clean runtime で行う。
 ```
 
+## §19 Scaffold subcommand
+
+`cl-harness scaffold` is a post-MVP addition that emits the minimal
+ASDF + rove project skeleton needed by `cl-harness develop`. It is
+deterministic, LLM-free, and intentionally separate from the
+`develop` command's contract — see
+`docs/superpowers/specs/2026-05-22-scaffold-command-design.md` for
+the design rationale and behavior matrix.
+
+### §19.1 Files emitted
+
+- `<project-root>/<system>.asd` — main + test ASDF systems, both
+  `:class :package-inferred-system`, with rove auto-discovery in
+  the test-system's `:perform (test-op ...)` clause.
+- `<project-root>/src/main.lisp` — `(defpackage #:<system>/src/main
+  (:nicknames #:<system>) (:use #:cl) (:export))` + `(in-package …)`.
+- `<project-root>/tests/main-test.lisp` — rove defpackage stub.
+- `<project-root>/.gitignore` — `*.fasl`, `*.fasl-tmp`, `.cache/`.
+
+### §19.2 Behavior
+
+- All 3 tracked files (asd + src + tests; `.gitignore` is
+  untracked) absent → write all 4 files, return `:written`.
+- All 3 present → no-op, return `:already-present`.
+- Partial → refuse with `scaffold-partial-state` (exit 1); `--force`
+  overrides and overwrites.
+- Invalid system name (must match `^[a-z][a-z0-9-]*$` and not end
+  with `-`) → exit 2.
+
+### §19.3 Out of scope (intentional)
+
+- `:export` symbol inference (handled by planner, separate spec).
+- Auto-chaining from `develop` (kept separate by design).
+- Multi-file src layouts.
+- Backups on `--force`.
+
 この原則を満たす MVP ができれば、`cl-harness` は単なる Common Lisp 用 agent wrapper ではなく、runtime-native coding agent architecture の研究・実用基盤として成立する。

@@ -52,6 +52,19 @@
                 #:format-integration-issues-markdown)
   (:import-from #:cl-harness/src/cli-main
                 #:main)
+  (:import-from #:cl-harness/src/scaffold
+                #:scaffold
+                #:scaffold-result
+                #:scaffold-result-status
+                #:scaffold-result-paths-written
+                #:scaffold-result-conflicts
+                #:scaffold-error
+                #:scaffold-error-message
+                #:scaffold-bad-system-name
+                #:scaffold-bad-system-name-name
+                #:scaffold-partial-state
+                #:scaffold-partial-state-existing
+                #:scaffold-partial-state-missing)
   (:import-from #:cl-harness/src/mcp
                 #:mcp-client
                 #:make-mcp-client
@@ -390,6 +403,18 @@
            #:run-benchmark-suite
            #:aggregate-results
            #:format-suite-report
-           #:format-suite-report-markdown))
+           #:format-suite-report-markdown
+           #:scaffold
+           #:scaffold-result
+           #:scaffold-result-status
+           #:scaffold-result-paths-written
+           #:scaffold-result-conflicts
+           #:scaffold-error
+           #:scaffold-error-message
+           #:scaffold-bad-system-name
+           #:scaffold-bad-system-name-name
+           #:scaffold-partial-state
+           #:scaffold-partial-state-existing
+           #:scaffold-partial-state-missing))
 
 (in-package #:cl-harness/src/main)

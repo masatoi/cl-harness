@@ -184,6 +184,18 @@ sbcl --non-interactive \
 
 The resulting binary is a self-contained SBCL image (~57 MB).
 
+### Scaffold a new project
+
+```bash
+cl-harness scaffold --project-root /tmp/demo --system demo
+# → demo.asd, src/main.lisp, tests/main-test.lisp, .gitignore
+```
+
+Emits a deterministic 4-file skeleton (package-inferred-system + rove
+test discovery) ready for `cl-harness develop`. LLM-free. Refuses to
+write if some skeleton files already exist; pass `--force` to overwrite
+unconditionally (no backup).
+
 ### Fix one project — shell
 
 ```bash
@@ -271,6 +283,10 @@ goes one level higher. It takes a free-form goal, asks an LLM
 sub-goals (each with its own author-generated rove test), then
 drives each sub-goal through the existing fix loop with a
 replan-on-failure policy.
+
+`develop` assumes the project skeleton is already in place. If you are
+starting from an empty directory, run `cl-harness scaffold` first (see
+above).
 
 ```bash
 cl-harness develop \
