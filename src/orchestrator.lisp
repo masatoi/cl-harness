@@ -304,15 +304,27 @@ recognize is reported as :unknown."
      ("status" . ,(%symbol-status (develop-step-result-status result))))
    :test 'equal))
 
-(defun %enriched-issue (step memo)
-  "Return the issue string fed to the implement step. When MEMO is
-non-empty, prepend it as a `Prior exploration:` block so the
-executor inherits the explore findings as plain text in the
-initial user prompt."
-  (if (and memo (plusp (length memo)))
-      (format nil "## Prior exploration (read-only)~%~A~%~%## Task~%~A"
-              memo (plan-step-issue step))
-      (plan-step-issue step)))
+(defun %enriched-issue (step memo &key review-feedback)
+  "Return the issue string fed to the implement step. When
+REVIEW-FEEDBACK is non-empty, prepend it as a `Prior implementation
+review feedback' block (rendered first because it is the most
+recent and most specific signal). When MEMO is non-empty, prepend
+the explore memo as a `Prior exploration:' block. The original
+issue is shown last under `## Task'. Sections with empty content
+are omitted."
+  (let* ((fb (and review-feedback (plusp (length review-feedback))
+                  review-feedback))
+         (mm (and memo (plusp (length memo)) memo)))
+    (cond
+      ((and (null fb) (null mm))
+       (plan-step-issue step))
+      (t
+       (with-output-to-string (s)
+         (when fb
+           (format s "## Prior implementation review feedback~%~A~%~%" fb))
+         (when mm
+           (format s "## Prior exploration (read-only)~%~A~%~%" mm))
+         (format s "## Task~%~A" (plan-step-issue step)))))))
 
 (defun %most-recent-patch-on-file (state path)
   "Return the most recent PATCH-RECORD on PATH from STATE's patch-records,

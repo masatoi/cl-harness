@@ -1215,3 +1215,38 @@ multi-paragraph branches without spinning up a real run-agent."
            nil devstate)
         (ok (eq t approved-p))
         (ok (null feedback))))))
+
+(deftest enriched-issue-with-review-feedback
+  (let ((step (make-instance 'plan-step
+                             :index 1 :issue "original task body" :test-name "tx"
+                             :test-source "(deftest tx)")))
+    (testing "no extras returns plain issue"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue step nil)))
+        (ok (equal "original task body" result))))
+    (testing "memo only prepends exploration block"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step "memo content")))
+        (ok (search "## Prior exploration (read-only)" result))
+        (ok (search "memo content" result))
+        (ok (search "original task body" result))
+        (ok (not (search "Prior implementation review feedback" result)))))
+    (testing "review-feedback only prepends feedback block"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step nil :review-feedback "rename X to Y")))
+        (ok (search "## Prior implementation review feedback" result))
+        (ok (search "rename X to Y" result))
+        (ok (search "original task body" result))
+        (ok (not (search "Prior exploration" result)))))
+    (testing "both prepends review-feedback BEFORE exploration"
+      (let* ((result (cl-harness/src/orchestrator::%enriched-issue
+                      step "memo content" :review-feedback "rename X to Y"))
+             (fb-pos (search "Prior implementation review feedback" result))
+             (exp-pos (search "Prior exploration" result))
+             (task-pos (search "## Task" result)))
+        (ok (and fb-pos exp-pos task-pos))
+        (ok (< fb-pos exp-pos))
+        (ok (< exp-pos task-pos))))
+    (testing "empty-string review-feedback is treated like NIL"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step nil :review-feedback "")))
+        (ok (equal "original task body" result))))))
