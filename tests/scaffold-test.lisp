@@ -75,3 +75,37 @@
       (ok (search "*.fasl" ign))
       (ok (search "*.fasl-tmp" ign))
       (ok (search ".cache/" ign)))))
+
+(deftest detect-state
+  (let* ((tmp (let ((d (merge-pathnames
+                        (format nil "cl-harness-scaffold-test-~A/" (get-internal-real-time))
+                        (uiop:temporary-directory))))
+                (ensure-directories-exist d)
+                d))
+         (asd  (cl-harness/src/scaffold::%asd-path tmp "demo"))
+         (src  (cl-harness/src/scaffold::%src-main-path tmp))
+         (test (cl-harness/src/scaffold::%default-test-file-path tmp)))
+    (testing ":fresh when nothing exists"
+      (multiple-value-bind (state existing missing)
+          (cl-harness/src/scaffold::%detect-state tmp "demo" test)
+        (ok (eq :fresh state))
+        (ok (null existing))
+        (ok (= 3 (length missing)))))
+    (testing ":partial when some exist"
+      (ensure-directories-exist asd)
+      (with-open-file (s asd :direction :output) (write-string "dummy" s))
+      (multiple-value-bind (state existing missing)
+          (cl-harness/src/scaffold::%detect-state tmp "demo" test)
+        (ok (eq :partial state))
+        (ok (= 1 (length existing)))
+        (ok (= 2 (length missing)))))
+    (testing ":complete when all 3 exist"
+      (ensure-directories-exist src)
+      (ensure-directories-exist test)
+      (with-open-file (s src :direction :output) (write-string "dummy" s))
+      (with-open-file (s test :direction :output) (write-string "dummy" s))
+      (multiple-value-bind (state existing missing)
+          (cl-harness/src/scaffold::%detect-state tmp "demo" test)
+        (ok (eq :complete state))
+        (ok (= 3 (length existing)))
+        (ok (null missing))))))

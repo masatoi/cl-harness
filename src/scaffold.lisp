@@ -150,3 +150,18 @@ Raise SCAFFOLD-BAD-SYSTEM-NAME otherwise."
 *.fasl-tmp
 .cache/
 ")
+
+(defun %detect-state (project-root system test-file-path)
+  "Return (values STATE EXISTING MISSING).
+STATE is one of :fresh / :partial / :complete.
+EXISTING and MISSING are lists of pathnames (subsets of the 3
+scaffold-tracked files). The .gitignore file is NOT tracked."
+  (let* ((tracked (list (%asd-path project-root system)
+                        (%src-main-path project-root)
+                        test-file-path))
+         (existing (remove-if-not #'probe-file tracked))
+         (missing  (remove-if     #'probe-file tracked))
+         (state (cond ((null existing) :fresh)
+                      ((null missing)  :complete)
+                      (t               :partial))))
+    (values state existing missing)))
