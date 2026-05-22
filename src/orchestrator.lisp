@@ -536,12 +536,14 @@ Returns NIL when TEXT is NIL."
     (t (format nil "~A~%[... truncated, ~D chars elided ...]"
                (subseq text 0 cap) (- (length text) cap)))))
 
-(defun %execute-step
-       (step run-fn project-root system test-system condition test-file logger
-        provider mcp-client run-limits explore-fn
-        &key develop-state (review-fn #'review-development-artifact)
-        (max-test-revisions 3) (max-impl-review-revisions 2)
-        (log-llm-requests nil))
+(defun %execute-step (step run-fn project-root system test-system
+                      condition test-file logger
+                      provider mcp-client run-limits explore-fn
+                      &key develop-state
+                           (review-fn #'review-development-artifact)
+                           (max-test-revisions 3)
+                           (max-impl-review-revisions 2)
+                           (log-llm-requests nil))
   "Materialize the step's test, optionally run an exploration sub-agent,
 build a RUN-CONFIG (with the explore memo prepended to the issue
 when present), call RUN-FN, return a DEVELOP-STEP-RESULT.
@@ -572,186 +574,212 @@ to its CURRENT-STEP-INDEX slot on entry and cleared (set to NIL) on
 exit via UNWIND-PROTECT."
   (validate-test-source (plan-step-test-source step) (plan-step-index step))
   (materialize-test-source (%resolve-test-file-path project-root test-file)
-   (plan-step-test-source step))
+                           (plan-step-test-source step))
   (when develop-state
     (setf (develop-state-current-step-index develop-state)
-            (plan-step-index step)))
+          (plan-step-index step)))
   (unwind-protect
-      (let* ((needs (plan-step-needs-exploration step))
-             (do-explore (and explore-fn needs (not (eq :none needs))))
-             (explore-policy (when do-explore (make-tool-policy :explore)))
-             (run-logger-path
-              (merge-pathnames
-               (format nil "develop-step-~D-~A-~A.jsonl" (plan-step-index step)
-                       (plan-step-test-name step) (get-internal-real-time))
-               (uiop/stream:temporary-directory)))
-             (explore-orient-config
-              (when do-explore
-                (make-run-config :project-root project-root :system system
-                 :test-system test-system :issue (plan-step-issue step)
-                 :condition :explore))))
-        (%log-develop-event logger :step-start
-         (alist-hash-table
-          (eclector.reader:quasiquote
-           (("step_index" eclector.reader:unquote (plan-step-index step))
-            ("test_name" eclector.reader:unquote (plan-step-test-name step))
-            ("issue" eclector.reader:unquote (plan-step-issue step))
-            ("needs_exploration" eclector.reader:unquote
-             (string-downcase (symbol-name (or needs :none))))
-            ("transcript_path" eclector.reader:unquote
-             (namestring run-logger-path))))
-          :test 'equal))
-        (let* ((step-logger (open-run-logger run-logger-path))
-               (explore-result
-                (when do-explore
-                  (handler-case
-                   (funcall explore-fn explore-orient-config provider
-                            mcp-client explore-policy step-logger :plan-step
-                            step :develop-state develop-state)
-                   (error (c)
-                          (%log-develop-event logger :explore-aborted
-                           (alist-hash-table
-                            (eclector.reader:quasiquote
-                             (("step_index" eclector.reader:unquote
-                               (plan-step-index step))
-                              ("message" eclector.reader:unquote
-                               (princ-to-string c))))
-                            :test 'equal))
-                          nil))))
-               (memo
-                (when explore-result (explore-result-memo explore-result)))
-               (abstraction-decisions
-                (when memo
-                  (parse-abstraction-decisions memo :step-index
-                   (plan-step-index step))))
-               (policy (make-tool-policy condition))
-               (impl-retry-count 0)
-               (review-feedback nil)
-               (impl-review-passed-p nil)
-               (state
-                (unwind-protect
-                    (block run-step
-                      (loop for issue = (%enriched-issue step memo
-                                         :review-feedback review-feedback)
-                            for rc = (make-run-config :project-root
-                                      project-root :system system :test-system
-                                      test-system :issue issue :condition
-                                      condition :limits
-                                      (or run-limits (cl-harness/src/config:make-default-limits))
-                                      :log-llm-requests log-llm-requests)
-                            for state = (funcall run-fn rc provider mcp-client
-                                                 policy step-logger
-                                                 :develop-state develop-state)
-                            do (cond
-                                ((and develop-state
-                                      (<
-                                       (develop-state-test-revision-count
-                                        develop-state)
-                                       max-test-revisions)
-                                      (%maybe-handle-test-change-request step
-                                       state test-file review-fn provider
-                                       develop-state))
-                                 (%log-develop-event logger
-                                  :test-change-applied
-                                  (alist-hash-table
-                                   (eclector.reader:quasiquote
-                                    (("step_index" eclector.reader:unquote
-                                      (plan-step-index step))))
-                                   :test 'equal)))
-                                ((eq :passed (%read-status-from-state state))
-                                 (multiple-value-bind (approved-p feedback)
-                                     (%review-implementation step state
-                                      review-fn provider develop-state)
-                                   (cond
-                                    (approved-p (setf impl-review-passed-p t)
-                                     (return-from run-step state))
-                                    ((>= impl-retry-count
-                                         max-impl-review-revisions)
-                                     (return-from run-step state))
-                                    (t (incf impl-retry-count)
-                                     (setf review-feedback feedback)
-                                     (%log-develop-event logger
-                                      :impl-review-retry
-                                      (alist-hash-table
-                                       (eclector.reader:quasiquote
-                                        (("step_index" eclector.reader:unquote
-                                          (plan-step-index step))
-                                         ("retry_count" eclector.reader:unquote
-                                          impl-retry-count)
-                                         ("feedback" eclector.reader:unquote
-                                          (%truncate-feedback feedback 1500))))
-                                       :test 'equal))))))
-                                (t (return-from run-step state)))))
-                  (close-run-logger step-logger)))
-               (status
-                (let ((raw (%read-status-from-state state)))
-                  (cond
-                   ((and (eq :passed raw) (%review-enabled-p develop-state)
-                         (not impl-review-passed-p))
-                    :review-rejected)
-                   (t raw))))
-               (result
-                (make-instance 'develop-step-result :step-index
-                               (plan-step-index step) :test-name
-                               (plan-step-test-name step) :run-config
-                               (make-run-config :project-root project-root
-                                :system system :test-system test-system :issue
-                                (plan-step-issue step) :condition condition
-                                :limits (or run-limits (cl-harness/src/config:make-default-limits)))
-                               :status status :run-agent-state state
-                               :transcript-path run-logger-path :explore-result
-                               explore-result :abstraction-decisions
-                               abstraction-decisions)))
-          (%record-and-resolve-failures develop-state state step)
-          (%promote-matching-findings develop-state)
-          (when abstraction-decisions
-            (%log-develop-event logger :abstraction-decision
-             (alist-hash-table
-              (eclector.reader:quasiquote
-               (("step_index" eclector.reader:unquote (plan-step-index step))
-                ("decisions" eclector.reader:unquote
-                 (map 'vector
-                      (lambda (d)
+       (let* ((needs (plan-step-needs-exploration step))
+              (do-explore (and explore-fn
+                               needs
+                               (not (eq :none needs))))
+              (explore-policy (when do-explore (make-tool-policy :explore)))
+              (run-logger-path
+               (merge-pathnames
+                (format nil "develop-step-~D-~A-~A.jsonl"
+                        (plan-step-index step)
+                        (plan-step-test-name step)
+                        (get-internal-real-time))
+                (uiop:temporary-directory)))
+              (explore-orient-config
+               (when do-explore
+                 (make-run-config :project-root project-root
+                                  :system system
+                                  :test-system test-system
+                                  :issue (plan-step-issue step)
+                                  :condition :explore))))
+         (%log-develop-event
+          logger :step-start
+          (alist-hash-table
+           `(("step_index" . ,(plan-step-index step))
+             ("test_name" . ,(plan-step-test-name step))
+             ("issue" . ,(plan-step-issue step))
+             ("needs_exploration" . ,(string-downcase
+                                      (symbol-name (or needs :none))))
+             ("transcript_path" . ,(namestring run-logger-path)))
+           :test 'equal))
+         (let* ((step-logger (open-run-logger run-logger-path))
+                (explore-result
+                 (when do-explore
+                   (handler-case
+                       (funcall explore-fn
+                                explore-orient-config provider mcp-client
+                                explore-policy step-logger
+                                :plan-step step
+                                :develop-state develop-state)
+                     (error (c)
+                       (%log-develop-event
+                        logger :explore-aborted
                         (alist-hash-table
-                         (eclector.reader:quasiquote
-                          (("kind" eclector.reader:unquote
-                            (string-downcase
-                             (symbol-name (abstraction-decision-kind d))))
-                           ("name" eclector.reader:unquote
-                            (abstraction-decision-name d))
-                           ("rationale" eclector.reader:unquote
-                            (abstraction-decision-rationale d))))
+                         `(("step_index" . ,(plan-step-index step))
+                           ("message" . ,(princ-to-string c)))
                          :test 'equal))
-                      abstraction-decisions))))
-              :test 'equal)))
-          (%log-develop-event logger :step-end
-           (alist-hash-table
-            (eclector.reader:quasiquote
-             (("step_index" eclector.reader:unquote (plan-step-index step))
-              ("test_name" eclector.reader:unquote (plan-step-test-name step))
-              ("status" eclector.reader:unquote
-               (string-downcase (symbol-name status)))
-              ("review_retries" eclector.reader:unquote impl-retry-count)
-              ("review_final_outcome" eclector.reader:unquote
-               (cond ((not (%review-enabled-p develop-state)) "n-a")
-                     ((not (eq :passed (%read-status-from-state state))) "n-a")
+                       nil))))
+                (memo (when explore-result (explore-result-memo explore-result)))
+                (abstraction-decisions
+                 (when memo
+                   (parse-abstraction-decisions memo
+                                                :step-index (plan-step-index step))))
+                (policy (make-tool-policy condition))
+                (impl-retry-count 0)
+                (review-feedback nil)
+                (impl-review-passed-p nil)
+                (state
+                 (unwind-protect
+                      (block run-step
+                        (loop
+                          for issue = (%enriched-issue
+                                       step memo
+                                       :review-feedback review-feedback)
+                          for rc = (make-run-config
+                                    :project-root project-root
+                                    :system system
+                                    :test-system test-system
+                                    :issue issue
+                                    :condition condition
+                                    :limits (or run-limits
+                                                (cl-harness/src/config:make-default-limits))
+                                    :log-llm-requests log-llm-requests)
+                          for state = (funcall run-fn rc provider mcp-client
+                                               policy step-logger
+                                               :develop-state develop-state)
+                          do (cond
+                               ;; 1) test-change-request takes priority
+                               ((and develop-state
+                                     (< (develop-state-test-revision-count
+                                         develop-state)
+                                        max-test-revisions)
+                                     (%maybe-handle-test-change-request
+                                      step state test-file review-fn provider
+                                      develop-state))
+                                (%log-develop-event
+                                 logger :test-change-applied
+                                 (alist-hash-table
+                                  `(("step_index" . ,(plan-step-index step)))
+                                  :test 'equal)))
+                               ;; 2) verify :passed -> implementation review
+                               ((eq :passed (%read-status-from-state state))
+                                (multiple-value-bind (approved-p feedback)
+                                    (%review-implementation
+                                     step state review-fn provider develop-state)
+                                  (cond
+                                    (approved-p
+                                     (setf impl-review-passed-p t)
+                                     (return-from run-step state))
+                                    ((>= impl-retry-count max-impl-review-revisions)
+                                     (return-from run-step state))
+                                    (t
+                                     (incf impl-retry-count)
+                                     (setf review-feedback feedback)
+                                     (%log-develop-event
+                                      logger :impl-review-retry
+                                      (alist-hash-table
+                                       `(("step_index"
+                                          . ,(plan-step-index step))
+                                         ("retry_count"
+                                          . ,impl-retry-count)
+                                         ("feedback"
+                                          . ,(%truncate-feedback
+                                              feedback 1500)))
+                                       :test 'equal))))))
+                               ;; 3) verify failed or other terminal status
+                               (t (return-from run-step state)))))
+                   (close-run-logger step-logger)))
+                (status (let ((raw (%read-status-from-state state)))
+                          (cond
+                            ((and (eq :passed raw)
+                                  (%review-enabled-p develop-state)
+                                  (not impl-review-passed-p))
+                             :review-rejected)
+                            (t raw))))
+                (result (make-instance
+                         'develop-step-result
+                         :step-index (plan-step-index step)
+                         :test-name (plan-step-test-name step)
+                         :run-config (make-run-config
+                                      :project-root project-root
+                                      :system system
+                                      :test-system test-system
+                                      :issue (plan-step-issue step)
+                                      :condition condition
+                                      :limits (or run-limits
+                                                  (cl-harness/src/config:make-default-limits)))
+                         :status status
+                         :run-agent-state state
+                         :transcript-path run-logger-path
+                         :explore-result explore-result
+                         :abstraction-decisions abstraction-decisions)))
+           (%record-and-resolve-failures develop-state state step)
+           (%promote-matching-findings develop-state)
+           (when abstraction-decisions
+             (%log-develop-event
+              logger :abstraction-decision
+              (alist-hash-table
+               `(("step_index" . ,(plan-step-index step))
+                 ("decisions"
+                  . ,(map 'vector
+                          (lambda (d)
+                            (alist-hash-table
+                             `(("kind"
+                                . ,(string-downcase
+                                    (symbol-name
+                                     (cl-harness/src/abstraction:abstraction-decision-kind
+                                      d))))
+                               ("name"
+                                . ,(cl-harness/src/abstraction:abstraction-decision-name
+                                    d))
+                               ("rationale"
+                                . ,(cl-harness/src/abstraction:abstraction-decision-rationale
+                                    d)))
+                             :test 'equal))
+                          abstraction-decisions)))
+               :test 'equal)))
+           (%log-develop-event
+            logger :step-end
+            (alist-hash-table
+             `(("step_index" . ,(plan-step-index step))
+               ("test_name" . ,(plan-step-test-name step))
+               ("status" . ,(string-downcase (symbol-name status)))
+               ("review_retries" . ,impl-retry-count)
+               ("review_final_outcome"
+                . ,(cond
+                     ((not (%review-enabled-p develop-state)) "n-a")
+                     ((not (eq :passed (%read-status-from-state state)))
+                      "n-a")
                      (impl-review-passed-p
                       (if (zerop impl-retry-count)
                           "passed-first-try"
                           "passed-after-retry"))
-                     (t "exhausted")))))
-            :test 'equal))
-          result))
+                     (t "exhausted"))))
+             :test 'equal))
+           result))
     (when develop-state
       (setf (develop-state-current-step-index develop-state) nil))))
 
-(defun execute-plan
-       (plan
-        &key project-root system test-system test-file (condition :generic-mcp)
-        provider mcp-client run-limits log-path (run-fn #'run-agent)
-        (explore-fn #'run-explore-agent) develop-state
-        (review-fn #'review-development-artifact) (max-test-revisions 3)
-        (max-impl-review-revisions 2) (log-llm-requests nil))
+(defun execute-plan (plan
+                     &key project-root system test-system test-file
+                          (condition :generic-mcp)
+                          provider
+                          mcp-client
+                          run-limits
+                          log-path
+                          (run-fn #'run-agent)
+                          (explore-fn #'run-explore-agent)
+                          develop-state
+                          (review-fn #'review-development-artifact)
+                          (max-test-revisions 3)
+                          (max-impl-review-revisions 2)
+                          (log-llm-requests nil))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -779,52 +807,59 @@ inject a stub here.
 
 Returns a list of DEVELOP-STEP-RESULT in execution order."
   (check-type plan list)
+  ;; Validate every step's test_source up-front so we never partially
+  ;; materialize a broken plan.
   (dolist (step plan)
-    (validate-test-source (plan-step-test-source step) (plan-step-index step)))
+    (validate-test-source (plan-step-test-source step)
+                          (plan-step-index step)))
   (let ((logger (%ensure-develop-logger log-path)))
     (unwind-protect
-        (let ((results 'nil))
-          (%log-develop-event logger :develop-start
-           (alist-hash-table
-            (eclector.reader:quasiquote
-             (("project_root" eclector.reader:unquote
-               (princ-to-string (or project-root "")))
-              ("system" eclector.reader:unquote (or system ""))
-              ("test_system" eclector.reader:unquote (or test-system ""))
-              ("plan_size" eclector.reader:unquote (length plan))))
-            :test 'equal))
-          (%log-develop-event logger :plan (%plan-event-payload plan))
-          (block run-loop
-            (dolist (step plan)
-              (let ((result
-                     (%execute-step step run-fn project-root system test-system
-                      condition test-file logger provider mcp-client run-limits
-                      explore-fn :develop-state develop-state :review-fn
-                      review-fn :max-test-revisions max-test-revisions
-                      :max-impl-review-revisions max-impl-review-revisions
-                      :log-llm-requests log-llm-requests)))
-                (push result results)
-                (unless (eq :passed (develop-step-result-status result))
-                  (return-from run-loop)))))
-          (let* ((reversed (nreverse results))
-                 (final-status
-                  (cond ((null reversed) :empty)
-                        ((every
-                          (lambda (r)
-                            (eq :passed (develop-step-result-status r)))
-                          reversed)
-                         :passed)
-                        (t
-                         (develop-step-result-status (car (last reversed)))))))
-            (%log-develop-event logger :develop-end
-             (alist-hash-table
-              (eclector.reader:quasiquote
-               (("status" eclector.reader:unquote
-                 (%symbol-status final-status))
-                ("completed_steps" eclector.reader:unquote (length reversed))
-                ("total_steps" eclector.reader:unquote (length plan))))
-              :test 'equal))
-            reversed))
+         (let ((results '()))
+           (%log-develop-event
+            logger :develop-start
+            (alist-hash-table
+             `(("project_root" . ,(princ-to-string (or project-root "")))
+               ("system" . ,(or system ""))
+               ("test_system" . ,(or test-system ""))
+               ("plan_size" . ,(length plan)))
+             :test 'equal))
+           (%log-develop-event logger :plan (%plan-event-payload plan))
+           (block run-loop
+             (dolist (step plan)
+               (let ((result (%execute-step step run-fn
+                                            project-root system test-system
+                                            condition test-file logger
+                                            provider mcp-client run-limits
+                                            explore-fn
+                                            :develop-state develop-state
+                                            :review-fn review-fn
+                                            :max-test-revisions
+                                            max-test-revisions
+                                            :max-impl-review-revisions
+                                            max-impl-review-revisions
+                                            :log-llm-requests
+                                            log-llm-requests)))
+                 (push result results)
+                 (unless (eq :passed (develop-step-result-status result))
+                   (return-from run-loop)))))
+           (let* ((reversed (nreverse results))
+                  (final-status
+                   (cond
+                     ((null reversed) :empty)
+                     ((every (lambda (r)
+                               (eq :passed
+                                   (develop-step-result-status r)))
+                             reversed)
+                      :passed)
+                     (t (develop-step-result-status (car (last reversed)))))))
+             (%log-develop-event
+              logger :develop-end
+              (alist-hash-table
+               `(("status" . ,(%symbol-status final-status))
+                 ("completed_steps" . ,(length reversed))
+                 ("total_steps" . ,(length plan)))
+               :test 'equal))
+             reversed))
       (%close-develop-logger logger))))
 
 ;; --- develop (P3): plan + execute + replan loop -------------------------
@@ -1014,18 +1049,26 @@ is exhausted. Returns NIL after stamping STATE on budget exhaustion."
                (format nil "Plan/test review rejected the previous output: ~A"
                        feedback)))))
 
-(defun develop
-       (goal
-        &key project-root system test-system test-file provider mcp-client
-        (condition :generic-mcp) run-limits project-inventory (mode :mixed)
-        log-path (max-replans 3) (review-policy :none)
-        (test-revision-policy :additive-only) (max-review-replans 2)
-        (max-test-revisions 3) (max-impl-review-revisions 2)
-        (spec-fn #'generate-develop-spec)
-        (review-fn #'review-development-artifact)
-        (planner-fn #'plan-development) (run-fn #'run-agent)
-        (explore-fn #'run-explore-agent)
-        (log-llm-requests nil))
+(defun develop (goal
+                &key project-root system test-system test-file
+                     provider mcp-client
+                     (condition :generic-mcp)
+                     run-limits
+                     project-inventory
+                     (mode :mixed)
+                     log-path
+                     (max-replans 3)
+                     (review-policy :none)
+                     (test-revision-policy :additive-only)
+                     (max-review-replans 2)
+                     (max-test-revisions 3)
+                     (max-impl-review-revisions 2)
+                     (spec-fn #'generate-develop-spec)
+                     (review-fn #'review-development-artifact)
+                     (planner-fn #'plan-development)
+                     (run-fn #'run-agent)
+                     (explore-fn #'run-explore-agent)
+                     (log-llm-requests nil))
   "Plan, execute, and replan-on-failure end-to-end.
 
 Workflow:
@@ -1077,129 +1120,167 @@ final DEVELOP-RESULT carries the reason through to callers."
   (check-type goal string)
   (check-type max-replans (integer 0))
   (unless (member mode +supported-development-modes+)
-    (error "develop: unsupported :mode ~S; expected one of ~S" mode
-           +supported-development-modes+))
-  (let ((state
-         (make-develop-state :goal goal :project-root project-root :system
-          system :test-system test-system :condition condition :run-limits
-          run-limits :project-inventory project-inventory :mode mode
-          :review-policy review-policy :test-revision-policy
-          test-revision-policy)))
+    (error "develop: unsupported :mode ~S; expected one of ~S"
+           mode +supported-development-modes+))
+  (let ((state (make-develop-state :goal goal
+                                   :project-root project-root
+                                   :system system
+                                   :test-system test-system
+                                   :condition condition
+                                   :run-limits run-limits
+                                   :project-inventory project-inventory
+                                   :mode mode
+                                   :review-policy review-policy
+                                   :test-revision-policy
+                                   test-revision-policy)))
+    ;; Phase I auto-gather: populate the structured project-summary
+    ;; slot from disk so the :planning view sees it alongside the
+    ;; legacy project-inventory text. Best-effort -- a malformed
+    ;; project tree returns NIL and the develop loop continues with
+    ;; the inventory text alone.
     (handler-case
-     (develop-state-set-project-summary state
-      (gather-project-summary :project-root project-root :system system
-       :test-system test-system))
-     (error nil nil))
+        (develop-state-set-project-summary
+         state
+         (gather-project-summary :project-root project-root
+                                 :system system
+                                 :test-system test-system))
+      (error () nil))
+    ;; LLM-bearing body: planner-fn (initial + replan) and execute-plan
+    ;; both reach complete-chat. A typed MODEL-ERROR raised by the
+    ;; transport layer is caught here, recorded on STATE as
+    ;; :STATUS :ERROR with :REASON set to the model-error's :KIND, and
+    ;; control falls through to the integration-check guard (which
+    ;; skips on non-:PASSED status) and the final develop-result
+    ;; construction below.
     (handler-case
-     (progn
-      (when (%review-enabled-p state)
-        (develop-state-set-develop-spec state
-         (funcall spec-fn goal :provider provider :develop-state state
-                  :project-root project-root :system system :test-system
-                  test-system)))
-      (setf (develop-state-current-plan state)
-              (%plan-with-review goal planner-fn review-fn provider state mode
-               project-root system test-system project-inventory nil nil
-               max-review-replans))
-      (when (null (develop-state-current-plan state))
-        (return-from develop
-          (make-instance 'develop-result :status (develop-state-status state)
-                         :reason (develop-state-reason state) :final-plan nil
-                         :step-results nil :replan-count
-                         (develop-state-replan-count state) :limit-hit
-                         (develop-state-limit-hit state) :develop-state
-                         state)))
-      (loop
-       (let* ((round-results
-               (execute-plan (develop-state-current-plan state) :project-root
-                project-root :system system :test-system test-system :test-file
-                test-file :condition condition :provider provider :mcp-client
-                mcp-client :run-limits run-limits :log-path log-path :run-fn
-                run-fn :explore-fn explore-fn :develop-state state :review-fn
-                review-fn :max-test-revisions max-test-revisions
-                :max-impl-review-revisions max-impl-review-revisions
-                :log-llm-requests log-llm-requests))
-             (last-result (car (last round-results))))
-         (dolist (r round-results) (develop-state-record-step-result state r))
-         (cond
-          ((null last-result) (setf (develop-state-status state) :empty)
-           (return))
-          ((eq :passed (develop-step-result-status last-result))
-           (setf (develop-state-status state) :passed) (return))
-          ((>= (develop-state-replan-count state) max-replans)
-           (setf (develop-state-status state) :limit-exhausted
-                 (develop-state-limit-hit state) :max-replans)
-           (return))
-          (t
-           (let ((this-failure (develop-step-result-test-name last-result)))
-             (when
-                 (and (develop-state-last-failure-test-name state)
-                      (equal (develop-state-last-failure-test-name state)
-                             this-failure))
-               (setf (develop-state-status state) :stuck
-                     (develop-state-limit-hit state) :no-progress)
-               (return))
-             (setf (develop-state-last-failure-test-name state) this-failure))
-           (incf (develop-state-replan-count state))
-           (let ((new-plan
-                  (%plan-with-review goal planner-fn review-fn provider state
-                   mode project-root system test-system project-inventory
-                   (develop-state-current-plan state)
-                   (%failure-context last-result) max-review-replans)))
-             (when (null new-plan) (return))
-             (when
-                 (equal (%first-test-name new-plan)
-                        (develop-state-last-failure-test-name state))
-               (setf (develop-state-status state) :stuck
-                     (develop-state-limit-hit state) :no-progress)
-               (return))
-             (setf (develop-state-current-plan state) new-plan)))))))
-     (model-error (c)
-      (let ((kind (model-error-type c)))
-        (setf (develop-state-status state)
-                (if (eq kind :empty-content)
-                    :give-up
-                    :error)
-              (develop-state-reason state) kind))))
+        (progn
+          (when (%review-enabled-p state)
+            (develop-state-set-develop-spec
+             state
+             (funcall spec-fn goal
+                      :provider provider
+                      :develop-state state
+                      :project-root project-root
+                      :system system
+                      :test-system test-system)))
+          (setf (develop-state-current-plan state)
+                (%plan-with-review
+                 goal planner-fn review-fn provider state mode
+                 project-root system test-system project-inventory
+                 nil nil max-review-replans))
+          (when (null (develop-state-current-plan state))
+            (return-from develop
+              (make-instance 'develop-result
+                             :status (develop-state-status state)
+                             :reason (develop-state-reason state)
+                             :final-plan nil
+                             :step-results nil
+                             :replan-count (develop-state-replan-count state)
+                             :limit-hit (develop-state-limit-hit state)
+                             :develop-state state)))
+          (loop
+            (let* ((round-results (execute-plan
+                                   (develop-state-current-plan state)
+                                   :project-root project-root
+                                   :system system
+                                   :test-system test-system
+                                   :test-file test-file
+                                   :condition condition
+                                   :provider provider
+                                   :mcp-client mcp-client
+                                   :run-limits run-limits
+                                   :log-path log-path
+                                   :run-fn run-fn
+                                   :explore-fn explore-fn
+                                   :develop-state state
+                                   :review-fn review-fn
+                                   :max-test-revisions max-test-revisions
+                                   :max-impl-review-revisions max-impl-review-revisions
+                                   :log-llm-requests log-llm-requests))
+                   (last-result (car (last round-results))))
+              (dolist (r round-results)
+                (develop-state-record-step-result state r))
+              (cond
+                ((null last-result)
+                 (setf (develop-state-status state) :empty)
+                 (return))
+                ((eq :passed (develop-step-result-status last-result))
+                 (setf (develop-state-status state) :passed)
+                 (return))
+                ((>= (develop-state-replan-count state) max-replans)
+                 (setf (develop-state-status state) :limit-exhausted
+                       (develop-state-limit-hit state) :max-replans)
+                 (return))
+                (t
+                 (let ((this-failure (develop-step-result-test-name last-result)))
+                   (when (and (develop-state-last-failure-test-name state)
+                              (equal (develop-state-last-failure-test-name state)
+                                     this-failure))
+                     (setf (develop-state-status state) :stuck
+                           (develop-state-limit-hit state) :no-progress)
+                     (return))
+                   (setf (develop-state-last-failure-test-name state)
+                         this-failure))
+                 (incf (develop-state-replan-count state))
+                 (let ((new-plan (%plan-with-review
+                                  goal planner-fn review-fn provider state mode
+                                  project-root system test-system
+                                  project-inventory
+                                  (develop-state-current-plan state)
+                                  (%failure-context last-result)
+                                  max-review-replans)))
+                   (when (null new-plan)
+                     (return))
+                   (when (equal (%first-test-name new-plan)
+                                (develop-state-last-failure-test-name state))
+                     (setf (develop-state-status state) :stuck
+                           (develop-state-limit-hit state) :no-progress)
+                     (return))
+                   (setf (develop-state-current-plan state) new-plan)))))))
+      (model-error (c)
+        (let ((kind (model-error-type c)))
+          (setf (develop-state-status state)
+                (if (eq kind :empty-content) :give-up :error)
+                (develop-state-reason state) kind))))
     (when (and (eq (develop-state-status state) :passed) project-root)
       (handler-case
-       (let ((issues
-              (find-integration-issues (gather-package-graph project-root))))
-         (when log-path
-           (let ((logger (open-run-logger log-path)))
-             (unwind-protect
-                 (log-event logger :integration-check
-                  (alist-hash-table
-                   (eclector.reader:quasiquote
-                    (("issue_count" eclector.reader:unquote (length issues))
-                     ("issues" eclector.reader:unquote
-                      (map 'vector
-                           (lambda (i)
-                             (alist-hash-table
-                              (eclector.reader:quasiquote
-                               (("kind" eclector.reader:unquote
-                                 (string-downcase
-                                  (symbol-name (integration-issue-kind i))))
-                                ("package" eclector.reader:unquote
-                                 (integration-issue-package i))
-                                ("file" eclector.reader:unquote
-                                 (let ((f (integration-issue-file i)))
-                                   (if f
-                                       (namestring f)
-                                       "")))
-                                ("description" eclector.reader:unquote
-                                 (integration-issue-description i))))
-                              :test 'equal))
-                           issues))))
-                   :test 'equal))
-               (close-run-logger logger))))
-         (setf (develop-state-integration-issues state) issues))
-       (error nil nil)))
-    (make-instance 'develop-result :status (develop-state-status state) :reason
-                   (develop-state-reason state) :final-plan
-                   (develop-state-current-plan state) :step-results
-                   (develop-state-step-results state) :replan-count
-                   (develop-state-replan-count state) :limit-hit
-                   (develop-state-limit-hit state) :integration-issues
-                   (develop-state-integration-issues state) :develop-state
-                   state)))
+          (let ((issues (find-integration-issues
+                         (gather-package-graph project-root))))
+            (when log-path
+              (let ((logger (open-run-logger log-path)))
+                (unwind-protect
+                     (log-event
+                      logger :integration-check
+                      (alist-hash-table
+                       `(("issue_count" . ,(length issues))
+                         ("issues"
+                          . ,(map 'vector
+                                  (lambda (i)
+                                    (alist-hash-table
+                                     `(("kind"
+                                        . ,(string-downcase
+                                            (symbol-name
+                                             (integration-issue-kind i))))
+                                       ("package"
+                                        . ,(integration-issue-package i))
+                                       ("file"
+                                        . ,(let ((f (integration-issue-file i)))
+                                             (if f (namestring f) "")))
+                                       ("description"
+                                        . ,(integration-issue-description i)))
+                                     :test 'equal))
+                                  issues)))
+                       :test 'equal))
+                  (close-run-logger logger))))
+            (setf (develop-state-integration-issues state) issues))
+        (error () nil)))
+    (make-instance 'develop-result
+                   :status (develop-state-status state)
+                   :reason (develop-state-reason state)
+                   :final-plan (develop-state-current-plan state)
+                   :step-results (develop-state-step-results state)
+                   :replan-count (develop-state-replan-count state)
+                   :limit-hit (develop-state-limit-hit state)
+                   :integration-issues
+                   (develop-state-integration-issues state)
+                   :develop-state state)))
