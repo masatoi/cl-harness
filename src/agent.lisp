@@ -1119,11 +1119,15 @@ step since no real patch was applied."
                        :test 'equal)))))))
          (let* ((is-error (and (gethash "isError" result) t))
                 (error-text (and is-error (extract-content-text result))))
-           (log-event logger :tool-result
-                      `(("turn" . ,turn) ("tool" . ,tool)
-                        ("is_error" . ,is-error)
-                        ,@(when (and error-text (plusp (length error-text)))
-                            `(("error_text" . ,error-text)))))
+           (let ((tool-summary (when (not is-error)
+                                 (summarize-tool-result tool result))))
+             (log-event logger :tool-result
+                        `(("turn" . ,turn) ("tool" . ,tool)
+                          ("is_error" . ,is-error)
+                          ,@(when (and error-text (plusp (length error-text)))
+                              `(("error_text" . ,error-text)))
+                          ,@(when (and tool-summary (plusp (length tool-summary)))
+                              `(("content_summary" . ,tool-summary))))))
            ;; Populate the per-step tool-error ring on isError=true. Only
            ;; LLM-issued tool calls land here (HANDLE-TOOL-CALL is on that
            ;; path); harness-internal calls (verify-task setup,

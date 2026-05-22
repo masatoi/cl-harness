@@ -1754,3 +1754,66 @@ success result with one text content block."
       (ok entry)
       (ok (= 1 (length (cdr entry))))
       (ok (equal "t1" (gethash "test_name" (elt (cdr entry) 0)))))))
+
+(defun %capture-jsonl-events (thunk)
+  "Run THUNK with a fresh logger pointing to a tmp JSONL file and
+return the parsed events as a list of hash-tables."
+  (let* ((path (merge-pathnames
+                (format nil "agent-log-capture-~A.jsonl"
+                        (get-internal-real-time))
+                (uiop:temporary-directory)))
+         (logger (cl-harness/src/log:open-run-logger path))
+         (events (list)))
+    (unwind-protect
+         (progn
+           (funcall thunk logger)
+           (cl-harness/src/log:close-run-logger logger)
+           (with-open-file (in path)
+             (loop for line = (read-line in nil nil)
+                   while line
+                   do (push (yason:parse line) events))))
+      (when (probe-file path) (delete-file path)))
+    (nreverse events)))
+
+(deftest tool-result-event-content-summary
+  (testing "successful tool-result has content_summary field"
+    (let* ((result (alexandria:plist-hash-table
+                    `("isError" nil
+                      "content" ,(vector
+                                  (alexandria:plist-hash-table
+                                   `("type" "text" "text" "READ-OK-CONTENT")
+                                   :test 'equal)))
+                    :test 'equal))
+           (events
+             (%capture-jsonl-events
+              (lambda (logger)
+                (let* ((is-error (and (gethash "isError" result) t))
+                       (summary (cl-harness/src/agent:summarize-tool-result
+                                 "lisp-read-file" result))
+                       (payload `(("turn" . 2)
+                                  ("tool" . "lisp-read-file")
+                                  ("is_error" . ,is-error)
+                                  ,@(unless is-error
+                                      `(("content_summary" . ,summary))))))
+                  (cl-harness/src/log:log-event
+                   logger :tool-result payload)))))
+           (event (first events)))
+      (ok (= 1 (length events)))
+      (ok (equal "tool-result" (gethash "type" event)))
+      (ok (gethash "content_summary" event))
+      (ok (search "READ-OK-CONTENT" (gethash "content_summary" event)))))
+  (testing "error tool-result has error_text but no content_summary"
+    (let* ((events
+             (%capture-jsonl-events
+              (lambda (logger)
+                (cl-harness/src/log:log-event
+                 logger :tool-result
+                 `(("turn" . 4)
+                   ("tool" . "lisp-patch-form")
+                   ("is_error" . t)
+                   ("error_text" . "BOOM"))))))
+           (event (first events)))
+      (ok (equal "lisp-patch-form" (gethash "tool" event)))
+      (ok (equal t (gethash "is_error" event)))
+      (ok (equal "BOOM" (gethash "error_text" event)))
+      (ok (null (gethash "content_summary" event))))))
