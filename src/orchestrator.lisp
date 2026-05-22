@@ -73,7 +73,8 @@
                 #:develop-state-failure-ledger
                 #:develop-state-patch-records
                 #:develop-state-repl-findings
-                #:develop-state-set-project-summary)
+                #:develop-state-set-project-summary
+                #:develop-state-project-root)
   (:import-from #:cl-harness/src/project-summary
                 #:gather-project-summary)
   (:import-from #:cl-harness/src/failure-ledger
@@ -304,15 +305,27 @@ recognize is reported as :unknown."
      ("status" . ,(%symbol-status (develop-step-result-status result))))
    :test 'equal))
 
-(defun %enriched-issue (step memo)
-  "Return the issue string fed to the implement step. When MEMO is
-non-empty, prepend it as a `Prior exploration:` block so the
-executor inherits the explore findings as plain text in the
-initial user prompt."
-  (if (and memo (plusp (length memo)))
-      (format nil "## Prior exploration (read-only)~%~A~%~%## Task~%~A"
-              memo (plan-step-issue step))
-      (plan-step-issue step)))
+(defun %enriched-issue (step memo &key review-feedback)
+  "Return the issue string fed to the implement step. When
+REVIEW-FEEDBACK is non-empty, prepend it as a `Prior implementation
+review feedback' block (rendered first because it is the most
+recent and most specific signal). When MEMO is non-empty, prepend
+the explore memo as a `Prior exploration:' block. The original
+issue is shown last under `## Task'. Sections with empty content
+are omitted."
+  (let ((fb (and review-feedback (plusp (length review-feedback))
+                 review-feedback))
+        (mm (and memo (plusp (length memo)) memo)))
+    (cond
+      ((and (null fb) (null mm))
+       (plan-step-issue step))
+      (t
+       (with-output-to-string (s)
+         (when fb
+           (format s "## Prior implementation review feedback~%~A~%~%" fb))
+         (when mm
+           (format s "## Prior exploration (read-only)~%~A~%~%" mm))
+         (format s "## Task~%~A" (plan-step-issue step)))))))
 
 (defun %most-recent-patch-on-file (state path)
   "Return the most recent PATCH-RECORD on PATH from STATE's patch-records,
@@ -495,10 +508,12 @@ the same step."
         t))))
 
 (defun %review-implementation (step state review-fn provider develop-state)
-  "Return true when implementation review approves STATE."
+  "Return (VALUES APPROVED-P FEEDBACK) for the implementation review of
+STEP. When review is disabled or STATE is not :passed, returns
+(VALUES T NIL) (the no-op approve)."
   (if (or (not (%review-enabled-p develop-state))
           (not (eq :passed (%read-status-from-state state))))
-      t
+      (values t nil)
       (let ((decision
               (%call-review
                review-fn :implementation
@@ -509,19 +524,43 @@ the same step."
                (format nil "Step ~D (~A) passed verification."
                        (plan-step-index step)
                        (plan-step-test-name step)))))
-        (review-decision-approved-p decision))))
+        (values (review-decision-approved-p decision)
+                (review-decision-feedback decision)))))
+
+(defun %truncate-feedback (text cap)
+  "Truncate TEXT to at most CAP chars, appending an elision footer.
+Returns NIL when TEXT is NIL."
+  (cond
+    ((null text) nil)
+    ((<= (length text) cap) text)
+    (t (format nil "~A~%[... truncated, ~D chars elided ...]"
+               (subseq text 0 cap) (- (length text) cap)))))
 
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
                       provider mcp-client run-limits explore-fn
                       &key develop-state
                            (review-fn #'review-development-artifact)
-                           (max-test-revisions 3))
+                           (max-test-revisions 3)
+                           (max-impl-review-revisions 2))
   "Materialize the step's test, optionally run an exploration sub-agent,
 build a RUN-CONFIG (with the explore memo prepended to the issue
-when present), call RUN-FN, return a DEVELOP-STEP-RESULT. The
-RUN-AGENT's own JSONL is written under RUN-AGENT's normal logger;
-we do not interleave events with it here.
+when present), call RUN-FN, return a DEVELOP-STEP-RESULT.
+
+The body contains two cooperative retry mechanisms inside the
+RUN-STEP loop:
+
+1. Test-change-request loop: when RUN-AGENT returns a
+   :TEST-CHANGE-REQUEST action, REVIEW-FN reviews and (on approval)
+   MATERIALIZE-TEST-SOURCE appends the new deftest. The loop then
+   re-runs RUN-AGENT against the augmented test file.
+
+2. Implementation-review loop: when verification passes but
+   REVIEW-FN rejects the implementation, the loop re-runs RUN-AGENT
+   with the rejection feedback prepended to the issue string,
+   bounded by MAX-IMPL-REVIEW-REVISIONS. On budget exhaustion the
+   final status is overwritten to :REVIEW-REJECTED for the outer
+   develop loop.
 
 When PLAN-STEP's needs-exploration is :LIGHTWEIGHT or :DEEP and
 EXPLORE-FN is non-nil, an explore loop runs FIRST against the same
@@ -531,10 +570,7 @@ and prepended to the implement issue.
 
 When DEVELOP-STATE is non-nil, the step's PLAN-STEP-INDEX is written
 to its CURRENT-STEP-INDEX slot on entry and cleared (set to NIL) on
-exit via UNWIND-PROTECT. Used by MAKE-CONTEXT-VIEW (Phase C) to
-filter ledger entries to those bound to the active step. Inert when
-DEVELOP-STATE is NIL (e.g. test stubs that exercise %execute-step
-without a develop-state)."
+exit via UNWIND-PROTECT."
   (validate-test-source (plan-step-test-source step) (plan-step-index step))
   (materialize-test-source (%resolve-test-file-path project-root test-file)
                            (plan-step-test-source step))
@@ -593,48 +629,89 @@ without a develop-state)."
                  (when memo
                    (parse-abstraction-decisions memo
                                                 :step-index (plan-step-index step))))
-                (rc (make-run-config :project-root project-root
-                                     :system system
-                                     :test-system test-system
-                                     :issue (%enriched-issue step memo)
-                                     :condition condition
-                                     :limits (or run-limits
-                                                 (cl-harness/src/config:make-default-limits))))
                 (policy (make-tool-policy condition))
+                (impl-retry-count 0)
+                (review-feedback nil)
+                (impl-review-passed-p nil)
                 (state
                  (unwind-protect
                       (block run-step
                         (loop
+                          for issue = (%enriched-issue
+                                       step memo
+                                       :review-feedback review-feedback)
+                          for rc = (make-run-config
+                                    :project-root project-root
+                                    :system system
+                                    :test-system test-system
+                                    :issue issue
+                                    :condition condition
+                                    :limits (or run-limits
+                                                (cl-harness/src/config:make-default-limits)))
                           for state = (funcall run-fn rc provider mcp-client
                                                policy step-logger
                                                :develop-state develop-state)
-                          do (if (and develop-state
-                                      (< (develop-state-test-revision-count
-                                          develop-state)
-                                          max-test-revisions)
-                                      (%maybe-handle-test-change-request
-                                       step state test-file review-fn provider
-                                       develop-state))
-                                 (progn
-                                   (%log-develop-event
-                                    logger :test-change-applied
-                                    (alist-hash-table
-                                     `(("step_index" . ,(plan-step-index step)))
-                                     :test 'equal)))
-                                 (return-from run-step state))))
+                          do (cond
+                               ;; 1) test-change-request takes priority
+                               ((and develop-state
+                                     (< (develop-state-test-revision-count
+                                         develop-state)
+                                        max-test-revisions)
+                                     (%maybe-handle-test-change-request
+                                      step state test-file review-fn provider
+                                      develop-state))
+                                (%log-develop-event
+                                 logger :test-change-applied
+                                 (alist-hash-table
+                                  `(("step_index" . ,(plan-step-index step)))
+                                  :test 'equal)))
+                               ;; 2) verify :passed -> implementation review
+                               ((eq :passed (%read-status-from-state state))
+                                (multiple-value-bind (approved-p feedback)
+                                    (%review-implementation
+                                     step state review-fn provider develop-state)
+                                  (cond
+                                    (approved-p
+                                     (setf impl-review-passed-p t)
+                                     (return-from run-step state))
+                                    ((>= impl-retry-count max-impl-review-revisions)
+                                     (return-from run-step state))
+                                    (t
+                                     (incf impl-retry-count)
+                                     (setf review-feedback feedback)
+                                     (%log-develop-event
+                                      logger :impl-review-retry
+                                      (alist-hash-table
+                                       `(("step_index"
+                                          . ,(plan-step-index step))
+                                         ("retry_count"
+                                          . ,impl-retry-count)
+                                         ("feedback"
+                                          . ,(%truncate-feedback
+                                              feedback 1500)))
+                                       :test 'equal))))))
+                               ;; 3) verify failed or other terminal status
+                               (t (return-from run-step state)))))
                    (close-run-logger step-logger)))
                 (status (let ((raw (%read-status-from-state state)))
-                          (if (and (eq :passed raw)
-                                   (not (%review-implementation
-                                         step state review-fn provider
-                                         develop-state)))
-                              :review-rejected
-                              raw)))
+                          (cond
+                            ((and (eq :passed raw)
+                                  (%review-enabled-p develop-state)
+                                  (not impl-review-passed-p))
+                             :review-rejected)
+                            (t raw))))
                 (result (make-instance
                          'develop-step-result
                          :step-index (plan-step-index step)
                          :test-name (plan-step-test-name step)
-                         :run-config rc
+                         :run-config (make-run-config
+                                      :project-root project-root
+                                      :system system
+                                      :test-system test-system
+                                      :issue (plan-step-issue step)
+                                      :condition condition
+                                      :limits (or run-limits
+                                                  (cl-harness/src/config:make-default-limits)))
                          :status status
                          :run-agent-state state
                          :transcript-path run-logger-path
@@ -651,16 +728,38 @@ without a develop-state)."
                   . ,(map 'vector
                           (lambda (d)
                             (alist-hash-table
-                             `(("kind" . ,(string-downcase
-                                           (symbol-name
-                                            (cl-harness/src/abstraction:abstraction-decision-kind d))))
-                               ("name" . ,(cl-harness/src/abstraction:abstraction-decision-name d))
-                               ("rationale" . ,(cl-harness/src/abstraction:abstraction-decision-rationale d)))
+                             `(("kind"
+                                . ,(string-downcase
+                                    (symbol-name
+                                     (cl-harness/src/abstraction:abstraction-decision-kind
+                                      d))))
+                               ("name"
+                                . ,(cl-harness/src/abstraction:abstraction-decision-name
+                                    d))
+                               ("rationale"
+                                . ,(cl-harness/src/abstraction:abstraction-decision-rationale
+                                    d)))
                              :test 'equal))
                           abstraction-decisions)))
                :test 'equal)))
-           (%log-develop-event logger :step-end
-                               (%step-event-payload step result))
+           (%log-develop-event
+            logger :step-end
+            (alist-hash-table
+             `(("step_index" . ,(plan-step-index step))
+               ("test_name" . ,(plan-step-test-name step))
+               ("status" . ,(string-downcase (symbol-name status)))
+               ("review_retries" . ,impl-retry-count)
+               ("review_final_outcome"
+                . ,(cond
+                     ((not (%review-enabled-p develop-state)) "n-a")
+                     ((not (eq :passed (%read-status-from-state state)))
+                      "n-a")
+                     (impl-review-passed-p
+                      (if (zerop impl-retry-count)
+                          "passed-first-try"
+                          "passed-after-retry"))
+                     (t "exhausted"))))
+             :test 'equal))
            result))
     (when develop-state
       (setf (develop-state-current-step-index develop-state) nil))))
@@ -676,7 +775,8 @@ without a develop-state)."
                           (explore-fn #'run-explore-agent)
                           develop-state
                           (review-fn #'review-development-artifact)
-                          (max-test-revisions 3))
+                          (max-test-revisions 3)
+                          (max-impl-review-revisions 2))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -696,7 +796,7 @@ events emitted are:
   :develop-start { project_root, system, test_system, plan_size }
   :plan          { steps: [...] }
   :step-start    { step_index, test_name, issue, transcript_path }
-  :step-end      { step_index, test_name, status }
+  :step-end      { step_index, test_name, status, review_retries, review_final_outcome }
   :develop-end   { status, completed_steps, total_steps }
 
 RUN-FN, when overridden, replaces RUN-AGENT for the duration. Tests
@@ -731,7 +831,9 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                                             :develop-state develop-state
                                             :review-fn review-fn
                                             :max-test-revisions
-                                            max-test-revisions)))
+                                            max-test-revisions
+                                            :max-impl-review-revisions
+                                            max-impl-review-revisions)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -955,6 +1057,7 @@ is exhausted. Returns NIL after stamping STATE on budget exhaustion."
                      (test-revision-policy :additive-only)
                      (max-review-replans 2)
                      (max-test-revisions 3)
+                     (max-impl-review-revisions 2)
                      (spec-fn #'generate-develop-spec)
                      (review-fn #'review-development-artifact)
                      (planner-fn #'plan-development)
@@ -1085,7 +1188,8 @@ final DEVELOP-RESULT carries the reason through to callers."
                                    :explore-fn explore-fn
                                    :develop-state state
                                    :review-fn review-fn
-                                   :max-test-revisions max-test-revisions))
+                                   :max-test-revisions max-test-revisions
+                                   :max-impl-review-revisions max-impl-review-revisions))
                    (last-result (car (last round-results))))
               (dolist (r round-results)
                 (develop-state-record-step-result state r))

@@ -1139,3 +1139,423 @@ multi-paragraph branches without spinning up a real run-agent."
            (out (cl-harness/src/orchestrator::%failure-context sr)))
       (ok (not (search "### Last verify error (load-system)" out))
           "empty error text → subheader omitted"))))
+
+(deftest review-implementation-returns-feedback
+  (testing "approved decision returns (values t nil-or-feedback)"
+    (let* ((decision (cl-harness/src/review:make-review-decision
+                      :kind :implementation
+                      :status :approved
+                      :feedback "looks good"))
+           (review-fn (lambda (kind &key &allow-other-keys)
+                        (declare (ignore kind))
+                        decision))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (devstate (cl-harness/src/state:make-develop-state
+                      :goal "g"
+                      :project-root "/tmp"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :review-policy :auto))
+           (step (make-instance 'cl-harness/src/planner:plan-step
+                                :index 0
+                                :issue "x"
+                                :test-name "tx"
+                                :test-source "(deftest tx)")))
+      (setf (cl-harness/src/agent:agent-state-status state) :passed)
+      (multiple-value-bind (approved-p feedback)
+          (cl-harness/src/orchestrator::%review-implementation
+           step state review-fn nil devstate)
+        (ok (eq t approved-p))
+        (ok (or (null feedback) (stringp feedback))))))
+  (testing "rejected decision returns (values nil feedback-string)"
+    (let* ((decision (cl-harness/src/review:make-review-decision
+                      :kind :implementation
+                      :status :rejected
+                      :feedback "rename X to Y"))
+           (review-fn (lambda (kind &key &allow-other-keys)
+                        (declare (ignore kind))
+                        decision))
+           (state (make-instance 'cl-harness/src/agent:agent-state))
+           (devstate (cl-harness/src/state:make-develop-state
+                      :goal "g"
+                      :project-root "/tmp"
+                      :system "demo"
+                      :test-system "demo/tests"
+                      :review-policy :auto))
+           (step (make-instance 'cl-harness/src/planner:plan-step
+                                :index 0
+                                :issue "x"
+                                :test-name "tx"
+                                :test-source "(deftest tx)")))
+      (setf (cl-harness/src/agent:agent-state-status state) :passed)
+      (multiple-value-bind (approved-p feedback)
+          (cl-harness/src/orchestrator::%review-implementation
+           step state review-fn nil devstate)
+        (ok (null approved-p))
+        (ok (equal "rename X to Y" feedback)))))
+  (testing "disabled review returns (values t nil)"
+    (let ((state (make-instance 'cl-harness/src/agent:agent-state))
+          (devstate (cl-harness/src/state:make-develop-state
+                     :goal "g"
+                     :project-root "/tmp"
+                     :system "demo"
+                     :test-system "demo/tests"
+                     :review-policy :none))
+          (step (make-instance 'cl-harness/src/planner:plan-step
+                               :index 0
+                               :issue "x"
+                               :test-name "tx"
+                               :test-source "(deftest tx)")))
+      (setf (cl-harness/src/agent:agent-state-status state) :passed)
+      (multiple-value-bind (approved-p feedback)
+          (cl-harness/src/orchestrator::%review-implementation
+           step state (lambda (k &key &allow-other-keys)
+                        (declare (ignore k))
+                        (error "should not be called"))
+           nil devstate)
+        (ok (eq t approved-p))
+        (ok (null feedback))))))
+
+(deftest enriched-issue-with-review-feedback
+  (let ((step (make-instance 'plan-step
+                             :index 1 :issue "original task body" :test-name "tx"
+                             :test-source "(deftest tx)")))
+    (testing "no extras returns plain issue"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue step nil)))
+        (ok (equal "original task body" result))))
+    (testing "memo only prepends exploration block"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step "memo content")))
+        (ok (search "## Prior exploration (read-only)" result))
+        (ok (search "memo content" result))
+        (ok (search "original task body" result))
+        (ok (not (search "Prior implementation review feedback" result)))))
+    (testing "review-feedback only prepends feedback block"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step nil :review-feedback "rename X to Y")))
+        (ok (search "## Prior implementation review feedback" result))
+        (ok (search "rename X to Y" result))
+        (ok (search "original task body" result))
+        (ok (not (search "Prior exploration" result)))))
+    (testing "both prepends review-feedback BEFORE exploration"
+      (let* ((result (cl-harness/src/orchestrator::%enriched-issue
+                      step "memo content" :review-feedback "rename X to Y"))
+             (fb-pos (search "Prior implementation review feedback" result))
+             (exp-pos (search "Prior exploration" result))
+             (task-pos (search "## Task" result)))
+        (ok (and fb-pos exp-pos task-pos))
+        (ok (< fb-pos exp-pos))
+        (ok (< exp-pos task-pos))))
+    (testing "empty-string review-feedback is treated like NIL"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step nil :review-feedback "")))
+        (ok (equal "original task body" result))))))
+
+(defun %make-fake-passed-state ()
+  "A minimal agent-state with status :passed for inner-loop stub tests."
+  (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+    (setf (cl-harness/src/agent:agent-state-status s) :passed)
+    s))
+
+(deftest impl-review-inner-loop-approves-on-second-attempt
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-inner-loop-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (run-fn-calls (list))
+         (run-fn (lambda (rc provider mcp-client policy logger
+                          &key develop-state &allow-other-keys)
+                   (declare (ignore provider mcp-client policy logger
+                                    develop-state))
+                   (push (cl-harness/src/config:run-config-issue rc)
+                         run-fn-calls)
+                   (%make-fake-passed-state)))
+         (decisions (list (cl-harness/src/review:make-review-decision
+                           :kind :implementation
+                           :status :rejected
+                           :feedback "rename X to Y")
+                          (cl-harness/src/review:make-review-decision
+                           :kind :implementation
+                           :status :approved
+                           :feedback "ok")))
+         (review-fn (lambda (kind &key &allow-other-keys)
+                      (declare (ignore kind))
+                      (pop decisions)))
+         (step (make-instance 'cl-harness/src/planner:plan-step
+                              :index 1
+                              :issue "fix the bug"
+                              :test-name "tx"
+                              :test-source "(deftest tx (ok t))"
+                              :needs-exploration :none))
+         (devstate (cl-harness/src/state:make-develop-state
+                    :goal "g"
+                    :project-root (namestring project-root)
+                    :system "demo"
+                    :test-system "demo/tests"
+                    :review-policy :auto)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-impl-review-revisions 2)))
+             (testing "run-fn called twice (initial + 1 retry)"
+               (ok (= 2 (length run-fn-calls))))
+             (testing "second run-fn invocation issue contains feedback"
+               (let ((second-issue (first run-fn-calls)))
+                 (ok (search "Prior implementation review feedback" second-issue))
+                 (ok (search "rename X to Y" second-issue))))
+             (testing "first run-fn invocation has plain issue"
+               (let ((first-issue (second run-fn-calls)))
+                 (ok (not (search "Prior implementation review feedback"
+                                  first-issue)))))
+             (testing "final status is :passed"
+               (ok (eq :passed
+                       (cl-harness/src/orchestrator:develop-step-result-status
+                        result))))))
+      (when (probe-file test-file) (delete-file test-file)))))
+
+(deftest impl-review-inner-loop-exhausts-budget
+  ;; run-fn always returns :passed; review-fn always rejects.
+  ;; With max-impl-review-revisions 1, we expect 2 run-fn calls (initial +
+  ;; 1 retry) and a final status of :review-rejected.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file
+          (merge-pathnames
+           (format nil "cl-harness-exhaust-~A.lisp" (get-universal-time))
+           project-root))
+         (run-fn-calls 0)
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-calls)
+            (%make-fake-passed-state)))
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (declare (ignore kind))
+            (cl-harness/src/review:make-review-decision
+             :kind :implementation
+             :status :rejected
+             :feedback "never approved")))
+         (step
+          (make-instance 'cl-harness/src/planner:plan-step
+                         :index 1
+                         :issue "x"
+                         :test-name "tx"
+                         :test-source "(deftest tx (ok t))"
+                         :needs-exploration :none))
+         (devstate
+          (cl-harness/src/state:make-develop-state
+           :goal "g"
+           :project-root (namestring project-root)
+           :system "demo"
+           :test-system "demo/tests"
+           :review-policy :auto)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-impl-review-revisions 1)))
+             (testing "run-fn called twice (initial + 1 retry)"
+               (ok (= 2 run-fn-calls)))
+             (testing "final status is :review-rejected"
+               (ok (eq :review-rejected
+                       (cl-harness/src/orchestrator:develop-step-result-status
+                        result))))))
+      (when (probe-file test-file) (delete-file test-file)))))
+
+(deftest impl-review-disabled-when-budget-zero
+  ;; With max-impl-review-revisions 0, the loop exits on the first rejection
+  ;; without retrying. run-fn is called once; status is :review-rejected.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file
+          (merge-pathnames
+           (format nil "cl-harness-budget0-~A.lisp" (get-universal-time))
+           project-root))
+         (run-fn-calls 0)
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-calls)
+            (%make-fake-passed-state)))
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (declare (ignore kind))
+            (cl-harness/src/review:make-review-decision
+             :kind :implementation
+             :status :rejected
+             :feedback "rejected")))
+         (step
+          (make-instance 'cl-harness/src/planner:plan-step
+                         :index 1
+                         :issue "x"
+                         :test-name "tx"
+                         :test-source "(deftest tx (ok t))"
+                         :needs-exploration :none))
+         (devstate
+          (cl-harness/src/state:make-develop-state
+           :goal "g"
+           :project-root (namestring project-root)
+           :system "demo"
+           :test-system "demo/tests"
+           :review-policy :auto)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-impl-review-revisions 0)))
+             (testing "run-fn called once (no retries)"
+               (ok (= 1 run-fn-calls)))
+             (testing "final status is :review-rejected"
+               (ok (eq :review-rejected
+                       (cl-harness/src/orchestrator:develop-step-result-status
+                        result))))))
+      (when (probe-file test-file) (delete-file test-file)))))
+
+(deftest impl-review-disabled-when-policy-none
+  ;; With review-policy :none, the loop never calls review-fn and returns
+  ;; :passed directly after run-fn succeeds.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file
+          (merge-pathnames
+           (format nil "cl-harness-policy-none-~A.lisp" (get-universal-time))
+           project-root))
+         (run-fn-calls 0)
+         (review-fn-calls 0)
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-calls)
+            (%make-fake-passed-state)))
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (declare (ignore kind))
+            (incf review-fn-calls)
+            (cl-harness/src/review:make-review-decision
+             :kind :implementation
+             :status :approved
+             :feedback "")))
+         (step
+          (make-instance 'cl-harness/src/planner:plan-step
+                         :index 1
+                         :issue "x"
+                         :test-name "tx"
+                         :test-source "(deftest tx (ok t))"
+                         :needs-exploration :none))
+         (devstate
+          (cl-harness/src/state:make-develop-state
+           :goal "g"
+           :project-root (namestring project-root)
+           :system "demo"
+           :test-system "demo/tests"
+           :review-policy :none)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-impl-review-revisions 2)))
+             (testing "run-fn called once"
+               (ok (= 1 run-fn-calls)))
+             (testing "review-fn never called (policy :none short-circuits)"
+               (ok (= 0 review-fn-calls)))
+             (testing "final status is :passed"
+               (ok (eq :passed
+                       (cl-harness/src/orchestrator:develop-step-result-status
+                        result))))))
+      (when (probe-file test-file) (delete-file test-file)))))
+
+(deftest impl-review-respects-test-change-priority
+  ;; run-fn returns :test-change-request on first call, :passed on second.
+  ;; review-fn approves both test-change and implementation. The
+  ;; test-change branch must fire FIRST, then implementation review.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file
+          (merge-pathnames
+           (format nil "cl-harness-priority-~A.lisp" (get-universal-time))
+           project-root))
+         (run-fn-call-count 0)
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-call-count)
+            (case run-fn-call-count
+              (1
+               (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+                 (setf (cl-harness/src/agent:agent-state-status s)
+                       :test-change-request)
+                 (setf (cl-harness/src/agent:agent-state-final-action s)
+                       (make-instance 'cl-harness/src/action:agent-action
+                                      :type :test-change-request
+                                      :test-source "(deftest extra-tx (ok t))"
+                                      :criteria nil
+                                      :rationale "need a new test"))
+                 s))
+              (otherwise (%make-fake-passed-state)))))
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (cl-harness/src/review:make-review-decision
+             :kind kind
+             :status :approved
+             :feedback "")))
+         (step
+          (make-instance 'cl-harness/src/planner:plan-step
+                         :index 1
+                         :issue "x"
+                         :test-name "tx"
+                         :test-source "(deftest tx (ok t))"
+                         :needs-exploration :none))
+         (devstate
+          (cl-harness/src/state:make-develop-state
+           :goal "g"
+           :project-root (namestring project-root)
+           :system "demo"
+           :test-system "demo/tests"
+           :review-policy :auto)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-impl-review-revisions 2)))
+             (testing "run-fn called twice (test-change + final)"
+               (ok (= 2 run-fn-call-count)))
+             (testing "final status :passed"
+               (ok (eq :passed
+                       (cl-harness/src/orchestrator:develop-step-result-status
+                        result))))
+             (testing "test file extended with extra deftest"
+               (let ((content (uiop:read-file-string test-file)))
+                 (ok (search "(deftest extra-tx" content))))))
+      (when (probe-file test-file) (delete-file test-file)))))

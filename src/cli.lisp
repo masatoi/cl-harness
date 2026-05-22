@@ -7,7 +7,16 @@
 (defpackage #:cl-harness/src/cli
   (:use #:cl)
   (:import-from #:cl-harness/src/config
-                #:make-run-config)
+                #:make-run-config
+                #:run-limits
+                #:make-default-limits
+                #:run-limits-max-turns
+                #:run-limits-max-tool-calls
+                #:run-limits-max-patches
+                #:run-limits-max-read-files
+                #:run-limits-max-repl-evals
+                #:run-limits-max-wall-clock-seconds
+                #:run-limits-max-action-parse-errors)
   (:import-from #:cl-harness/src/log
                 #:open-run-logger
                 #:close-run-logger)
@@ -320,36 +329,17 @@ trivial runs."
     (when log-path
       (format s "~%## Logs~%- ~A~%" log-path))))
 
-(defun develop (&key goal project-root system test-system test-file
-                     (condition :generic-mcp)
-                     mcp-url mcp-stdio mcp-command
-                     base-url api-key model
-                     (temperature 0.0) max-tokens
-                     reasoning-effort extra-body
-                     (retry-p t)
-                     (max-replans 3)
-                     ;; Per-step run-limits overrides. Greenfield work
-                     ;; often needs a higher patch budget than the
-                     ;; conservative MVP defaults (3 patches / 20 turns).
-                     max-patches max-turns max-tool-calls
-                     max-wall-clock-seconds
-                     run-limits
-                     ;; v0.4 Phase 2: project inventory snapshot.
-                     ;; When INVENTORY is supplied verbatim it's
-                     ;; passed through as-is. When :GATHER-INVENTORY-P
-                     ;; is true (default), the harness builds one
-                     ;; itself from PROJECT-ROOT.
-                     project-inventory
-                     (gather-inventory-p t)
-                     (inventory-byte-budget 5000)
-                     ;; v0.4 Phase 6: mode selector.
-                     (mode :mixed)
-                     ;; Goal-backed review gates.
-                     (review-policy :auto)
-                     (test-revision-policy :additive-only)
-                     (max-review-replans 2)
-                     (max-test-revisions 3)
-                     log-path)
+(defun develop
+       (
+        &key goal project-root system test-system test-file
+        (condition :generic-mcp) mcp-url mcp-stdio mcp-command base-url api-key
+        model (temperature 0.0) max-tokens reasoning-effort extra-body
+        (retry-p t) (max-replans 3) max-patches max-turns max-tool-calls
+        max-wall-clock-seconds run-limits project-inventory
+        (gather-inventory-p t) (inventory-byte-budget 5000) (mode :mixed)
+        (review-policy :auto) (test-revision-policy :additive-only)
+        (max-review-replans 2) (max-test-revisions 3)
+        (max-impl-review-revisions 2) log-path)
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
 
@@ -375,91 +365,71 @@ Returns the populated DEVELOP-RESULT. Caller is responsible for
 inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
   (check-type goal string)
   (let* ((effective-base-url
-          (or base-url
-              (uiop:getenv "CL_HARNESS_LLM_BASE_URL")
-              (error "develop: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
+          (or base-url (uiop/os:getenv "CL_HARNESS_LLM_BASE_URL")
+              (error
+               "develop: :base-url or CL_HARNESS_LLM_BASE_URL is required")))
          (effective-api-key
-          (or api-key
-              (uiop:getenv "CL_HARNESS_LLM_API_KEY")
-              (error "develop: :api-key or CL_HARNESS_LLM_API_KEY is required")))
+          (or api-key (uiop/os:getenv "CL_HARNESS_LLM_API_KEY")
+              (error
+               "develop: :api-key or CL_HARNESS_LLM_API_KEY is required")))
          (effective-model
-          (or model
-              (uiop:getenv "CL_HARNESS_LLM_MODEL")
+          (or model (uiop/os:getenv "CL_HARNESS_LLM_MODEL")
               (error "develop: :model or CL_HARNESS_LLM_MODEL is required")))
-         (provider (make-openai-provider
-                    :base-url effective-base-url
-                    :api-key effective-api-key
-                    :model effective-model
-                    :temperature temperature
-                    :max-tokens max-tokens
-                    :reasoning-effort reasoning-effort
-                    :extra-body extra-body
-                    :retry-p retry-p))
-         (client (resolve-and-build-mcp-client
-                  :mcp-url mcp-url
-                  :mcp-stdio mcp-stdio
-                  :mcp-command mcp-command
-                  :client-name "cl-harness-develop"
-                  :client-version "0.4.0"))
-         (path (or log-path
-                   (merge-pathnames
-                    (format nil "cl-harness-develop-~A.jsonl"
-                            (get-universal-time))
-                    (uiop:temporary-directory)))))
+         (provider
+          (make-openai-provider :base-url effective-base-url :api-key
+           effective-api-key :model effective-model :temperature temperature
+           :max-tokens max-tokens :reasoning-effort reasoning-effort
+           :extra-body extra-body :retry-p retry-p))
+         (client
+          (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
+           :mcp-command mcp-command :client-name "cl-harness-develop"
+           :client-version "0.4.0"))
+         (path
+          (or log-path
+              (merge-pathnames
+               (format nil "cl-harness-develop-~A.jsonl" (get-universal-time))
+               (uiop/stream:temporary-directory)))))
     (let ((effective-limits
            (or run-limits
-               (when (or max-patches max-turns max-tool-calls
-                         max-wall-clock-seconds)
-                 (let ((d (cl-harness/src/config:make-default-limits)))
-                   (make-instance
-                    'cl-harness/src/config:run-limits
-                    :max-turns
-                    (or max-turns
-                        (cl-harness/src/config:run-limits-max-turns d))
-                    :max-tool-calls
-                    (or max-tool-calls
-                        (cl-harness/src/config:run-limits-max-tool-calls d))
-                    :max-patches
-                    (or max-patches
-                        (cl-harness/src/config:run-limits-max-patches d))
-                    :max-read-files
-                    (cl-harness/src/config:run-limits-max-read-files d)
-                    :max-repl-evals
-                    (cl-harness/src/config:run-limits-max-repl-evals d)
-                    :max-wall-clock-seconds
-                    (or max-wall-clock-seconds
-                        (cl-harness/src/config:run-limits-max-wall-clock-seconds d))
-                    :max-action-parse-errors
-                    (cl-harness/src/config:run-limits-max-action-parse-errors d)))))))
+               (when
+                   (or max-patches max-turns max-tool-calls
+                       max-wall-clock-seconds)
+                 (let ((d (make-default-limits)))
+                   (make-instance 'run-limits :max-turns
+                                  (or max-turns (run-limits-max-turns d))
+                                  :max-tool-calls
+                                  (or max-tool-calls
+                                      (run-limits-max-tool-calls d))
+                                  :max-patches
+                                  (or max-patches (run-limits-max-patches d))
+                                  :max-read-files (run-limits-max-read-files d)
+                                  :max-repl-evals (run-limits-max-repl-evals d)
+                                  :max-wall-clock-seconds
+                                  (or max-wall-clock-seconds
+                                      (run-limits-max-wall-clock-seconds d))
+                                  :max-action-parse-errors
+                                  (run-limits-max-action-parse-errors d)))))))
       (let ((effective-inventory
              (or project-inventory
                  (when gather-inventory-p
                    (handler-case
-                       (gather-project-inventory
-                        :project-root project-root
-                        :system system
-                        :test-system test-system
-                        :byte-budget inventory-byte-budget)
-                     (error () nil))))))
+                    (gather-project-inventory :project-root project-root
+                     :system system :test-system test-system :byte-budget
+                     inventory-byte-budget)
+                    (error nil nil))))))
         (unwind-protect
-             (let ((result (cl-harness/src/orchestrator:develop
-                            goal
-                            :project-root project-root
-                            :system system
-                            :test-system test-system
-                            :test-file test-file
-                            :provider provider
-                            :mcp-client client
-                            :condition condition
-                            :run-limits effective-limits
-                            :project-inventory effective-inventory
-                            :mode mode
-                            :review-policy review-policy
-                            :test-revision-policy test-revision-policy
-                            :max-review-replans max-review-replans
-                            :max-test-revisions max-test-revisions
-                            :max-replans max-replans
-                            :log-path path)))
-               (format t "~A" (format-develop-report result :log-path path))
-               result)
+            (let ((result
+                   (cl-harness/src/orchestrator:develop
+                    goal :project-root project-root :system system
+                    :test-system test-system :test-file test-file :provider
+                    provider :mcp-client client :condition condition
+                    :run-limits effective-limits :project-inventory
+                    effective-inventory :mode mode :review-policy review-policy
+                    :test-revision-policy test-revision-policy
+                    :max-review-replans max-review-replans :max-test-revisions
+                    max-test-revisions :max-replans max-replans
+                    :max-impl-review-revisions max-impl-review-revisions
+                    :log-path path)))
+              (format t "~A" (format-develop-report result :log-path path))
+              result)
           (close-mcp-client client))))))

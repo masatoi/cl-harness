@@ -296,7 +296,8 @@ cl-harness develop \
   --test-system demo/tests \
   --test-file /path/to/your/asdf/project/tests/main-test.lisp \
   --mode mixed \
-  --max-replans 3
+  --max-replans 3 \
+  --max-impl-review-revisions 2
 ```
 
 ```lisp
@@ -330,6 +331,14 @@ Terminal status:
 - `:limit-exhausted` (`limit-hit :max-replans`) — replan budget spent
 - `:stuck` (`limit-hit :no-progress`) — replanner returned the same
   failing test twice in a row
+
+When an LLM review is enabled (default), `develop` runs an
+implementation-review gate after each step's verification passes. If
+the review rejects, `develop` re-runs the same step with the review
+feedback prepended to the issue string, up to
+`--max-impl-review-revisions` rounds (default 2). On budget
+exhaustion the step is marked `:review-rejected` and the outer
+replan loop fires as usual.
 
 Develop-level JSONL transcript at `--log-path` records
 `develop-start / plan / step-start / step-end / abstraction-decision /

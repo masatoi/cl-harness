@@ -213,84 +213,73 @@ NIL or empty string defaults to (:generic-mcp)."
     (otherwise 2)))
 
 (defun develop-handler (cmd)
-  (let* ((result (develop
-                  :goal (clingon:getopt cmd :goal)
-                  :project-root (clingon:getopt cmd :project-root)
-                  :system (clingon:getopt cmd :system)
-                  :test-system (clingon:getopt cmd :test-system)
-                  :test-file (clingon:getopt cmd :test-file)
-                  :condition (parse-condition (clingon:getopt cmd :condition))
-                  :mcp-url (clingon:getopt cmd :mcp-url)
-                  :mcp-stdio (clingon:getopt cmd :mcp-stdio)
-                  :mcp-command (clingon:getopt cmd :mcp-command)
-                  :base-url (clingon:getopt cmd :base-url)
-                  :api-key (clingon:getopt cmd :api-key)
-                  :model (clingon:getopt cmd :model)
-                  :temperature (clingon:getopt cmd :temperature)
-                  :max-tokens (clingon:getopt cmd :max-tokens)
-                  :reasoning-effort (clingon:getopt cmd :reasoning-effort)
-                  :max-replans (clingon:getopt cmd :max-replans)
-                  :mode (parse-mode (clingon:getopt cmd :mode))
-                  :log-path (clingon:getopt cmd :log-path)))
+  (let* ((result
+          (develop :goal (clingon:getopt cmd :goal) :project-root
+           (clingon:getopt cmd :project-root) :system (clingon:getopt cmd :system) :test-system
+           (clingon:getopt cmd :test-system) :test-file (clingon:getopt cmd :test-file)
+           :condition (parse-condition (clingon:getopt cmd :condition)) :mcp-url
+           (clingon:getopt cmd :mcp-url) :mcp-stdio (clingon:getopt cmd :mcp-stdio)
+           :mcp-command (clingon:getopt cmd :mcp-command) :base-url
+           (clingon:getopt cmd :base-url) :api-key (clingon:getopt cmd :api-key) :model
+           (clingon:getopt cmd :model) :temperature (clingon:getopt cmd :temperature)
+           :max-tokens (clingon:getopt cmd :max-tokens) :reasoning-effort
+           (clingon:getopt cmd :reasoning-effort) :max-replans
+           (clingon:getopt cmd :max-replans) :max-impl-review-revisions
+           (clingon:getopt cmd :max-impl-review-revisions) :mode
+           (parse-mode (clingon:getopt cmd :mode)) :log-path (clingon:getopt cmd :log-path)))
          (status (develop-result-status result)))
-    (uiop:quit (develop-status-to-exit-code status))))
+    (uiop/image:quit (develop-status-to-exit-code status))))
 
 (defun develop-options ()
   (list
    (clingon:make-option :string :description "natural-language goal for the planner"
-                        :short-name #\g :long-name "goal"
-                        :required t :key :goal)
+    :short-name #\g :long-name "goal" :required t :key :goal)
    (clingon:make-option :string :description "absolute path to the ASDF project"
-                        :short-name #\p :long-name "project-root"
-                        :required t :key :project-root)
-   (clingon:make-option :string :description "ASDF system name"
-                        :short-name #\s :long-name "system"
-                        :required t :key :system)
-   (clingon:make-option :string :description "ASDF test-system name"
-                        :short-name #\t :long-name "test-system"
-                        :required t :key :test-system)
-   (clingon:make-option :string :description "rove file the planner-authored deftest forms get appended to"
-                        :short-name #\f :long-name "test-file"
-                        :required t :key :test-file)
-   (clingon:make-option :string :description "tool-policy mode (file-only|generic-mcp|runtime-native)"
-                        :long-name "condition"
-                        :initial-value "generic-mcp" :key :condition)
-   (clingon:make-option :string :long-name "mcp-url"
-                        :description "talk to a remote cl-mcp HTTP endpoint instead of spawning one (env: $CL_HARNESS_MCP_URL)"
-                        :key :mcp-url)
-   (clingon:make-option :flag :long-name "mcp-stdio"
-                        :description "force the built-in stdio launch command (default behaviour)"
-                        :key :mcp-stdio)
-   (clingon:make-option :string :long-name "mcp-command"
-                        :description "explicit shell-style command to spawn cl-mcp on stdio (env: $CL_HARNESS_MCP_COMMAND)"
-                        :key :mcp-command)
-   (clingon:make-option :string :long-name "base-url"
-                        :description "LLM endpoint (default $CL_HARNESS_LLM_BASE_URL)"
-                        :key :base-url)
-   (clingon:make-option :string :long-name "api-key"
-                        :description "LLM API key (default $CL_HARNESS_LLM_API_KEY)"
-                        :key :api-key)
-   (clingon:make-option :string :long-name "model"
-                        :description "LLM model name (default $CL_HARNESS_LLM_MODEL)"
-                        :key :model)
-   (clingon:make-option :integer :long-name "max-tokens"
-                        :description "max_tokens per LLM call (default: API default; omitted unless specified)"
-                        :key :max-tokens)
-   (clingon:make-option :string :long-name "temperature"
-                        :description "LLM temperature as a string (default 0.0)"
-                        :initial-value "0.0" :key :temperature)
-   (clingon:make-option :string :long-name "reasoning-effort"
-                        :description "low|medium|high (only for reasoning models)"
-                        :key :reasoning-effort)
-   (clingon:make-option :integer :long-name "max-replans"
-                        :description "maximum replan rounds before :limit-exhausted (default 3)"
-                        :initial-value 3 :key :max-replans)
-   (clingon:make-option :string :long-name "mode"
-                        :description "development mode (top-down|bottom-up|mixed) — implement-first, explore-first, or planner-driven (default mixed)"
-                        :initial-value "mixed" :key :mode)
-   (clingon:make-option :string :long-name "log-path"
-                        :description "develop-level JSONL transcript path (default tmpdir)"
-                        :key :log-path)))
+    :short-name #\p :long-name "project-root" :required t :key :project-root)
+   (clingon:make-option :string :description "ASDF system name" :short-name #\s
+    :long-name "system" :required t :key :system)
+   (clingon:make-option :string :description "ASDF test-system name" :short-name #\t
+    :long-name "test-system" :required t :key :test-system)
+   (clingon:make-option :string :description
+    "rove file the planner-authored deftest forms get appended to" :short-name
+    #\f :long-name "test-file" :required t :key :test-file)
+   (clingon:make-option :string :description
+    "tool-policy mode (file-only|generic-mcp|runtime-native)" :long-name
+    "condition" :initial-value "generic-mcp" :key :condition)
+   (clingon:make-option :string :long-name "mcp-url" :description
+    "talk to a remote cl-mcp HTTP endpoint instead of spawning one (env: $CL_HARNESS_MCP_URL)"
+    :key :mcp-url)
+   (clingon:make-option :flag :long-name "mcp-stdio" :description
+    "force the built-in stdio launch command (default behaviour)" :key
+    :mcp-stdio)
+   (clingon:make-option :string :long-name "mcp-command" :description
+    "explicit shell-style command to spawn cl-mcp on stdio (env: $CL_HARNESS_MCP_COMMAND)"
+    :key :mcp-command)
+   (clingon:make-option :string :long-name "base-url" :description
+    "LLM endpoint (default $CL_HARNESS_LLM_BASE_URL)" :key :base-url)
+   (clingon:make-option :string :long-name "api-key" :description
+    "LLM API key (default $CL_HARNESS_LLM_API_KEY)" :key :api-key)
+   (clingon:make-option :string :long-name "model" :description
+    "LLM model name (default $CL_HARNESS_LLM_MODEL)" :key :model)
+   (clingon:make-option :integer :long-name "max-tokens" :description
+    "max_tokens per LLM call (default: API default; omitted unless specified)"
+    :key :max-tokens)
+   (clingon:make-option :string :long-name "temperature" :description
+    "LLM temperature as a string (default 0.0)" :initial-value "0.0" :key
+    :temperature)
+   (clingon:make-option :string :long-name "reasoning-effort" :description
+    "low|medium|high (only for reasoning models)" :key :reasoning-effort)
+   (clingon:make-option :integer :long-name "max-replans" :description
+    "maximum replan rounds before :limit-exhausted (default 3)" :initial-value
+    3 :key :max-replans)
+   (clingon:make-option :integer :long-name "max-impl-review-revisions" :description
+    "maximum implementation-review retry rounds before :review-rejected (default 2)"
+    :initial-value 2 :key :max-impl-review-revisions)
+   (clingon:make-option :string :long-name "mode" :description
+    "development mode (top-down|bottom-up|mixed) — implement-first, explore-first, or planner-driven (default mixed)"
+    :initial-value "mixed" :key :mode)
+   (clingon:make-option :string :long-name "log-path" :description
+    "develop-level JSONL transcript path (default tmpdir)" :key :log-path)))
 
 (defun develop-command ()
   (clingon:make-command
