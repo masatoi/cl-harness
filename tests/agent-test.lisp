@@ -1727,3 +1727,30 @@ success result with one text content block."
       (ok payload)
       (ok (= 1 (length payload)))
       (ok (equal "demo-test" (gethash "test_name" (elt payload 0)))))))
+
+(deftest verify-event-payload-includes-failed-tests
+  (testing "passed verify has no failed_tests key"
+    (let* ((vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :passed
+                              :passed 3
+                              :failed 0
+                              :test-result nil))
+           (payload (cl-harness/src/agent:verify-event-payload 6 vr)))
+      (ok (not (assoc "failed_tests" payload :test #'equal)))))
+  (testing "failed verify includes failed_tests array"
+    (let* ((ft (alexandria:plist-hash-table
+                `("test_name" "t1" "reason" "boom")
+                :test 'equal))
+           (tr (alexandria:plist-hash-table
+                `("failed_tests" ,(vector ft))
+                :test 'equal))
+           (vr (make-instance 'cl-harness/src/verify:verify-result
+                              :status :test-failed
+                              :passed 0
+                              :failed 1
+                              :test-result tr))
+           (payload (cl-harness/src/agent:verify-event-payload 6 vr))
+           (entry (assoc "failed_tests" payload :test #'equal)))
+      (ok entry)
+      (ok (= 1 (length (cdr entry))))
+      (ok (equal "t1" (gethash "test_name" (elt (cdr entry) 0)))))))

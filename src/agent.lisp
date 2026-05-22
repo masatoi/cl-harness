@@ -116,7 +116,8 @@
            #:format-final-report
            #:summarize-tool-result
            #:summarize-tool-by-key
-           #:+source-mutating-tools+))
+           #:+source-mutating-tools+
+           #:verify-event-payload))
 
 (in-package #:cl-harness/src/agent)
 
@@ -922,11 +923,19 @@ test-runner-core ride along automatically."
       (t failed))))
 
 (defun verify-event-payload (turn verify-result)
-  "Return an alist describing VERIFY-RESULT for the JSONL transcript."
-  `(("turn" . ,turn)
-    ("status" . ,(string-downcase (symbol-name (verify-result-status verify-result))))
-    ("passed" . ,(or (verify-result-passed verify-result) 0))
-    ("failed" . ,(or (verify-result-failed verify-result) 0))))
+  "Return an alist describing VERIFY-RESULT for the JSONL transcript.
+When VERIFY-RESULT has failed tests, the alist also carries a
+\"failed_tests\" entry (vector of per-test hash-tables, see
+%VERIFY-FAILED-TESTS-PAYLOAD). On pass the field is omitted."
+  (let ((base `(("turn" . ,turn)
+                ("status" . ,(string-downcase
+                              (symbol-name (verify-result-status verify-result))))
+                ("passed" . ,(or (verify-result-passed verify-result) 0))
+                ("failed" . ,(or (verify-result-failed verify-result) 0))))
+        (failed (%verify-failed-tests-payload verify-result)))
+    (if failed
+        (append base `(("failed_tests" . ,failed)))
+        base)))
 
 (defun action-event-payload (turn action)
   "Return an alist describing ACTION for the JSONL transcript."
