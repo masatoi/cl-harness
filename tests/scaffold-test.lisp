@@ -177,3 +177,16 @@
               "1 existing file")
           (ok (= 2 (length (scaffold-partial-state-missing raised)))
               "2 missing files"))))))
+
+(deftest force-overrides-partial-state
+  (let ((tmp (%tmp-dir)))
+    (let ((asd-path (merge-pathnames "demo.asd" tmp)))
+      (ensure-directories-exist asd-path)
+      (with-open-file (s asd-path :direction :output) (write-string "stub" s))
+      (let ((result (scaffold :project-root tmp :system "demo" :force t)))
+        (testing ":written status with force"
+          (ok (eq :written (scaffold-result-status result))))
+        (testing "asd content was overwritten"
+          (let ((asd (%file-full-content asd-path)))
+            (ok (search ":class :package-inferred-system" asd))
+            (ok (not (search "stub" asd)))))))))
