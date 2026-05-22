@@ -775,7 +775,8 @@ exit via UNWIND-PROTECT."
                           (explore-fn #'run-explore-agent)
                           develop-state
                           (review-fn #'review-development-artifact)
-                          (max-test-revisions 3))
+                          (max-test-revisions 3)
+                          (max-impl-review-revisions 2))
   "Run PLAN (list of PLAN-STEP) sequentially, stopping at the first
 non-:passed outcome.
 
@@ -830,7 +831,9 @@ Returns a list of DEVELOP-STEP-RESULT in execution order."
                                             :develop-state develop-state
                                             :review-fn review-fn
                                             :max-test-revisions
-                                            max-test-revisions)))
+                                            max-test-revisions
+                                            :max-impl-review-revisions
+                                            max-impl-review-revisions)))
                  (push result results)
                  (unless (eq :passed (develop-step-result-status result))
                    (return-from run-loop)))))
@@ -1054,6 +1057,7 @@ is exhausted. Returns NIL after stamping STATE on budget exhaustion."
                      (test-revision-policy :additive-only)
                      (max-review-replans 2)
                      (max-test-revisions 3)
+                     (max-impl-review-revisions 2)
                      (spec-fn #'generate-develop-spec)
                      (review-fn #'review-development-artifact)
                      (planner-fn #'plan-development)
@@ -1184,7 +1188,8 @@ final DEVELOP-RESULT carries the reason through to callers."
                                    :explore-fn explore-fn
                                    :develop-state state
                                    :review-fn review-fn
-                                   :max-test-revisions max-test-revisions))
+                                   :max-test-revisions max-test-revisions
+                                   :max-impl-review-revisions max-impl-review-revisions))
                    (last-result (car (last round-results))))
               (dolist (r round-results)
                 (develop-state-record-step-result state r))
