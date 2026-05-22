@@ -118,9 +118,11 @@
         (ok (null missing))))))
 
 (defun %file-content (path)
+  "Return the first line of PATH (used for one-line content checks)."
   (with-open-file (in path) (read-line in nil "")))
 
 (defun %file-full-content (path)
+  "Return the full content of PATH as one string."
   (with-output-to-string (out)
     (with-open-file (in path)
       (loop for line = (read-line in nil) while line

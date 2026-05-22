@@ -218,7 +218,7 @@ docs/superpowers/specs/2026-05-22-scaffold-command-design.md."
     (ensure-directories-exist root)
     (multiple-value-bind (state existing missing)
         (%detect-state root system tf)
-      (declare (ignore missing))
+
       (cond
         ((eq state :complete)
          (make-instance 'scaffold-result :status :already-present))
@@ -233,5 +233,6 @@ docs/superpowers/specs/2026-05-22-scaffold-command-design.md."
                 :missing missing
                 :message
                 (format nil
-                        "refusing to scaffold ~A: ~D file(s) already exist; pass :FORCE T to overwrite"
+                        "refusing to scaffold ~A: ~D file(s) already exist; ~
+                             pass :FORCE T to overwrite"
                         root (length existing))))))))
