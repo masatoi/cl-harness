@@ -1015,7 +1015,30 @@ fixture (102, 104) で recurring pattern なので effect 範囲広い。
 
 **コスト**: small + half-day（diff 比較 + event emit）。
 
-### 38. agent prompt に「test の全 symbol 1 turn 内」ヒント追加
+### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 (2026-05-24)
+
+**Status**: ✅ **実装済** — `src/agent.lisp` の `system-prompt` 関数
+に新セクション "Patching guidance" を追加（全 policy mode で共通）:
+
+> Before issuing a patch, READ the failing test and enumerate every
+> symbol it references (functions, classes, accessors, slots,
+> constructors). If the test exercises multiple symbols (e.g. `make-x` +
+> an accessor, defclass + its constructor, `cache-put` + `cache-get`),
+> implement ALL of them in the SAME patch rather than adding them one
+> at a time. This avoids `patch -> verify-fail with NEW missing symbol
+> -> patch -> verify` cycles that burn turn budget without making
+> progress.
+
+`tests/agent-test.lisp` に `system-prompt-includes-patching-guidance`
+test 追加 (全 3 policy mode で wording を pin)。461 passed.
+
+実 effect 確認は別 bench で（102 / 104 が candidate）。
+
+---
+
+**元の archive 内容（参考）**:
+
+### 38-archive. agent prompt に「test の全 symbol 1 turn 内」ヒント追加
 
 **Source**: bench-cycle 2026-05-24, fixture(s) 104-cache-simple
 **Axis**: implementation

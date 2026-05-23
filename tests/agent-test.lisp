@@ -1649,6 +1649,19 @@ success result with one text content block."
     (ok (search "code-find-references" prompt))
     (ok (search "vocabulary" prompt))))
 
+(deftest system-prompt-includes-patching-guidance
+  ;; Backlog #38: across all policy modes the system prompt must
+  ;; nudge the agent to enumerate test symbols and add them in a
+  ;; single patch instead of one-at-a-time. Pins the wording so a
+  ;; future refactor doesn't silently drop the hint.
+  (dolist (mode '(:runtime-native :generic-mcp :file-only))
+    (let* ((policy (make-tool-policy mode))
+           (prompt (cl-harness/src/agent::system-prompt policy)))
+      (testing (format nil "policy mode ~A" mode)
+        (ok (search "Patching guidance" prompt))
+        (ok (search "enumerate every" prompt))
+        (ok (search "in the SAME patch" prompt))))))
+
 (deftest agent-state-reason-defaults-to-nil
   ;; Phase: transport failure-mode coverage.
   ;; The new :reason slot is the failure-mode classifier surface.
