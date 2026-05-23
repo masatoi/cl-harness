@@ -114,11 +114,13 @@ Returns the populated AGENT-STATE."
           (or model (uiop/os:getenv "CL_HARNESS_LLM_MODEL")
               (error "fix: :model or CL_HARNESS_LLM_MODEL is required")))
          (provider
-          (make-openai-provider :base-url effective-base-url :api-key
-           effective-api-key :model effective-model :temperature temperature
-           :max-tokens max-tokens :reasoning-effort reasoning-effort
-           :extra-body extra-body :retry-p retry-p
-           :read-timeout read-timeout))
+          (apply #'make-openai-provider
+                 :base-url effective-base-url :api-key
+                 effective-api-key :model effective-model :temperature temperature
+                 :reasoning-effort reasoning-effort
+                 :extra-body extra-body :retry-p retry-p
+                 :read-timeout read-timeout
+                 (when max-tokens (list :max-tokens max-tokens))))
          (client
           (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
            :mcp-command mcp-command :client-name "cl-harness" :client-version
@@ -175,11 +177,13 @@ report plus per-task detail to *STANDARD-OUTPUT*."
           (or model (uiop/os:getenv "CL_HARNESS_LLM_MODEL")
               (error "bench: :model or CL_HARNESS_LLM_MODEL is required")))
          (provider
-          (make-openai-provider :base-url effective-base-url :api-key
-           effective-api-key :model effective-model :temperature temperature
-           :max-tokens max-tokens :reasoning-effort reasoning-effort
-           :extra-body extra-body :retry-p retry-p
-           :read-timeout read-timeout))
+          (apply #'make-openai-provider
+                 :base-url effective-base-url :api-key
+                 effective-api-key :model effective-model :temperature temperature
+                 :reasoning-effort reasoning-effort
+                 :extra-body extra-body :retry-p retry-p
+                 :read-timeout read-timeout
+                 (when max-tokens (list :max-tokens max-tokens))))
          (client
           (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
            :mcp-command mcp-command :client-name "cl-harness-bench"
@@ -368,11 +372,13 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
           (or model (uiop/os:getenv "CL_HARNESS_LLM_MODEL")
               (error "develop: :model or CL_HARNESS_LLM_MODEL is required")))
          (provider
-          (make-openai-provider :base-url effective-base-url :api-key
-           effective-api-key :model effective-model :temperature temperature
-           :max-tokens max-tokens :reasoning-effort reasoning-effort
-           :extra-body extra-body :retry-p retry-p
-           :read-timeout read-timeout))
+          (apply #'make-openai-provider
+                 :base-url effective-base-url :api-key
+                 effective-api-key :model effective-model :temperature temperature
+                 :reasoning-effort reasoning-effort
+                 :extra-body extra-body :retry-p retry-p
+                 :read-timeout read-timeout
+                 (when max-tokens (list :max-tokens max-tokens))))
          (client
           (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
            :mcp-command mcp-command :client-name "cl-harness-develop"
