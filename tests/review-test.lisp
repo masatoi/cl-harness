@@ -59,6 +59,19 @@
     (ok (typep spec 'develop-spec))
     (ok (equal '("Add double.") (develop-spec-acceptance-criteria spec)))))
 
+(deftest parse-develop-spec-accepts-object-wrapped-entries
+  ;; Some reasoning models (e.g. gpt-oss-20b on Groq) return each list entry
+  ;; wrapped in a single-key object like {"criterion":"..."}. The parser must
+  ;; coerce these back to plain strings rather than erroring.
+  (let* ((raw "{\"acceptance_criteria\":[{\"criterion\":\"A class FOO exists.\"},{\"criterion\":\"FOO has slot X.\"}],\"non_goals\":[{\"non_goal\":\"thread safety\"}],\"risks\":[{\"risk\":\"race condition\"}]}")
+         (spec (cl-harness/src/review::%parse-develop-spec "g" raw)))
+    (ok (equal '("A class FOO exists." "FOO has slot X.")
+               (develop-spec-acceptance-criteria spec)))
+    (ok (equal '("thread safety")
+               (cl-harness/src/review:develop-spec-non-goals spec)))
+    (ok (equal '("race condition")
+               (cl-harness/src/review:develop-spec-risks spec)))))
+
 (deftest review-development-artifact-approves-without-provider
   (let ((decision (review-development-artifact
                    :plan

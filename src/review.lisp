@@ -141,17 +141,35 @@
               (subseq inner (1+ nl))
               inner)))))
 
+(defun %coerce-spec-entry (item field raw)
+  "Return ITEM as a string. Accept either a plain string or a single-string
+hash-table value (some reasoning models wrap each list entry in
+`{\"criterion\": \"...\"}` etc.). Signal REVIEW-ERROR otherwise."
+  (cond
+    ((stringp item) item)
+    ((hash-table-p item)
+     (let ((strings '()))
+       (maphash (lambda (k v)
+                  (declare (ignore k))
+                  (when (stringp v) (push v strings)))
+                item)
+       (cond
+         ((= 1 (length strings)) (first strings))
+         (t (error 'review-error
+                   :message (format nil
+                                    "~A entries must be strings (found object with ~D string value~:P)"
+                                    field (length strings))
+                   :raw raw)))))
+    (t (error 'review-error
+              :message (format nil "~A entries must be strings" field)
+              :raw raw))))
+
 (defun %json-list-of-strings (raw field)
   (cond
     ((null raw) nil)
     ((or (vectorp raw) (listp raw))
      (let ((items (if (vectorp raw) (coerce raw 'list) raw)))
-       (dolist (item items)
-         (unless (stringp item)
-           (error 'review-error
-                  :message (format nil "~A entries must be strings" field)
-                  :raw raw)))
-       items))
+       (mapcar (lambda (item) (%coerce-spec-entry item field raw)) items)))
     (t (error 'review-error
               :message (format nil "~A must be an array of strings" field)
               :raw raw))))
@@ -184,7 +202,8 @@ stub-driven tests and external callers without a live LLM keep working."
       (let* ((prompt
                (format nil
                        "Extract acceptance criteria for this Common Lisp development goal.~%~
-Return exactly JSON: {\"acceptance_criteria\":[...],\"non_goals\":[...],\"risks\":[...]}~%~
+Return exactly JSON: {\"acceptance_criteria\":[\"...\",\"...\"],\"non_goals\":[\"...\"],\"risks\":[\"...\"]}~%~
+Each list entry MUST be a plain JSON string, not an object. Example: \"acceptance_criteria\":[\"function FOO exists\",\"FOO(1) returns 2\"]. Do NOT wrap entries in objects like {\"criterion\":\"...\"}.~%~
 Rules: acceptance criteria must be directly entailed by the goal and observable by tests. Do not invent extra examples, immutability requirements, allocation requirements, error signaling, type validation, or edge cases unless the goal explicitly requires them. For a phrase like \"takes one string argument\", require the positive string-input behavior and exported callable signature; do not require non-string or wrong-arity error tests unless requested. Put plausible but unstated behavior in non_goals or risks, not acceptance_criteria.~%~
 Goal: ~A"
                        goal))
