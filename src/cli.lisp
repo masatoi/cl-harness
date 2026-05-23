@@ -68,8 +68,8 @@
        (
         &key project-root system test-system issue (condition :generic-mcp)
         mcp-url mcp-stdio mcp-command base-url api-key model (temperature 0.0)
-        max-tokens reasoning-effort extra-body (retry-p t) dry-run-p log-path
-        (log-llm-requests nil))
+        max-tokens reasoning-effort extra-body (retry-p t) read-timeout
+        dry-run-p log-path (log-llm-requests nil))
   "Run the Phase 2 basic fix loop.
 
 Required keyword arguments mirror PRD §11.1: PROJECT-ROOT, SYSTEM,
@@ -116,7 +116,8 @@ Returns the populated AGENT-STATE."
           (make-openai-provider :base-url effective-base-url :api-key
            effective-api-key :model effective-model :temperature temperature
            :max-tokens max-tokens :reasoning-effort reasoning-effort
-           :extra-body extra-body :retry-p retry-p))
+           :extra-body extra-body :retry-p retry-p
+           :read-timeout read-timeout))
          (client
           (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
            :mcp-command mcp-command :client-name "cl-harness" :client-version
@@ -141,7 +142,7 @@ Returns the populated AGENT-STATE."
        (
         &key suite (conditions '(:generic-mcp)) mcp-url mcp-stdio mcp-command
         base-url api-key model (temperature 0.0) max-tokens reasoning-effort
-        extra-body (retry-p t) log-dir (log-llm-requests nil))
+        extra-body (retry-p t) read-timeout log-dir (log-llm-requests nil))
   "Run the benchmark suite at SUITE across each condition.
 
 SUITE is the path to a directory containing per-task subdirectories, each
@@ -176,7 +177,8 @@ report plus per-task detail to *STANDARD-OUTPUT*."
           (make-openai-provider :base-url effective-base-url :api-key
            effective-api-key :model effective-model :temperature temperature
            :max-tokens max-tokens :reasoning-effort reasoning-effort
-           :extra-body extra-body :retry-p retry-p))
+           :extra-body extra-body :retry-p retry-p
+           :read-timeout read-timeout))
          (client
           (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
            :mcp-command mcp-command :client-name "cl-harness-bench"
@@ -319,7 +321,7 @@ trivial runs."
         &key goal project-root system test-system test-file
         (condition :generic-mcp) mcp-url mcp-stdio mcp-command base-url api-key
         model (temperature 0.0) max-tokens reasoning-effort extra-body
-        (retry-p t) (max-replans 3) max-patches max-turns max-tool-calls
+        (retry-p t) read-timeout (max-replans 3) max-patches max-turns max-tool-calls
         max-wall-clock-seconds run-limits project-inventory
         (gather-inventory-p t) (inventory-byte-budget 5000) (mode :mixed)
         (review-policy :auto) (test-revision-policy :additive-only)
@@ -368,7 +370,8 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
           (make-openai-provider :base-url effective-base-url :api-key
            effective-api-key :model effective-model :temperature temperature
            :max-tokens max-tokens :reasoning-effort reasoning-effort
-           :extra-body extra-body :retry-p retry-p))
+           :extra-body extra-body :retry-p retry-p
+           :read-timeout read-timeout))
          (client
           (resolve-and-build-mcp-client :mcp-url mcp-url :mcp-stdio mcp-stdio
            :mcp-command mcp-command :client-name "cl-harness-develop"

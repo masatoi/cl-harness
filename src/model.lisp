@@ -107,16 +107,19 @@ TRANSPORT is a function of (URL HEADERS BODY) returning
    (raw :initarg :raw :reader chat-response-raw))
   (:documentation "Parsed chat completion result with token usage."))
 
-(defparameter +default-llm-read-timeout-seconds+ 600
+(defparameter +default-llm-read-timeout-seconds+ 180
   "Read timeout (seconds) for the dexador POST that DEFAULT-LLM-TRANSPORT
 issues against the LLM endpoint. Dexador's own default is 10 seconds,
 which is fine for sub-second chat models (Groq llama-3.3) but breaks
 hard against reasoning models (Qwen3 series, gpt-oss, OpenAI o1) where
-the first response can take a minute or more. 600 (10 min) is generous
-enough for slow first-prompt warmups without masking a genuinely-stuck
-endpoint.")
+the first response can take a minute or more. 180 (3 min) is generous
+for warm reasoning model responses (typically <60s) while letting
+fail-fast logic detect pathological hangs (backlog #32, observed
+2026-05-24 in 103-fizz-buzz bench where requests sat for 10+ min).
+Override per-provider via MAKE-OPENAI-PROVIDER's :READ-TIMEOUT kwarg.")
 
-(defun default-llm-transport (url headers body)
+(defun default-llm-transport (url headers body
+                              &key (read-timeout +default-llm-read-timeout-seconds+))
   "POST BODY to URL with HEADERS hash-table using dexador.
 
 Returns (values RESPONSE-BODY STATUS RESPONSE-HEADERS). HTTP-level errors
@@ -126,10 +129,12 @@ via CHAT-PARSE-RESPONSE.
 Connection reuse is disabled so repeated calls against an LLM endpoint
 that closes idle sockets do not surface stale streams.
 
-READ-TIMEOUT is set to +DEFAULT-LLM-READ-TIMEOUT-SECONDS+ so reasoning
-models whose response time exceeds dexador's 10s default do not raise
-SIMPLE-ERROR \"I/O timeout while doing input\" before the first chat
-completion lands."
+READ-TIMEOUT controls how long to wait for the response body before
+raising USOCKET:TIMEOUT-ERROR. Defaults to
++DEFAULT-LLM-READ-TIMEOUT-SECONDS+ (180s as of 2026-05-24, backlog #32);
+override per call when a slower reasoning model is in use. The
+COMPLETE-CHAT layer maps the timeout into :TRANSPORT-TIMEOUT
+model-error :KIND which the retry layer can recover from."
   (let ((header-list (let ((acc '()))
                        (maphash (lambda (k v) (push (cons k v) acc)) headers)
                        (nreverse acc))))
@@ -137,7 +142,7 @@ completion lands."
         (multiple-value-bind (resp-body status resp-headers)
             (dexador:post url :headers header-list :content body
                               :keep-alive nil
-                              :read-timeout +default-llm-read-timeout-seconds+)
+                              :read-timeout read-timeout)
           (values resp-body status resp-headers))
       (http-request-failed (c)
         (values (response-body c)
@@ -200,26 +205,47 @@ underlying transport raised before producing a status."
        (error () :malformed-response)))))
 
 (defun make-openai-provider (&key base-url api-key model
-                                  temperature max-tokens
+                                  temperature (max-tokens 8192)
                                   reasoning-effort extra-body
-                                  transport (retry-p t))
+                                  transport (retry-p t)
+                                  read-timeout)
   "Construct an OPENAI-COMPATIBLE-PROVIDER (PRD §10.2).
 
 REASONING-EFFORT and EXTRA-BODY become per-provider defaults that any
-COMPLETE-CHAT call inherits unless the call-site overrides them."
+COMPLETE-CHAT call inherits unless the call-site overrides them.
+
+MAX-TOKENS defaults to 8192, capping pathological generation while
+leaving 2x headroom over typical chat-completion responses (backlog
+#33, motivated by 2026-05-24 bench data showing legitimate responses
+of up to ~4k tokens with hung requests apparently generating
+unbounded prose). Pass NIL to defer to the server's own default.
+
+READ-TIMEOUT (backlog #32), when supplied, makes the provider's
+default transport pass that timeout to dexador. Defaults to
++DEFAULT-LLM-READ-TIMEOUT-SECONDS+ (180s). Ignored when TRANSPORT
+is explicitly supplied — caller-owned transports are passed through
+unchanged so tests can keep injecting recording stubs."
   (check-type base-url string)
   (check-type api-key string)
   (check-type model string)
-  (make-instance 'openai-compatible-provider
-                 :base-url base-url
-                 :api-key api-key
-                 :model model
-                 :default-temperature temperature
-                 :default-max-tokens max-tokens
-                 :default-reasoning-effort reasoning-effort
-                 :default-extra-body extra-body
-                 :transport (or transport #'default-llm-transport)
-                 :retry-p retry-p))
+  (let ((effective-transport
+         (cond
+           (transport transport)
+           (read-timeout
+            (lambda (url headers body)
+              (default-llm-transport url headers body
+                :read-timeout read-timeout)))
+           (t #'default-llm-transport))))
+    (make-instance 'openai-compatible-provider
+                   :base-url base-url
+                   :api-key api-key
+                   :model model
+                   :default-temperature temperature
+                   :default-max-tokens max-tokens
+                   :default-reasoning-effort reasoning-effort
+                   :default-extra-body extra-body
+                   :transport effective-transport
+                   :retry-p retry-p)))
 
 (defun make-chat-message (role content)
   "Construct an OpenAI-style chat message hash-table."

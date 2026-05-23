@@ -773,3 +773,155 @@ wall-clock 削減。
 **コスト**: medium + 1-2 days（mode 追加 + heuristic 設計 + 既存テスト
 維持 + 全 fixture re-bench で regression 確認）。
 
+---
+
+## 2026-05-24 由来: LLM endpoint pathological hang 対策
+
+#31 の検証 bench 中に観察された LLM chat completion hang を分析した
+結果（G3 ログ解析）、以下の pattern が判明:
+
+- endpoint (e.g. `/models`) は終始 200 OK で応答
+- 但し `/v1/chat/completions` で特定 generation が **pathological に
+  長くなり、応答 timeout までハング**
+- 兆候: ハング直前の turn で response token 数が普段の 2 倍、latency
+  が 10 倍に急上昇（103-fizz-buzz step 1 で turn 11: 3870 tokens /
+  14.2s、turn 12: 11128 chars 送信後無応答）
+- turn 1 で `JSON decode failed: #\L fell through ECASE` の action-error
+  も観察（LLM が prose / 説明文を出力始めた兆候）
+
+cl-harness 側で打てる 4 つの対策を以下に追加。
+
+### 32. ~~per-request timeout を短く + 設定可能化~~ → 実装済 (2026-05-24)
+
+**Status**: ✅ **実装済**:
+- `+default-llm-read-timeout-seconds+` を 600 → 180 (3 min) に短縮
+- `default-llm-transport` に `:read-timeout` kwarg 追加
+- `make-openai-provider` に `:read-timeout` kwarg 追加（per-provider
+  override、custom transport との priority も明確化）
+- CLI (`develop` / `fix` / `bench`) に `:read-timeout` kwarg を expose
+- `tests/model-test.lisp` に `openai-provider-accepts-read-timeout-kwarg`
+  test 追加 (460 passed)
+
+実 effect の確認は別 bench で。
+
+---
+
+**元の archive 内容（参考）**:
+
+### 32-archive. per-request timeout を短く + 設定可能化
+
+**Source**: bench-cycle 2026-05-24 #31 検証, fixture(s) 103-fizz-buzz
+**Axis**: implementation
+
+**観察**: dexador の default read-timeout（~5 分推定）まで chat
+completion が無応答で待ち続け、bench 全体の wall-clock を著しく
+浪費。早期に fail させて retry できれば全体所要時間を圧縮可能。
+
+**仮説**: 特定 generation だけ hang するので「30s 程度で打ち切り
+→ retry」のほうが全体期待値が小さくなる（LLM の通常応答が 1-15s 程度
+なので 30s 設定で false positive はほぼゼロ）。
+
+**変更案**:
+- `make-openai-provider` に `:read-timeout` パラメータ追加（default
+  30s、現状 default は dexador 任せ）
+- `complete-chat` 経由で dexador 呼び出しに `:read-timeout` を渡す
+- CLI / develop / fix kwargs にも expose
+- 既存 retry-p フラグと協調: timeout error は automatic retry の対象に
+
+**期待効果**: hang した generation が ~5 分 → ~30 秒で fail-fast。
+bench wall-clock 大幅圧縮。
+
+**コスト**: small + half-day。
+
+### 33. ~~per-request max_tokens を明示~~ → 実装済 (2026-05-24)
+
+**Status**: ✅ **実装済**:
+- `make-openai-provider` の `:max-tokens` default を nil → 8192 に変更
+  （pathological generation cap、~2x typical legitimate response 4k）
+- 明示的に nil を渡せば従来通り server default を使う
+- `tests/model-test.lisp` に `openai-provider-default-max-tokens-is-8192`
+  test 追加 (460 passed)
+- 既存テストは backwards-compat 確保（明示 `:max-tokens` 32 を渡している
+  test も問題なし）
+
+実 effect の確認は別 bench で。
+
+---
+
+**元の archive 内容（参考）**:
+
+### 33-archive. per-request max_tokens を明示
+
+**Source**: bench-cycle 2026-05-24 #31 検証, fixture(s) 103-fizz-buzz
+**Axis**: implementation
+
+**観察**: bench 中の hung 直前 turn で response が普段の 2 倍長
+（3.87k tokens）。stop 条件に達せず冗長 mode に陥ったまま hang した
+可能性。
+
+**仮説**: model に明示的 `max_tokens` を渡せば冗長 mode に入っても
+有限時間で打ち切られる。tool_call 1 回相当なら 2k tokens 程度で十分。
+
+**変更案**:
+- `make-openai-provider` の `:max-tokens` を default 2048 程度に
+  設定（現状 nil / endpoint default 任せ）
+- `complete-chat` request body の `max_tokens` field を必ず設定
+- CLI / develop / fix の `:max-tokens` kwargs 経路を確認 / 整理
+
+**期待効果**: pathological generation も `max_tokens` で抑制 →
+hang する確率が下がる、または hang しても有限時間で完了。
+
+**コスト**: small + half-day。
+
+### 34. conversation reset between steps
+
+**Source**: bench-cycle 2026-05-24 #31 検証, fixture(s) 103-fizz-buzz
+**Axis**: implementation
+
+**観察**: hang した turn 12 の prompt は 25 メッセージ・11k 文字。
+step 1 で context が積み上がった結果と推測される。
+
+**仮説**: step 間で conversation を全 reset すれば prompt 長を抑制
+できる。step は独立性が高い（test name / issue / patch context は
+それぞれ違う）ため、prior turns を持ち越す必然性は低い。
+
+**変更案**:
+- `%execute-step` で run-fn 呼び出し時に conversation history を
+  reset
+- 但し step 間で必要な context（前 step の patch summary 等）は
+  別 channel（issue prefix 等）で渡す
+- 既存 run-agent の context 構築フローと比較して differential を見極め
+
+**期待効果**: 各 step 開始時の prompt が小さく保たれ、turn が進んでも
+context overflow 寸前まで膨らみにくい。
+
+**コスト**: medium + 1-2 days（既存 agent loop の context 設計を
+見極めて変更、regression テスト必須）。
+
+### 35. response prefix sanity check + early retry
+
+**Source**: bench-cycle 2026-05-24 #31 検証, fixture(s) 103-fizz-buzz
+**Axis**: implementation
+
+**観察**: 103-fizz-buzz の bench で `JSON decode failed: #\L fell
+through ECASE expression. Wanted one of (#\" #\- #\0 ... #\{ #\[ ...)`
+の action-error が turn 1 で発生。LLM が JSON でなく prose を返した
+兆候。
+
+**仮説**: 1 文字目が JSON 開始トークンでない応答は構造化失敗確定なので、
+最後まで読まずに即座に retry すれば早期失敗できる。streaming response
+では特に有効。
+
+**変更案**:
+- response の最初の non-whitespace 文字を読んだ時点で「`{` / `[` /
+  `"` / 数字 / `t` / `f` / `n`」のいずれでもなければ即 abort
+- `complete-chat` 側で structured-output 期待時のみ active な
+  prefix-validator option
+- abort 後は automatic retry に流す（retry-p フラグと協調）
+
+**期待効果**: pathological response (prose 開始) を最後まで読む
+無駄を排除。tail-latency 圧縮。
+
+**コスト**: medium + 1-2 days（streaming-response の前処理層追加 +
+非 streaming パス互換性確保）。
+

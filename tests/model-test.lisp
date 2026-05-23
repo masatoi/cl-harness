@@ -15,6 +15,7 @@
                 #:provider-model
                 #:provider-default-temperature
                 #:provider-default-max-tokens
+                #:provider-transport
                 #:make-chat-message
                 #:chat-response
                 #:chat-response-content
@@ -96,6 +97,47 @@
     (ok (equal "demo" (provider-model p)))
     (ok (= 0.1 (provider-default-temperature p)))
     (ok (= 32 (provider-default-max-tokens p)))))
+
+(deftest openai-provider-default-max-tokens-is-8192
+  ;; Backlog #33: cap pathological generation by defaulting max-tokens
+  ;; to a safe upper bound (~2x typical legitimate response of 4k).
+  (let ((p (make-openai-provider :base-url "http://localhost:8080/v1"
+                                 :api-key "sk-fake"
+                                 :model "demo")))
+    (ok (= 8192 (provider-default-max-tokens p))
+        "default max-tokens is 8192 when caller omits the kwarg"))
+  (let ((p (make-openai-provider :base-url "http://localhost:8080/v1"
+                                 :api-key "sk-fake"
+                                 :model "demo"
+                                 :max-tokens nil)))
+    (ok (null (provider-default-max-tokens p))
+        "explicit :max-tokens nil defers to server default")))
+
+(deftest openai-provider-accepts-read-timeout-kwarg
+  ;; Backlog #32: per-provider read-timeout wraps the default transport
+  ;; in a closure that passes the timeout to dexador. Custom transport
+  ;; takes priority (test stubs / recording transports must keep working).
+  (testing "no kwarg: uses default transport function directly"
+    (let ((p (make-openai-provider :base-url "http://x/v1"
+                                   :api-key "k" :model "m")))
+      (ok (eq #'cl-harness/src/model::default-llm-transport
+              (provider-transport p)))))
+  (testing ":read-timeout supplied wraps default transport in a closure"
+    (let ((p (make-openai-provider :base-url "http://x/v1"
+                                   :api-key "k" :model "m"
+                                   :read-timeout 30)))
+      (ok (functionp (provider-transport p)))
+      (ok (not (eq #'cl-harness/src/model::default-llm-transport
+                   (provider-transport p)))
+          "wrapper is a fresh closure, not the bare function")))
+  (testing "explicit transport beats :read-timeout (test-stub takes priority)"
+    (let* ((stub (lambda (u h b) (declare (ignore u h b)) (values "{}" 200 nil)))
+           (p (make-openai-provider :base-url "http://x/v1"
+                                    :api-key "k" :model "m"
+                                    :transport stub
+                                    :read-timeout 30)))
+      (ok (eq stub (provider-transport p))
+          ":transport overrides :read-timeout"))))
 
 (deftest complete-chat-roundtrip-with-stub-transport
   (let* ((capture (cons nil nil))
