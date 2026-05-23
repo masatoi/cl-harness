@@ -1632,6 +1632,85 @@ multi-paragraph branches without spinning up a real run-agent."
                         result))))))
       (when (probe-file test-file) (delete-file test-file)))))
 
+(deftest make-develop-state-accepts-light-review-policy
+  (let ((state (cl-harness/src/state:make-develop-state
+                :goal "g"
+                :project-root "/tmp/"
+                :system "demo"
+                :test-system "demo/tests"
+                :review-policy :light)))
+    (ok (eq :light
+            (cl-harness/src/state:develop-state-review-policy state))
+        ":light is accepted and stored on the develop-state")))
+
+(deftest develop-light-policy-skips-plan-tests-review-keeps-spec-and-impl
+  ;; Backlog #31: :light review-policy must skip plan-review and
+  ;; tests-review (the comparisons of plan output against spec)
+  ;; while keeping spec generation and impl-review. The original
+  ;; #31 design (also skip spec) was abandoned after the 103-fizz-buzz
+  ;; bench showed impl-review without develop-spec defaults to
+  ;; strict-reject. Keep spec so impl-review has acceptance criteria.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-light-policy-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-light"))
+         (plan (list (%make-step :index 0 :test-name "alpha"
+                                 :test-source "(deftest alpha (ok t))")))
+         (planner-fn (%canned-planner (list plan)))
+         (run-fn-calls 0)
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-calls)
+            (%make-fake-passed-state)))
+         (spec-fn-calls 0)
+         (spec-fn
+          (lambda (goal &key &allow-other-keys)
+            (declare (ignore goal))
+            (incf spec-fn-calls)
+            (cl-harness/src/review:make-develop-spec
+             :goal "trivial fixture"
+             :acceptance-criteria '("foo bar"))))
+         (review-kinds nil)
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (push kind review-kinds)
+            (cl-harness/src/review:make-review-decision
+             :kind kind
+             :status :approved
+             :feedback ""))))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result (develop "trivial fixture"
+                                  :project-root (namestring project-root)
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :test-file test-file
+                                  :log-path log-path
+                                  :review-policy :light
+                                  :planner-fn planner-fn
+                                  :run-fn run-fn
+                                  :spec-fn spec-fn
+                                  :review-fn review-fn)))
+             (testing "run-fn called once (agent loop runs)"
+               (ok (= 1 run-fn-calls)))
+             (testing "spec-fn IS called under :light (preserves impl-review context)"
+               (ok (= 1 spec-fn-calls)))
+             (testing "review-fn never called with :plan or :tests"
+               (ok (not (member :plan review-kinds)))
+               (ok (not (member :tests review-kinds))))
+             (testing "review-fn called with :implementation (per-step gate kept)"
+               (ok (member :implementation review-kinds)))
+             (testing "final status is :passed"
+               (ok (eq :passed (develop-result-status result))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
 (deftest impl-review-respects-test-change-priority
   ;; run-fn returns :test-change-request on first call, :passed on second.
   ;; review-fn approves both test-change and implementation. The

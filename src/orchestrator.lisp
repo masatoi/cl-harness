@@ -63,6 +63,7 @@
                 #:develop-state-develop-spec
                 #:develop-state-set-develop-spec
                 #:develop-state-review-policy
+                #:+supported-review-policies+
                 #:develop-state-test-revision-policy
                 #:develop-state-review-replan-count
                 #:develop-state-test-revision-count
@@ -414,6 +415,20 @@ Already-promoted findings are skipped; NIL DEVELOP-STATE is a no-op
   (and develop-state
        (not (eq :none (develop-state-review-policy develop-state)))))
 
+(defun %plan-tests-review-enabled-p (develop-state)
+  "Return T when the plan-review and tests-review LLM gates should
+run. Currently true only for review-policy :AUTO.
+
+Backlog #31: :LIGHT review-policy skips plan-review and tests-review
+(the two review LLM calls that compare planner output against the
+develop-spec) but keeps spec generation and impl-review intact —
+the spec is also fed to impl-review, and impl-review without a spec
+defaults to strict-reject behavior observed in the 103-fizz-buzz
+bench. Use %REVIEW-ENABLED-P (still T for :LIGHT) for spec
+generation, impl-review and test-change-request gates."
+  (and develop-state
+       (eq :auto (develop-state-review-policy develop-state))))
+
 (defun %call-review (review-fn kind
                      &key develop-state provider plan step test-change-action
                           implementation-summary)
@@ -449,7 +464,7 @@ implementation."
 
 (defun %review-plan-and-tests (plan review-fn provider develop-state)
   "Return (VALUES APPROVED-P FEEDBACK). Runs plan then test review."
-  (if (not (%review-enabled-p develop-state))
+  (if (not (%plan-tests-review-enabled-p develop-state))
       (progn (%record-plan-tests develop-state plan)
              (values t ""))
       (let ((plan-decision (%call-review
@@ -1206,6 +1221,14 @@ final DEVELOP-RESULT carries the reason through to callers."
     (handler-case
         (progn
           (when (%review-enabled-p state)
+            ;; Note: spec generation runs in BOTH :auto and :light.
+            ;; impl-review relies on develop-spec for its acceptance
+            ;; criteria; without it the reviewer LLM defaults to
+            ;; strict-mode reject (observed in 103-fizz-buzz benc h
+            ;; with the original #31 design). Skipping only the
+            ;; plan/tests review (which compares plan against spec)
+            ;; is enough to deliver the wall-clock savings #31 aimed
+            ;; for without breaking impl-review.
             (develop-state-set-develop-spec
              state
              (funcall spec-fn goal

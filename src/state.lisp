@@ -41,6 +41,7 @@
            #:develop-state-develop-spec
            #:develop-state-set-develop-spec
            #:develop-state-review-policy
+           #:+supported-review-policies+
            #:develop-state-test-revision-policy
            #:develop-state-review-replan-count
            #:develop-state-test-revision-count
@@ -74,6 +75,20 @@ Keep them in sync.")
   '(:file-only :generic-mcp :runtime-native :explore)
   "Tool-policy conditions accepted by MAKE-DEVELOP-STATE. Mirrors
 CL-HARNESS/SRC/CONFIG:RUN-CONFIG's CONDITION ECASE.")
+
+(defparameter +supported-review-policies+
+  '(:none :light :auto)
+  "Review-gate policy keywords accepted by MAKE-DEVELOP-STATE.
+:NONE   — all review gates off (spec, plan-review, tests-review,
+          impl-review, test-change all skipped).
+:LIGHT  — spec generation, impl-review, and test-change-request
+          handling still run; plan-review and tests-review are
+          skipped (backlog #31). The original #31 design (also skip
+          spec) caused impl-review to default to strict-reject
+          without acceptance criteria — observed in 103-fizz-buzz
+          bench. Keeping the spec preserves impl-review quality
+          while still cutting two LLM round-trips per develop run.
+:AUTO   — full review pipeline (default for cl-harness:develop).")
 
 (defclass develop-state ()
   ((goal :initarg :goal :reader develop-state-goal :type string
@@ -145,8 +160,12 @@ truth above planner-authored tests.")
    (review-policy :initarg :review-policy
                   :reader develop-state-review-policy
                   :initform :auto
-                  :documentation "Review-gate policy keyword. :AUTO
-uses the configured provider/reviewer, :NONE disables gates.")
+                  :documentation "Review-gate policy keyword. One of
++SUPPORTED-REVIEW-POLICIES+: :AUTO runs the full pipeline (spec +
+plan-review + tests-review + impl-review + test-change). :LIGHT
+skips only plan-review and tests-review while keeping spec +
+impl-review + test-change (backlog #31). :NONE disables all review
+gates.")
    (test-revision-policy :initarg :test-revision-policy
                          :reader develop-state-test-revision-policy
                          :initform :additive-only
@@ -237,8 +256,9 @@ one of +SUPPORTED-CONDITIONS+."
   (unless (member condition +supported-conditions+)
     (error "develop-state: unsupported :condition ~S; expected one of ~S"
            condition +supported-conditions+))
-  (unless (member review-policy '(:auto :none))
-    (error "develop-state: unsupported :review-policy ~S" review-policy))
+  (unless (member review-policy +supported-review-policies+)
+    (error "develop-state: unsupported :review-policy ~S; expected one of ~S"
+           review-policy +supported-review-policies+))
   (unless (member test-revision-policy '(:additive-only :none))
     (error "develop-state: unsupported :test-revision-policy ~S"
            test-revision-policy))
