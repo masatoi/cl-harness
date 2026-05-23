@@ -44,6 +44,20 @@
             nil)
         (error () t))))
 
+(deftest make-subtask-summary-accepts-review-rejected
+  ;; :REVIEW-REJECTED is the status the orchestrator overlays on a
+  ;; verify-passed step whose implementation review exhausted its
+  ;; retry budget. subtask-summary must accept it so the replan path
+  ;; triggered by impl-review exhaustion can produce a summary.
+  (let ((s (make-subtask-summary
+            :step-index 0
+            :test-name "x-test"
+            :what-changed nil
+            :tests-added nil
+            :verification :review-rejected)))
+    (ok (typep s 'subtask-summary))
+    (ok (eq :review-rejected (subtask-summary-verification s)))))
+
 (deftest summarise-step-result-builds-from-step-result-and-state
   ;; Build a develop-state with one completed step result and one
   ;; patch-record bound to that step. summarise-step-result should

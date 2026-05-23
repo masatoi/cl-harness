@@ -574,7 +574,21 @@ defmethod を別 turn に分けている）。
 
 **コスト**: small + half-day（prompt 2 箇所修正）。
 
-### 26. subtask-summary が :REVIEW-REJECTED を未知 status として例外を投げる
+### 26. ~~subtask-summary が :REVIEW-REJECTED を未知 status として例外を投げる~~ → 実装済 (2026-05-23)
+
+**Status**: ✅ **実装済** — `src/subtask-summary.lisp` の
+`+supported-verification-statuses+` リストに `:review-rejected` を 1 行
+追加し、`tests/subtask-summary-test.lisp` に positive test 1 件追加
+(`make-subtask-summary-accepts-review-rejected`)。
+コメントの「Mirrors DEVELOP-STEP-RESULT-STATUS」と整合。
+
+End-to-end bench 完走による効果確認は LLM endpoint 不調（4 連続 I/O
+timeout）で保留 — endpoint 復旧後に 102-counter-class re-bench で確認
+すべき。
+
+---
+
+**元の archive 内容（参考のため残置）**:
 
 **Source**: bench-cycle 2026-05-23 follow-up (#21 検証), fixture(s) 102-counter-class
 **Axis**: implementation

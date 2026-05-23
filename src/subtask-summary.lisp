@@ -44,9 +44,13 @@
 (in-package #:cl-harness/src/subtask-summary)
 
 (defparameter +supported-verification-statuses+
-  '(:passed :give-up :limit-exhausted :dirty-only :error)
+  '(:passed :give-up :limit-exhausted :dirty-only :error :review-rejected)
   "Verification keywords accepted by MAKE-SUBTASK-SUMMARY. Mirrors
-DEVELOP-STEP-RESULT-STATUS.")
+DEVELOP-STEP-RESULT-STATUS. :REVIEW-REJECTED is the status the
+orchestrator overlays on a verify-passed step whose implementation
+review exhausted its retry budget (src/orchestrator.lisp
+%execute-step). Without it summarise-step-result errors on the
+replan path triggered by impl-review exhaustion.")
 
 (defclass subtask-summary ()
   ((step-index :initarg :step-index :reader subtask-summary-step-index)
