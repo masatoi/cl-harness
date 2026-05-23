@@ -726,7 +726,7 @@ MVP では、1 task あたりの patch 数に制限を設ける。
 デフォルト:
 
 ```text
-max-patches = 3
+max-patches = 5
 ```
 
 ---
@@ -868,7 +868,7 @@ issue: "Fix the failing test caused by an unexported symbol."
 limits:
   max_turns: 20
   max_tool_calls: 80
-  max_patches: 3
+  max_patches: 5
 success:
   type: run-tests
   system: sample-app/tests
