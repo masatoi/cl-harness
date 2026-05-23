@@ -1,0 +1,84 @@
+# bench-cycle: <FIXTURES_LIST>
+
+**Date**: <DATE>
+**Code**: cl-harness <BRANCH> (<SHA>)
+**Settings**: review-policy=auto, max-impl-review-revisions=2, log-llm-requests=<G3>, max-replans=<MAX_REPLANS>
+**Driver**: <DRIVER_PATH>
+**Skill version**: bench-cycle (.claude/skills/bench-cycle/)
+
+## 結果サマリ
+
+| Task | Status | Steps | impl-reviews | impl-rejections | Elapsed |
+|---|---|---:|---:|---:|---:|
+| <fixture-1> | <status> | <steps> | <reviews> | <rejections> | <s> |
+| <fixture-2> | <status> | <steps> | <reviews> | <rejections> | <s> |
+
+## <fixture-1> 詳細
+
+### 真の根因(G1 failed_tests)
+
+- `<test_name>`: <reason>
+  - source: `<source.file>:<line>`
+- (additional failures if any)
+
+### Patch trail
+
+| turn | tool | summary |
+|---|---|---|
+| <N> | <tool> | <diff summary 1 line> |
+
+### Tool errors
+
+| turn | tool | message |
+|---|---|---|
+| <N> | <tool> | <truncated message> |
+
+### Run-end counters
+
+```
+status=<...>, limit_hit=<...>, turns=<N>, patch_count=<X>, patch_attempts=<Y>,
+read_file_count=<R>, repl_eval_count=<E>, token_total=<T>, elapsed_seconds=<S>
+```
+
+### 改善候補
+
+#### A. bench target 軸
+
+- **<title>** — <観察 1 行>
+  - 仮説: <なぜ>
+  - 変更案: <何を>
+  - 期待効果: <unblock 範囲>
+  - コスト: <small/medium/large>
+
+#### B. log content 軸
+
+- **<title>** — <observation>
+  - (同形 4 fields)
+
+#### C. cl-harness 実装軸
+
+- **<title>** — <observation>
+  - (同形 4 fields)
+
+## <fixture-2> 詳細
+
+(<fixture-1> と同じ構造)
+
+## Cross-cutting findings
+
+(複数 fixture で共通する failure mode + 横断改善案。1 fixture のみなら省略)
+
+- **<cross-cut title>** — <fixture-1 と fixture-2 の両方で観察された X>
+  - 変更案: <横断的な改善>
+
+## 推奨次アクション
+
+1. <優先度の高い 1 つ目>
+2. <優先度の高い 2 つ目>
+3. (3 以上は backlog 参照と書いて省略可)
+
+## 既存 backlog との関係
+
+- 新規 backlog 候補: <N> 件
+- 既存 backlog #<X> 参照: <タイトル>
+- (重複検出: 完全タイトル一致 or lowercase + trim 後の先頭 20 char 一致)
