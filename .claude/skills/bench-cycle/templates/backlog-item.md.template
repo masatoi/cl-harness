@@ -1,0 +1,16 @@
+### <番号>. <短いタイトル>
+
+**Source**: bench-cycle <DATE>, fixture(s) <FIXTURES>
+**Axis**: <bench target | log content | implementation>
+
+**観察**: <JSONL からの直接引用または narrative の 1-2 行>
+
+**仮説**: <根因に関する仮説 1-2 文>
+
+**変更案**:
+- <具体的な変更 path / shape>
+- <(複数あれば)2 つ目>
+
+**期待効果**: <unblock するか / 何が変わるか / どの fixture が pass に届くか>
+
+**コスト**: <small / medium / large + 工数感(例: half-day, 1 day, 2-3 days)>
