@@ -1268,3 +1268,50 @@ agent はそれを修正しようと更に malformed patch を出す悪循環。
 
 **コスト**: small + half-day (counter + early-termination + regression test)。
 
+### 46. fixed-plan paired bench infrastructure (planner 確定化)
+
+**Source**: bench-cycle 2026-05-24 paired #38 on/off run
+**Axis**: bench target
+
+**観察**: paired #38 on/off bench で同 fixture (104-cache-simple) でも planner が 3 種類の異なる
+plan を生成 (3 steps×1-sym / 3 steps×multi-sym step1 / 1 step×implicit multi-sym)。
+agent 行動の controlled comparison が不可能になり、prompt 変更の empirical effect が高 variance に
+埋もれた。
+
+**仮説**: planner の出力を fixture 側で predefined plan として与えれば (planner を skip)、
+agent 段階の prompt 変更 (#38 のような) を pure に paired evaluation できる。
+
+**変更案**:
+- `develop-task.json` に optional `predefined_plan` field を追加
+- `cl-harness:develop` に `:predefined-plan` kwarg 追加 (provided なら planner を bypass)
+- bench-cycle skill の test cases に「multi-symbol step」「single-symbol step」両方を含む
+  predefined plan を用意
+- ON / OFF で N=3 ずつ走らせて wall-clock / turn / patch を比較する script を skill に追加
+
+**期待効果**: prompt 変更の empirical effect を高 S/N で測定可能になる。#38 / #41 / #45 等の
+prompt-level 改善 backlog で再現性のある evaluation が可能。
+
+**コスト**: medium + 1-2 days (develop-task schema 拡張 + develop kwarg 追加 + skill template 拡張)。
+
+---
+
+## 2026-05-24 paired #38 on/off bench 結果 — #38 entry refinement
+
+backlog #38 (`docs/improvement-backlog.md:1018` 付近) について、2026-05-24 に Qwen3.6 で
+paired N=1 bench を実施 (104-cache-simple, branch `bench-38-off` を一時作成して比較)。
+結果:
+
+- structural inclusion: ✅ agent system prompt に "Patching guidance" 含むことを JSONL で確認
+- empirical effect: ❌ **observe されず**
+  - OFF run の multi-symbol step 1 (cache-put + cache-get test) で **evolved-failure
+    pattern 発生** (turn 3: CACHE-PUT undef → turn 4: CACHE-GET undef → turn 5: pass)
+  - ON re-run の multi-symbol step 0 でも **同じ evolved-failure 発生**
+    (turn 11: MAKE-CACHE undef → turn 12: CACHE-GET undef → turn 13: pass)
+- wall-clock: OFF 556s / ON 571s で差 ±3% (noise 範囲)
+
+agent が #38 directive ("test の全 symbol を 1 patch でまとめろ") を遵守する行動は
+ON/OFF 共に取らず。当面 #38 prompt section は維持 (negative effect も無いため削除コストの方が大きい)
+だが、prominence 強化 / N≥3 + fixed plan での再評価 (本 backlog #46) が follow-up 課題。
+
+詳細 doc: `docs/benchmarks/results-2026-05-24-bench-cycle-38-paired-104.md`
+
