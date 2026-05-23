@@ -118,6 +118,42 @@ v0.4 で導入された status だが `subtask-summary` の許容 list には未
 - ⚠️ Bench 完走による end-to-end 検証は別バグで保留 — `:REVIEW-REJECTED`
    許容 (#26) を片付けた後に再確認したい
 
+## End-to-end 検証（#21 + #26 統合、N=1, 後日 追記）
+
+LLM endpoint 安定後の再 bench で **PASSED 完走**を確認。`docs/improvement-backlog.md`
+#26 が実装された後、初の完走 run。
+
+| | baseline | after #21+#26 | delta |
+|---|---|---|---|
+| Status | :PASSED | **:PASSED** | 同等 |
+| Replans | 0 | **0** | 同等 |
+| Plan size | 4 | 4 | 同等 |
+| Impl rejections | 0 | 0 | 同等 |
+| Integration issues | 0 | 0 | 同等 |
+| `:explore-downgrade` 件数 | n/a (機能なし) | **1 件** (step 0, lightweight→none, fresh-source-surface) | 新規 |
+| **step 0 token** | 21,963 | **11,615** | **-10,348 (-47%)** |
+| **step 0 elapsed** | 77.0s | **45.6s** | **-31.4s (-41%)** |
+| step 0 turns | 10 (8 explore + 2 impl) | **6** | -4 |
+| sum of per-step elapsed | 234.9s | 278.4s | +43.5s (per-step variance) |
+| **wall-clock total** | 591.9s | **549.9s** | **-42s (-7%)** |
+
+### 観察
+
+- **#21 deterministic downgrade が実 bench で完走時にも発火確認** — step 0
+  で planner emit が `lightweight` → orchestrator が `:none` に格下げ
+- **#26 修正の効果**: 今回は `:REVIEW-REJECTED` path に入らずに完走したため
+  直接の事象には遭遇しなかったが、replan path の summarise-step-result
+  が安全に動く状態は維持
+- **step 0 で確定的削減（token -47% / time -41%）** — explore phase 抑制
+  による direct effect
+- **per-step variance**: step 1-3 で baseline より tokens / time が一部
+  上振れ（LLM 応答 variance）。総 token は ~0% 差。
+
+### Bench transcripts
+- driver: `/tmp/bench-cycle-1779535286.lisp`
+- log: `/tmp/bench-cycle-1779535286.log`
+- JSONL: `/tmp/bench-cycle-1779535286-102-counter-class.jsonl`
+
 ## 関連 commit
 
 - 本 doc + 実装 + tests を含む 1 PR で commit (this push)
