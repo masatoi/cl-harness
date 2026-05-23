@@ -16,7 +16,8 @@
                 #:run-limits-max-read-files
                 #:run-limits-max-repl-evals
                 #:run-limits-max-wall-clock-seconds
-                #:run-limits-max-action-parse-errors)
+                #:run-limits-max-action-parse-errors
+                #:run-limits-max-context-tokens)
   (:import-from #:cl-harness/src/log
                 #:open-run-logger
                 #:close-run-logger)
@@ -322,7 +323,7 @@ trivial runs."
         (condition :generic-mcp) mcp-url mcp-stdio mcp-command base-url api-key
         model (temperature 0.0) max-tokens reasoning-effort extra-body
         (retry-p t) read-timeout (max-replans 3) max-patches max-turns max-tool-calls
-        max-wall-clock-seconds run-limits project-inventory
+        max-wall-clock-seconds max-context-tokens run-limits project-inventory
         (gather-inventory-p t) (inventory-byte-budget 5000) (mode :mixed)
         (review-policy :auto) (test-revision-policy :additive-only)
         (max-review-replans 2) (max-test-revisions 3)
@@ -385,7 +386,7 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
            (or run-limits
                (when
                    (or max-patches max-turns max-tool-calls
-                       max-wall-clock-seconds)
+                       max-wall-clock-seconds max-context-tokens)
                  (let ((d (make-default-limits)))
                    (make-instance 'run-limits :max-turns
                                   (or max-turns (run-limits-max-turns d))
@@ -400,7 +401,10 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                                   (or max-wall-clock-seconds
                                       (run-limits-max-wall-clock-seconds d))
                                   :max-action-parse-errors
-                                  (run-limits-max-action-parse-errors d)))))))
+                                  (run-limits-max-action-parse-errors d)
+                                  :max-context-tokens
+                                  (or max-context-tokens
+                                      (run-limits-max-context-tokens d))))))))
       (let ((effective-inventory
              (or project-inventory
                  (when gather-inventory-p

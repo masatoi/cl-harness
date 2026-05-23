@@ -45,14 +45,23 @@ RUN-AGENT exits :limit-exhausted with limit-hit :max-action-parse-errors.
 Resets to zero on any successful PARSE-ACTION.")
    (max-context-tokens
     :initarg :max-context-tokens
-    :initform 50000
+    :initform 4000
     :reader run-limits-max-context-tokens
     :documentation "Approximate token budget for the agent loop's
-message history. When the running estimate of APPROXIMATE-HISTORY-TOKENS over MESSAGES
-exceeds this, the agent calls COMPACT-HISTORY before the next
-COMPLETE-CHAT call. The threshold is approximate (chars / 4 heuristic);
-fine-grained accuracy is not required because the goal is keeping the
-context window from blowing, not minimising tokens."))
+message history. When the running estimate of APPROXIMATE-HISTORY-TOKENS
+over MESSAGES exceeds this, the agent calls COMPACT-HISTORY before the
+next COMPLETE-CHAT call. The threshold is approximate (chars / 4
+heuristic); fine-grained accuracy is not required because the goal is
+keeping the context window from blowing, not minimising tokens.
+
+Default 4000 (backlog #34, lowered from 50000 on 2026-05-24 after
+observing LLM hangs at ~2800-token prompts in 103-fizz-buzz bench).
+50000 was originally tuned for 128k-context models, but pathological
+backend behavior (KV cache pressure, generation queue stalls) kicks in
+well before that — compacting earlier reduces hang probability while
+keep-head=2 + keep-tail=6 preserves the most-recent few tool round
+trips intact. Override via :MAX-CONTEXT-TOKENS kwarg per-run when
+your endpoint can comfortably handle larger prompts."))
   (:documentation "Resource budget for a single fix run (PRD §8.4 REQ-AGENT-003)."))
 
 (defun make-default-limits ()
@@ -65,7 +74,7 @@ context window from blowing, not minimising tokens."))
                  :max-repl-evals 40
                  :max-wall-clock-seconds 600
                  :max-action-parse-errors 3
-                 :max-context-tokens 50000))
+                 :max-context-tokens 4000))
 
 (defclass run-config ()
   ((project-root :initarg :project-root :reader run-config-project-root)

@@ -873,7 +873,33 @@ hang する確率が下がる、または hang しても有限時間で完了。
 
 **コスト**: small + half-day。
 
-### 34. conversation reset between steps
+### 34. ~~conversation reset between steps~~ → 実装済 (2026-05-24, reinterpretation)
+
+**Status**: ✅ **実装済** (reinterpretation):
+
+調査で「**step 間 reset は既に実装済**」（`run-agent` が step ごとに
+fresh `agent-state` + fresh `messages` を構築）と判明。観察された
+hang は **step 内 turn 12 / ~2,800 token prompt** で発生していた
+が、in-step compaction 閾値 `max-context-tokens` は default 50,000
+（128k-context model 向け設定）で、user の local LLM 環境では桁外れ
+に緩く一度も発火しなかった。
+
+そこで **#34 を「in-step compaction 閾値を実態に合わせて下げる +
+CLI exposed」と再解釈**して実装:
+- `make-default-limits` の `max-context-tokens` を 50,000 → 4,000
+  に変更
+- `cl-harness:develop` に `:max-context-tokens` kwarg を expose
+  （per-run override 可能）
+- `run-limits-default-max-context-tokens` test を新 default に更新
+- 460 passed
+
+実 effect の確認は別 bench で。
+
+---
+
+**元の archive 内容（参考）**:
+
+### 34-archive. conversation reset between steps
 
 **Source**: bench-cycle 2026-05-24 #31 検証, fixture(s) 103-fizz-buzz
 **Axis**: implementation

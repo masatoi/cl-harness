@@ -45,7 +45,12 @@
       (ok (= 5 (run-limits-max-patches (run-config-limits c)))))))
 
 (deftest run-limits-default-max-context-tokens
-  (ok (= 50000
+  ;; Backlog #34: lowered from 50000 to 4000 on 2026-05-24 after
+  ;; observing pathological LLM hangs at ~2800-token prompts in
+  ;; 103-fizz-buzz bench. 4000 gives compaction headroom before
+  ;; that hang point while keep-head=2 + keep-tail=6 preserves
+  ;; recent tool round trips.
+  (ok (= 4000
          (cl-harness/src/config:run-limits-max-context-tokens
           (cl-harness/src/config:make-default-limits)))))
 
