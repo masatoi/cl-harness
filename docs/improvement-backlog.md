@@ -618,3 +618,133 @@ exhaustion からの replan path が安定。
 
 **コスト**: small。half-day（場所特定 + 1 行追加 + 既存テスト確認）。
 
+---
+
+## 2026-05-23 bench-cycle 由来 (103-fizz-buzz)
+
+bench-cycle skill で 103-fizz-buzz N=1 を実行（:PASSED 完走、3 steps,
+0 replans, 450.7s）。step 1, 2 が initial verify 即 pass で no-op に
+なり、wall-clock の 85% が review pipeline LLM コール消費という観察。
+results doc: `docs/benchmarks/results-2026-05-23-bench-cycle-103-fizz-buzz.md`。
+
+### 27. 103b-fizz-buzz-large-n sibling fixture を追加
+
+**Source**: bench-cycle 2026-05-23, fixture(s) 103-fizz-buzz
+**Axis**: bench target
+
+**観察**: 現状 103 fixture は実装が単純すぎ、planner の step 過剰分割
+（step 1/2 は step 0 の patch で既に pass、no-op）の弊害が観測しにくい。
+
+**仮説**: N>=100 のような stream output / 大きな list を扱う variant を
+入れれば、planner の step 設計品質を観測しやすい fixture が増える。
+
+**変更案**:
+- `develop-benchmarks/103b-fizz-buzz-large-n/` を追加
+- goal text: 「N=100 までを 1 行ずつ stdout に出力する `fizz-buzz`」
+- test_source で大量出力 (e.g. captured stdout 文字列の長さ + 末尾行)
+  を確認
+
+**期待効果**: planner の step 設計 quality を測定可能な fixture が
+追加され、bench-cycle 横断の signal になる。
+
+**コスト**: small + half-day。
+
+### 28. step-end event に initial_verify_passed boolean を追加
+
+**Source**: bench-cycle 2026-05-23, fixture(s) 103-fizz-buzz
+**Axis**: log content
+
+**観察**: 103 step 1, 2 で initial verify が即 pass、agent loop は 0 turn
+で抜けた。これを `turns=0` から推定したが、独立 field がなく解析側で
+自動検出しにくい。
+
+**仮説**: 「前 step の patch によって後続 step も既に成立した」状態を
+専用フィールドで宣言できれば、planner の over-fragmentation を解析側で
+度数集計可能。
+
+**変更案**:
+- `step-end` event に `initial_verify_passed: true|false` 追加
+- 判定: turn=0 の verify event status=passed なら true
+- `orchestrator.lisp` の step-end emit 箇所に 1 field 追加
+
+**期待効果**: bench-cycle 解析で「実質 no-op だった step の比率」を
+直接集計でき、planner 設計の品質 metric として使える。
+
+**コスト**: small + half-day。
+
+### 29. verify event を pre-verify / post-verify で区別
+
+**Source**: bench-cycle 2026-05-23, fixture(s) 103-fizz-buzz
+**Axis**: log content
+
+**観察**: 現状はすべて `verify` type、turn 値で「初回 verify か patch 後 verify か」
+を区別する。意味が違うものに同じ type を割り当てており、filter / 集計が
+書きにくい。
+
+**仮説**: 「step の最初に必ず走る verify」と「patch ごとの確認 verify」は
+意味が違うので type で分離するべき。
+
+**変更案**:
+- event type を `pre-verify` (turn=0 の initial verify) / `verify`
+  (patch 後) に分割
+- 後方互換のため `verify` をそのまま残し、別 type を併用する案も可
+
+**期待効果**: G1 解析で type-based filter が直接書ける。bench-cycle skill
+の Python 側分析コードが簡潔になる。
+
+**コスト**: small + half-day。
+
+### 30. planner prompt に step 間 acceptance criteria 非重複 guidance
+
+**Source**: bench-cycle 2026-05-23, fixture(s) 103-fizz-buzz
+**Axis**: implementation
+
+**観察**: 103 の plan で step 0 (test-fizz-buzz-n15, "all four output
+categories") が step 1 (divisibility-only) と step 2 (non-divisible) の
+test を test レベルで subsume → step 1/2 は initial verify で即 pass、
+no-op。
+
+**仮説**: planner system prompt に「各 step の deftest は前 step の test
+が既に保証する事象を再確認しないこと」を明示すれば、独立した
+acceptance criterion 単位の分割になる。
+
+**変更案**:
+- `+default-planner-system-prompt+` および `prompts/planner.md` の Rules
+  セクションに 1 行追加:
+  > Each step's test_source must check a behavior NOT already implied
+  > by earlier steps' tests. If you can't think of one, the previous
+  > step is the only step you need.
+
+**期待効果**: 103 のような trivial fixture で no-op step が無くなり、
+wall-clock 短縮（impl-review LLM call が無駄に発火しなくなる）。他
+fixture でも planner の冗長分割を抑制。但し過去（#21 関連）の experience
+通り、prompt-only fix は LLM 遵守不安定。effect は確認 bench 必須。
+
+**コスト**: small + half-day（prompt 1 段落 + 1 fixture re-bench）。
+
+### 31. trivial-task path: review pipeline の short-circuit
+
+**Source**: bench-cycle 2026-05-23, fixture(s) 103-fizz-buzz
+**Axis**: implementation
+
+**観察**: 103 で wall-clock 450.7s のうち per-step 実行は 49.2s、残り
+~400s が review pipeline (spec 生成 + plan-review + tests-review +
+impl-review × 3) の LLM 呼び出し。実 work の **9 倍以上のオーバーヘッド**。
+
+**仮説**: goal text と plan が十分単純な場合、review pipeline の一部 /
+全部を省略して agent loop に直行できれば trivial fixture で 30-50%
+wall-clock 削減。
+
+**変更案**:
+- `cl-harness:develop` に `:review-policy :light` mode を追加
+- `:light` は spec 生成・plan review・tests review をスキップ、impl-review
+  のみ残す
+- もしくは heuristic で goal-text 文字数 / plan step 数 < N の場合に
+  自動 light モード降格
+
+**期待効果**: 100-greet / 101-double / 103-fizz-buzz 等の trivial fixture
+で wall-clock 30-50% 短縮見込み。複雑 fixture（102+, 104+）には影響なし。
+
+**コスト**: medium + 1-2 days（mode 追加 + heuristic 設計 + 既存テスト
+維持 + 全 fixture re-bench で regression 確認）。
+
