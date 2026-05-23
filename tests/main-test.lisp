@@ -42,7 +42,7 @@
       (ok (equal "demo" (run-config-system c)))
       (ok (eq :runtime-native (run-config-condition c)))
       (ok (typep (run-config-limits c) 'run-limits))
-      (ok (= 3 (run-limits-max-patches (run-config-limits c)))))))
+      (ok (= 5 (run-limits-max-patches (run-config-limits c)))))))
 
 (deftest run-limits-default-max-context-tokens
   (ok (= 50000

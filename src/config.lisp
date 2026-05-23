@@ -60,7 +60,7 @@ context window from blowing, not minimising tokens."))
   (make-instance 'run-limits
                  :max-turns 20
                  :max-tool-calls 80
-                 :max-patches 3
+                 :max-patches 5
                  :max-read-files 40
                  :max-repl-evals 40
                  :max-wall-clock-seconds 600
