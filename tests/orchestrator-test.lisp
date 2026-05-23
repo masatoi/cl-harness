@@ -778,6 +778,148 @@ plan (so a stuck loop test can keep getting the same response)."
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 
+(deftest fresh-source-surface-p-detects-empty-and-trivial-src
+  (let ((root (uiop:ensure-directory-pathname
+               (%tmp-path "fresh-src-probe"))))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist root)
+           (testing "no src/ subdirectory: NOT eligible for downgrade"
+             (ok (not (cl-harness/src/orchestrator::%fresh-source-surface-p
+                       (namestring root)))
+                 "missing src/ returns NIL (respect planner)"))
+           (testing "src/ exists but is empty: eligible for downgrade"
+             (ensure-directories-exist (merge-pathnames "src/" root))
+             (ok (cl-harness/src/orchestrator::%fresh-source-surface-p
+                  (namestring root))
+                 "empty src/ counts as fresh"))
+           (testing "src/main.lisp with only in-package: eligible"
+             (with-open-file (out (merge-pathnames "src/main.lisp" root)
+                                  :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+               (format out "(in-package #:demo)~%")
+               (format out ";; not yet implemented~%"))
+             (ok (cl-harness/src/orchestrator::%fresh-source-surface-p
+                  (namestring root))
+                 "in-package-only src/main.lisp counts as fresh"))
+           (testing "src/main.lisp with a defun: NOT eligible"
+             (with-open-file (out (merge-pathnames "src/main.lisp" root)
+                                  :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+               (format out "(in-package #:demo)~%")
+               (format out "(defun greet (name) (format nil \"Hi ~~A\" name))~%"))
+             (ok (not (cl-harness/src/orchestrator::%fresh-source-surface-p
+                       (namestring root)))
+                 "src/main.lisp with a defun is not fresh")))
+      (when (uiop:directory-exists-p root)
+        (uiop:delete-directory-tree root :validate t)))))
+
+(deftest execute-plan-downgrades-needs-exploration-on-fresh-source
+  (let* ((project-root (uiop:ensure-directory-pathname
+                        (%tmp-path "downgrade-fresh")))
+         (test-file (merge-pathnames
+                     (format nil "tests/main-test-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-with-downgrade"))
+         (steps (list (make-instance
+                       'plan-step
+                       :index 0
+                       :issue "Implement feature X."
+                       :test-name "x-test"
+                       :test-source "(deftest x-test (ok t))"
+                       :files-to-modify nil
+                       :needs-exploration :lightweight)))
+         (call-log (cons '() nil))
+         (explore-log (cons '() nil))
+         (runner (%fake-runner call-log (cons (list :passed) nil)))
+         (explorer (%fake-explorer
+                    (cons (list "memo: SHOULD NOT BE CALLED") nil)
+                    explore-log)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist project-root)
+           (ensure-directories-exist
+            (merge-pathnames "src/" project-root))
+           (%make-test-file test-file)
+           (ok (cl-harness/src/orchestrator::%fresh-source-surface-p
+                (namestring project-root))
+               "precondition: empty src/ counts as fresh")
+           (execute-plan steps
+                         :project-root (namestring project-root)
+                         :system "demo"
+                         :test-system "demo/tests"
+                         :test-file test-file
+                         :log-path log-path
+                         :run-fn runner
+                         :explore-fn explorer)
+           (testing "explore-fn was NOT invoked (downgrade fired)"
+             (ok (zerop (length (car explore-log)))))
+           (testing "develop log contains :explore-downgrade event"
+             (let ((log-contents (uiop:read-file-string log-path)))
+               (ok (search "\"explore-downgrade\"" log-contents))
+               (ok (search "\"from\":\"lightweight\"" log-contents))
+               (ok (search "\"to\":\"none\"" log-contents))
+               (ok (search "\"reason\":\"fresh-source-surface\""
+                           log-contents)))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path))
+      (when (uiop:directory-exists-p project-root)
+        (uiop:delete-directory-tree project-root :validate t)))))
+
+(deftest execute-plan-keeps-explore-when-source-has-code
+  (let* ((project-root (uiop:ensure-directory-pathname
+                        (%tmp-path "keep-explore")))
+         (test-file (merge-pathnames
+                     (format nil "tests/main-test-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-keep-explore"))
+         (steps (list (make-instance
+                       'plan-step
+                       :index 0
+                       :issue "Extend existing greet to handle NIL."
+                       :test-name "x-test"
+                       :test-source "(deftest x-test (ok t))"
+                       :files-to-modify nil
+                       :needs-exploration :lightweight)))
+         (call-log (cons '() nil))
+         (explore-log (cons '() nil))
+         (runner (%fake-runner call-log (cons (list :passed) nil)))
+         (explorer (%fake-explorer
+                    (cons (list "memo: pretend we explored") nil)
+                    explore-log)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist
+            (merge-pathnames "src/" project-root))
+           (with-open-file (out (merge-pathnames "src/main.lisp" project-root)
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+             (format out "(in-package #:demo)~%")
+             (format out "(defun greet (name) (format nil \"Hi ~~A\" name))~%"))
+           (%make-test-file test-file)
+           (execute-plan steps
+                         :project-root (namestring project-root)
+                         :system "demo"
+                         :test-system "demo/tests"
+                         :test-file test-file
+                         :log-path log-path
+                         :run-fn runner
+                         :explore-fn explorer)
+           (testing "explore-fn WAS invoked (no downgrade)"
+             (ok (= 1 (length (car explore-log)))))
+           (testing "develop log has NO :explore-downgrade event"
+             (let ((log-contents (uiop:read-file-string log-path)))
+               (ok (not (search "explore-downgrade" log-contents))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path))
+      (when (uiop:directory-exists-p project-root)
+        (uiop:delete-directory-tree project-root :validate t)))))
+
 (deftest execute-plan-threads-develop-state-into-explore-fn
   ;; Phase C.7 wiring: when EXECUTE-PLAN is invoked with a
   ;; :develop-state, %execute-step must thread that state into the

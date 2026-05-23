@@ -423,10 +423,31 @@ root cause を追える。
 
 **コスト**: small + half-day。
 
-### 21. planner が needs_exploration=null/false を出した時 explore phase を skip
+### 21. ~~planner が needs_exploration=null/false を出した時 explore phase を skip~~ → 実装済 (2026-05-23, 別アプローチ)
 
-**Source**: bench-cycle 2026-05-23, fixture(s) 102-counter-class
-**Axis**: implementation
+**Status**: ✅ **実装済** — `docs/benchmarks/results-2026-05-23-21-followup-fresh-source-downgrade.md` 参照。
+
+**当初観察の修正**: 元の前提（orchestrator が null/false を「run explore」
+として処理）は誤り。`%execute-step` のゲートは既に `(and explore-fn needs
+(not (eq :none needs)))` で null/`:none` を skip 設計。真因は planner が
+fresh project の step 0 でも `:lightweight` を明示的に emit していたこと。
+
+**採用解**: `prompt 改修`路線は LLM 遵守不安定で N=1 variance に埋もれる
+ため revert。代わりに **`%fresh-source-surface-p` ヘルパー + 自動
+downgrade** を `%execute-step` に実装。`<project-root>/src/` 配下に
+substantive な `(def…` 形が一つもない時は planner の `:lightweight` /
+`:deep` を `:none` に強制格下げし、`:explore-downgrade` event を log。
+
+**確認された effect**（102-counter-class N=1, step 0 直接比較）:
+- step 0 token: 21,963 → 9,206（**-58%**）
+- step 0 elapsed: 77.0s → 38.6s（**-50%**）
+- step 0 turns: 10 → 5
+
+**残課題**: Bench 全体完走は別バグ #26 で保留。
+
+---
+
+**元の archive 内容（参考のため残置）**:
 
 **観察**: step 0 で plan event の `steps[0].needs_exploration=null`
 （step-start でも `needs_exploration=None`）にもかかわらず explore phase
@@ -552,4 +573,34 @@ defmethod を別 turn に分けている）。
 ミスマッチを予防。
 
 **コスト**: small + half-day（prompt 2 箇所修正）。
+
+### 26. subtask-summary が :REVIEW-REJECTED を未知 status として例外を投げる
+
+**Source**: bench-cycle 2026-05-23 follow-up (#21 検証), fixture(s) 102-counter-class
+**Axis**: implementation
+
+**観察**: step 1 で impl-review が 2 回連続 reject → step-end status=
+`review-rejected`, outcome=`exhausted` → develop loop が replan に進む際、
+`subtask-summary` モジュールが以下の例外:
+```
+subtask-summary: unsupported :verification :REVIEW-REJECTED;
+expected (:PASSED :GIVE-UP :LIMIT-EXHAUSTED :DIRTY-ONLY :ERROR)
+```
+
+**仮説**: `:REVIEW-REJECTED` は v0.4 で導入された step status だが
+`subtask-summary` の許容 list には未追加。impl-review が exhausted で
+reject に終わるケースは bench fixtures でまだ稀で、これまで顕在化して
+いなかった。
+
+**変更案**:
+- `subtask-summary` モジュールの `:verification` 許容 list（恐らく ecase
+  / member の式）に `:review-rejected` を追加
+- もしくは `:review-rejected` を `:give-up` 同等として扱う mapping を
+  入口で適用
+
+**期待効果**: 102-counter-class の bench full-run が完走可能になり、
+#21 の effect を end-to-end で測定可能に。他 fixture でも impl-review
+exhaustion からの replan path が安定。
+
+**コスト**: small。half-day（場所特定 + 1 行追加 + 既存テスト確認）。
 

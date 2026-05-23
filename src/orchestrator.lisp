@@ -536,6 +536,43 @@ Returns NIL when TEXT is NIL."
     (t (format nil "~A~%[... truncated, ~D chars elided ...]"
                (subseq text 0 cap) (- (length text) cap)))))
 
+(defun %fresh-source-surface-p (project-root)
+  "Return T when <PROJECT-ROOT>/src/ EXISTS but contains no substantive
+Lisp definitions yet — i.e., src/*.lisp either is empty or only
+contains in-package / defpackage forms, comments, and whitespace.
+This is a conservative heuristic used by %EXECUTE-STEP to downgrade
+the planner's :LIGHTWEIGHT / :DEEP NEEDS-EXPLORATION to :NONE.
+
+When src/ does NOT exist at all (project uses a non-standard layout
+or this is a test fixture with no project skeleton), we return NIL
+so the planner's choice is respected and existing test setups that
+use a bare temp directory as project-root keep their behavior. The
+downgrade signal is intentionally tied to the conventional
+`<project-root>/src/<file>.lisp' layout used by
+package-inferred-system fixtures.
+
+Detection grep is conservative: matches `(def` followed by any
+common defining macro name. False negatives (treating a project
+with code as fresh) would re-introduce the wasted explore phase,
+not break correctness; false positives (treating fresh as not
+fresh) keep the planner's choice and burn explore budget — also
+not a correctness issue. The heuristic only changes performance."
+  (let* ((src-dir (merge-pathnames
+                   "src/"
+                   (uiop:ensure-directory-pathname project-root))))
+    (when (uiop:directory-exists-p src-dir)
+      (let ((files (directory (merge-pathnames "*.lisp" src-dir))))
+        (if (null files)
+            t
+            (every
+             (lambda (file)
+               (let ((content (handler-case (uiop:read-file-string file)
+                                (error () ""))))
+                 (not (cl-ppcre:scan
+                       "(?m)^\\s*\\(def(un|class|method|generic|macro|struct|var|parameter|constant)\\b"
+                       content))))
+             files))))))
+
 (defun %execute-step (step run-fn project-root system test-system
                       condition test-file logger
                       provider mcp-client run-limits explore-fn
@@ -579,7 +616,12 @@ exit via UNWIND-PROTECT."
     (setf (develop-state-current-step-index develop-state)
           (plan-step-index step)))
   (unwind-protect
-       (let* ((needs (plan-step-needs-exploration step))
+       (let* ((raw-needs (plan-step-needs-exploration step))
+              (downgrade-explore-p
+               (and raw-needs
+                    (not (eq :none raw-needs))
+                    (%fresh-source-surface-p project-root)))
+              (needs (if downgrade-explore-p :none raw-needs))
               (do-explore (and explore-fn
                                needs
                                (not (eq :none needs))))
@@ -608,6 +650,15 @@ exit via UNWIND-PROTECT."
                                       (symbol-name (or needs :none))))
              ("transcript_path" . ,(namestring run-logger-path)))
            :test 'equal))
+         (when downgrade-explore-p
+           (%log-develop-event
+            logger :explore-downgrade
+            (alist-hash-table
+             `(("step_index" . ,(plan-step-index step))
+               ("from" . ,(string-downcase (symbol-name raw-needs)))
+               ("to" . "none")
+               ("reason" . "fresh-source-surface"))
+             :test 'equal)))
          (let* ((step-logger (open-run-logger run-logger-path))
                 (explore-result
                  (when do-explore
