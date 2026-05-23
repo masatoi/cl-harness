@@ -951,3 +951,127 @@ through ECASE expression. Wanted one of (#\" #\- #\0 ... #\{ #\[ ...)`
 **コスト**: medium + 1-2 days（streaming-response の前処理層追加 +
 非 streaming パス互換性確保）。
 
+---
+
+## 2026-05-24 bench-cycle 由来 (104-cache-simple)
+
+bench-cycle skill で 104-cache-simple を N=1 実行（:PASSED 完走、3
+steps, 0 replans, 475.5s）。今日の最新 default (`#34` max-context-tokens
+4000 + `#33` max-tokens 8192 + `#32` read-timeout 180s + `#21` explore
+downgrade + `#31` light review-policy 利用可能 / 今回は :auto) で初の
+104 clean PASSED。results doc:
+`docs/benchmarks/results-2026-05-24-bench-cycle-104-cache-simple.md`。
+
+### 36. 104b-cache-concurrent sibling fixture 追加
+
+**Source**: bench-cycle 2026-05-24, fixture(s) 104-cache-simple
+**Axis**: bench target
+
+**観察**: 104 は単純な single-thread cache で agent が安定動作。max
+prompt 1.7k token 未満で compaction も不要。より複雑な fixture が
+不足。
+
+**仮説**: concurrent / threadsafe 要件を入れた variant があれば mutex
+/ atomic 等の design choice を含むより重い fixture になり、context
+hoarding や hang region の挙動を観測しやすくなる。
+
+**変更案**:
+- `develop-benchmarks/104b-cache-concurrent/` 追加
+- goal text: 「`bordeaux-threads` で thread-safe な cache。複数 thread
+  からの concurrent put/get を破綻なく扱う」
+- test_source で並行 access (2-4 thread × 1000 ops) を確認
+
+**期待効果**: thread-safety 系設計判断を観測可能な fixture が増える。
+context-heavy 状態で compaction や hang の挙動も観測しやすい。
+
+**コスト**: small + half-day。
+
+### 37. evolved-failures event の追加
+
+**Source**: bench-cycle 2026-05-24, fixture(s) 104-cache-simple
+**Axis**: log content
+
+**観察**: 104 step 1 で initial verify が `CACHE-PUT undefined`、turn 3
+patch 後 verify が `CACHE-GET undefined` と reason が evolve。同 test
+name (`TEST-CACHE-PUT-AND-RETRIEVAL`) で fail reason が変化することは
+「前 patch が effective + 追加 work 必要」状態の暗黙 signal だが、log
+では直接示されない。
+
+**仮説**: step 内で fail reason が evolve したケースを independent
+event として log すれば、bench-cycle 解析側で「step が複数の implicit
+acceptance criteria を内包している → 分割すべき」を rule で自動検出可能。
+
+**変更案**:
+- orchestrator の `%execute-step` 内で post-verify failed_tests を
+  前回 verify failed_tests と比較
+- test name が同じだが reason が異なるとき `:evolved-failure` event
+  を emit
+- fields: `step_index`, `test_name`, `prior_reason`, `current_reason`,
+  `turn`
+
+**期待効果**: 「step が複数 acceptance criteria を内包している」状態を
+自動検出。planner の step 設計 quality metric として利用可能。複数
+fixture (102, 104) で recurring pattern なので effect 範囲広い。
+
+**コスト**: small + half-day（diff 比較 + event emit）。
+
+### 38. agent prompt に「test の全 symbol 1 turn 内」ヒント追加
+
+**Source**: bench-cycle 2026-05-24, fixture(s) 104-cache-simple
+**Axis**: implementation
+
+**観察**: 104 step 0 で defclass → verify-fail (`MAKE-CACHE undefined`)
+→ make-cache 追加 → pass。同 step 1 で cache-put → verify-fail
+(`CACHE-GET undefined`) → cache-get 追加 → pass。**「test に出る symbol
+群を 1 turn でまとめずに 1 つずつ追加 → 都度 verify 待ち」pattern が
+2 step 連続で観察された。102 step 0 でも同 pattern (defclass +
+make-counter)**。
+
+**仮説**: agent system prompt に「test を読んで symbol を enumerate し
+1 turn で全部 patch」せよと明示すれば、structure+constructor /
+put+get 等の依存セットを 1 patch で済ませられる。
+
+**変更案**:
+- agent system prompt（`src/agent/system-prompt.lisp` 相当）に 1 段落:
+  > When the test exercises multiple symbols (`make-x` + `x-accessor`,
+  > `cache-put` + `cache-get`, defclass + its constructor), add **all of
+  > them in the same lisp-edit-form / lisp-patch-form turn** instead of
+  > waiting for verify to reveal each missing one. Read the test
+  > carefully to enumerate every symbol it references before patching.
+- backlog #24 (`defgeneric + method 同時定義`) と類似 pattern の
+  generalization。並列扱いで OK。
+
+**期待効果**: 104 step 0/1 + 102 step 0 等で 1-2 turn 短縮。複数 fixture
+で recurring なので effect 範囲広い。
+
+**コスト**: small + half-day（prompt 1 段落 + fixture re-bench）。
+
+### 39. impl-review-stage で「test の全 symbol カバー」明示 check
+
+**Source**: bench-cycle 2026-05-24, fixture(s) 104-cache-simple
+**Axis**: implementation
+
+**観察**: 104 step 0 で 1 patch 後 verify-fail の reason が `MAKE-CACHE
+undefined`。test を読めば「make-cache を呼んでいる」と分かるはずだが
+agent は defclass で完了したつもりに。impl-review (`:auto` / `:light`
+で keep される) が catch すべきだが現状は test の symbol enumeration
+を明示的 check 項目に持たない。
+
+**仮説**: impl-review prompt に「test source の全 symbol が defined か」
+を明示的 check 項目として追加すれば、incomplete impl を early reject
+できる。
+
+**変更案**:
+- `src/review.lisp` の `review-development-artifact` に渡される
+  impl-review prompt の check 項目に追加:
+  > Does the implementation define every symbol the test references?
+  > Walk through the deftest body and enumerate.
+- reject 時の feedback で `missing: X, Y` を具体的に返す
+
+**期待効果**: incomplete-impl pattern を impl-review が早期 catch。但し
+impl-review LLM call 自体は cost なので effect / cost trade-off は
+measure 必要（#38 prompt 変更が成功すればこの review check は不要に
+なる可能性もある）。
+
+**コスト**: medium + 1 day（prompt 修正 + bench で reject rate 観察）。
+
