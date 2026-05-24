@@ -1267,6 +1267,12 @@ RUN-LIMITS-MAX-CONTEXT-TOKENS, return the result of COMPACT-HISTORY;
 otherwise return MESSAGES unchanged. Returns MESSAGES unchanged when
 RUN-LIMITS is NIL.
 
+Returns (VALUES EFFECTIVE-MESSAGES INFO) where INFO is NIL when no
+compaction was applied, otherwise a plist with :THRESHOLD, :MESSAGES-IN,
+:MESSAGES-OUT, :TOKENS-ESTIMATE-IN, :TOKENS-ESTIMATE-OUT so callers can
+emit a :compact JSONL event for post-hoc visibility (backlog H, 2026-05-25
+context-mgmt code review).
+
 The threshold is approximate (chars/4 heuristic via
 APPROXIMATE-HISTORY-TOKENS); fine-grained accuracy is not the goal —
 keeping the context window from blowing during long agent runs is.
@@ -1277,10 +1283,20 @@ threading is left alone so the JSONL transcript still records the full
 conversation."
   (let ((threshold (and run-limits
                         (run-limits-max-context-tokens run-limits))))
-    (if (and threshold
-             (> (approximate-history-tokens messages) threshold))
-        (compact-history messages)
-        messages)))
+    (cond
+      ((not (and threshold
+                 (> (approximate-history-tokens messages) threshold)))
+       (values messages nil))
+      (t
+       (let* ((tokens-in (approximate-history-tokens messages))
+              (compacted (compact-history messages))
+              (tokens-out (approximate-history-tokens compacted)))
+         (values compacted
+                 (list :threshold threshold
+                       :messages-in (length messages)
+                       :messages-out (length compacted)
+                       :tokens-estimate-in tokens-in
+                       :tokens-estimate-out tokens-out)))))))
 
 (defun %record-failed-verify (state verify)
   "Persist VERIFY (a VERIFY-RESULT, even on failure) onto STATE so
@@ -1301,30 +1317,51 @@ Returns the CHAT-RESPONSE.
 
 Extracted from inline use in the agent loop so the dual logging
 boundary is unit-testable without standing up the whole loop."
-  (let ((effective-messages
-         (%maybe-compact-messages messages (run-config-limits config))))
-    (when (run-config-log-llm-requests-p config)
+  (multiple-value-bind (effective-messages compact-info)
+      (%maybe-compact-messages messages (run-config-limits config))
+    (when compact-info
+      ;; Backlog H (2026-05-25): emit visibility event whenever
+      ;; compact-history was invoked so post-hoc bench analysis can see
+      ;; how often and how aggressively the threshold fires.
       (log-event
-       logger :llm-request
+       logger :compact
        `(("turn" . ,turn)
-         ("messages" . ,(coerce
-                         (mapcar (lambda (m)
-                                   (alist-hash-table
-                                    `(("role" . ,(gethash "role" m))
-                                      ("content" . ,(gethash "content" m)))
-                                    :test 'equal))
-                                 effective-messages)
-                         'vector))
-         ("messages_count" . ,(length effective-messages)))))
-    (let* ((chat (complete-chat provider effective-messages))
-           (text (chat-response-content chat)))
-      (incf (agent-state-token-total state)
-            (or (chat-response-total-tokens chat) 0))
-      (log-event logger :llm-response
-                 `(("turn" . ,turn)
-                   ("content" . ,text)
-                   ("tokens" . ,(or (chat-response-total-tokens chat) 0))))
-      chat)))
+         ("threshold" . ,(getf compact-info :threshold))
+         ("messages_in" . ,(getf compact-info :messages-in))
+         ("messages_out" . ,(getf compact-info :messages-out))
+         ("tokens_estimate_in" . ,(getf compact-info :tokens-estimate-in))
+         ("tokens_estimate_out" . ,(getf compact-info :tokens-estimate-out)))))
+    (let ((effective-tokens (approximate-history-tokens effective-messages)))
+      (when (run-config-log-llm-requests-p config)
+        (log-event
+         logger :llm-request
+         `(("turn" . ,turn)
+           ("messages" . ,(coerce
+                           (mapcar (lambda (m)
+                                     (alist-hash-table
+                                      `(("role" . ,(gethash "role" m))
+                                        ("content" . ,(gethash "content" m)))
+                                      :test 'equal))
+                                   effective-messages)
+                           'vector))
+           ("messages_count" . ,(length effective-messages))
+           ("messages_tokens_estimate" . ,effective-tokens))))
+      (let* ((chat (complete-chat provider effective-messages))
+             (text (chat-response-content chat)))
+        (incf (agent-state-token-total state)
+              (or (chat-response-total-tokens chat) 0))
+        (log-event logger :llm-response
+                   `(("turn" . ,turn)
+                     ("content" . ,text)
+                     ("tokens" . ,(or (chat-response-total-tokens chat) 0))
+                     ;; Backlog H: surface prompt-side token estimate on
+                     ;; every LLM call (always, regardless of
+                     ;; log-llm-requests-p) so analysis can see how close
+                     ;; runs come to max-context-tokens without dumping
+                     ;; full message content.
+                     ("messages_count" . ,(length effective-messages))
+                     ("messages_tokens_estimate" . ,effective-tokens)))
+        chat))))
 
 (defun step-turn (turn state config provider mcp-client policy logger messages
                   &key dry-run-p)

@@ -2009,6 +2009,102 @@ return the parsed events as a list of hash-tables."
         (ok (not (member "llm-request" types :test #'equal)))
         (ok (member "llm-response" types :test #'equal))))))
 
+(deftest llm-response-event-carries-message-size-instrumentation
+  ;; Backlog H (2026-05-25 context-mgmt code review): every LLM call should
+  ;; record both the prompt-side message count and the estimated token
+  ;; usage even when log-llm-requests is off, so post-hoc analysis can
+  ;; tell how close runs come to the compaction threshold without
+  ;; dumping the full conversation.
+  (let* ((messages (list (cl-harness/src/model:make-chat-message "system" "sys")
+                         (cl-harness/src/model:make-chat-message "user" "hello world")))
+         (config (cl-harness/src/config:make-run-config
+                  :project-root "/tmp/x" :system "demo"
+                  :test-system "demo/tests" :issue "x"
+                  :condition :generic-mcp))
+         (state (make-instance 'cl-harness/src/agent:agent-state))
+         (provider (make-instance '%stub-provider))
+         (events (%capture-jsonl-events
+                  (lambda (logger)
+                    (cl-harness/src/agent::%complete-chat-with-logging
+                     provider messages config state logger 1)))))
+    (let ((resp (find-if (lambda (e) (equal (gethash "type" e) "llm-response"))
+                         events)))
+      (ok resp ":llm-response event present")
+      (multiple-value-bind (count present)
+          (gethash "messages_count" resp)
+        (declare (ignore count))
+        (ok present "messages_count present on :llm-response"))
+      (multiple-value-bind (tok present)
+          (gethash "messages_tokens_estimate" resp)
+        (ok present "messages_tokens_estimate present on :llm-response")
+        (ok (and (numberp tok) (plusp tok))
+            "tokens_estimate non-zero for non-empty messages")))))
+
+(deftest complete-chat-emits-compact-event-when-threshold-exceeded
+  ;; Backlog H: compact-history fires silently. Add a :compact JSONL event
+  ;; so post-hoc bench analysis can see WHEN and HOW MUCH was elided.
+  (let* ((big (make-string 10000 :initial-element #\x))
+         (messages
+           (loop for i from 0 below 15
+                 for role = (if (oddp i) "assistant" "user")
+                 collect (cl-harness/src/model:make-chat-message role big)))
+         ;; tight budget so the 15 × 10KB history definitely exceeds it
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 50 :max-tool-calls 99
+                                :max-patches 99 :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600
+                                :max-action-parse-errors 99
+                                :max-consecutive-failed-patches 99
+                                :max-context-tokens 500))
+         (config (cl-harness/src/config:make-run-config
+                  :project-root "/tmp/x" :system "demo"
+                  :test-system "demo/tests" :issue "x"
+                  :condition :generic-mcp :limits limits))
+         (state (make-instance 'cl-harness/src/agent:agent-state))
+         (provider (make-instance '%stub-provider))
+         (events (%capture-jsonl-events
+                  (lambda (logger)
+                    (cl-harness/src/agent::%complete-chat-with-logging
+                     provider messages config state logger 1)))))
+    (let ((compact (find-if (lambda (e) (equal (gethash "type" e) "compact"))
+                            events)))
+      (testing ":compact event is emitted on threshold breach"
+        (ok compact))
+      (when compact
+        (testing "carries turn + before/after counters"
+          (ok (equal 1 (gethash "turn" compact)))
+          (ok (= 15 (gethash "messages_in" compact)))
+          (ok (< (gethash "messages_out" compact)
+                 (gethash "messages_in" compact))
+              "messages_out < messages_in after compaction")
+          (ok (> (gethash "tokens_estimate_in" compact) 500)
+              "tokens_estimate_in exceeds threshold (else we wouldn't compact)")
+          (ok (< (gethash "tokens_estimate_out" compact)
+                 (gethash "tokens_estimate_in" compact))
+              "tokens_estimate_out < tokens_estimate_in")
+          (ok (equal 500 (gethash "threshold" compact))
+              "threshold field echoes max-context-tokens"))))))
+
+(deftest complete-chat-omits-compact-event-when-under-threshold
+  ;; The :compact event must only fire when compaction actually happens;
+  ;; small message lists should pass through without it.
+  (let* ((messages (list (cl-harness/src/model:make-chat-message "system" "sys")
+                         (cl-harness/src/model:make-chat-message "user" "hi")))
+         (config (cl-harness/src/config:make-run-config
+                  :project-root "/tmp/x" :system "demo"
+                  :test-system "demo/tests" :issue "x"
+                  :condition :generic-mcp))
+         (state (make-instance 'cl-harness/src/agent:agent-state))
+         (provider (make-instance '%stub-provider))
+         (events (%capture-jsonl-events
+                  (lambda (logger)
+                    (cl-harness/src/agent::%complete-chat-with-logging
+                     provider messages config state logger 1)))))
+    (ok (not (find-if (lambda (e) (equal (gethash "type" e) "compact"))
+                      events))
+        ":compact event NOT emitted when under threshold")))
+
 (deftest log-llm-requests-warning-once
   (testing "warning emitted to *error-output* when flag is true"
     (let ((stderr (with-output-to-string (*error-output*)

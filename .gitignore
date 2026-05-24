@@ -25,3 +25,6 @@ tests/tmp/*
 
 # Claude Code runtime (per-machine; not source)
 .claude/scheduled_tasks.lock
+
+# bench-cycle artifact data (per-run summaries; do not version)
+.bench-data/

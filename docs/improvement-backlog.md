@@ -1769,6 +1769,45 @@ reject して improved version を出させていた safety net が消えた。
 
 **コスト**: medium + 1 day (stage 分離 prompt + bench 検証)。
 
+---
+
+## 2026-05-25 context-management code review 由来
+
+`docs/notes/2026-05-25-context-management-review.md` で context-management 全体を
+コードレビュー。 verdict: **structurally reasonable, but largely unmeasured, with one
+significant semantic gap (compaction digest content 0)**。 8 smells を identify、
+優先度順に整理。
+
+### H. ~~context-management instrumentation~~ → 実装済 (2026-05-25)
+
+**Status**: ✅ **実装済** — `src/agent.lisp` の `%maybe-compact-messages` を
+multi-values 返却に refactor、`%complete-chat-with-logging` で以下 events を emit:
+
+1. **`:compact` event** (compaction が発火した時のみ):
+   - `turn`, `threshold`, `messages_in`/`messages_out`, `tokens_estimate_in`/`tokens_estimate_out`
+2. **`:llm-response` event に `messages_count` + `messages_tokens_estimate` 追加** (常時):
+   - `log-llm-requests=nil` でも prompt-side token 推定が記録される
+   - bench 後分析で「どの turn でどれだけ context size だったか」が即時 retrievable
+3. **`:llm-request` event に `messages_tokens_estimate` 追加** (log-llm-requests=t 時)
+
+tests: 3 件追加
+(`llm-response-event-carries-message-size-instrumentation`,
+`complete-chat-emits-compact-event-when-threshold-exceeded`,
+`complete-chat-omits-compact-event-when-under-threshold`)。478 passed.
+
+これで次の bench から compaction 発火頻度 / message size 分布が透視可能に。
+
+### 後続 (依然 backlog 候補)
+
+- **A**: compaction digest の content 強化 (tool-error / failure surface を 1 行に)
+- **I**: max-context-tokens default 4000 → measurement-based 再評価
+- **F**: stale flag 検証 (set 経路無いなら削除)
+- **G**: gradient compaction (cliff edge 緩和)
+- **D**: completed-subtask-summaries cap
+- paired bench: max-context-tokens=4000/8000/16000 で sweep
+
+詳細: `docs/notes/2026-05-25-context-management-review.md`
+
 
 
 
