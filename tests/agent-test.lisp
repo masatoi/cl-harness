@@ -792,6 +792,105 @@ order. Helper for tests that assert against the on-disk transcript."
     (testing "agent stops after exactly the budget"
       (ok (= 3 (cl-harness/src/agent:agent-state-parse-error-streak state))))))
 
+(deftest run-agent-aborts-on-consecutive-failed-patches
+  ;; backlog #45: when agent issues N consecutive patches that all return
+  ;; isError=true (e.g. lisp-patch-form structural rejection from
+  ;; parinfer auto-repair or token-match failure), run-agent should
+  ;; exit :limit-exhausted with limit-hit :max-consecutive-failed-patches
+  ;; rather than burning the full :max-patches budget on malformed JSON.
+  (let* ((patch-call
+          "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"old_text\":\"a\",\"new_text\":\"b\"}}")
+         (*llm-responses* (list patch-call patch-call patch-call patch-call))
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-patch-form\"" body)
+                 (%error-tool-result id "parinfer auto-repair failed"))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 50
+                                :max-tool-calls 99
+                                :max-patches 99
+                                :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600
+                                :max-action-parse-errors 99
+                                :max-consecutive-failed-patches 3))
+         (config (make-run-config :project-root "/tmp/proj"
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :issue "x"
+                                  :limits limits))
+         (state (%run-agent-with-temp-logger config provider mcp policy)))
+    (testing "limit-hit names :max-consecutive-failed-patches"
+      (ok (eq :limit-exhausted
+              (cl-harness/src/agent:agent-state-status state)))
+      (ok (eq :max-consecutive-failed-patches
+              (cl-harness/src/agent:agent-state-limit-hit state))))
+    (testing "streak counter records exactly the budget consumed"
+      (ok (= 3 (cl-harness/src/agent:agent-state-consecutive-failed-patches
+                state))))))
+
+(deftest agent-state-consecutive-failed-patches-resets-on-successful-patch
+  ;; backlog #45: a successful patch must reset the streak counter so a
+  ;; fail-fail-succeed-fail-fail pattern does NOT trip the limit.
+  (let* ((patch-call
+          "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\",\"arguments\":{\"file_path\":\"src/x.lisp\",\"form_type\":\"defun\",\"form_name\":\"f\",\"old_text\":\"a\",\"new_text\":\"b\"}}")
+         (finish-call
+          "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"end after recovery\"}")
+         (*llm-responses* (list patch-call patch-call patch-call patch-call patch-call finish-call))
+         (patch-call-count 0)
+         (*mcp-handler*
+          (lambda (body)
+            (let ((id (%jsonrpc-id body)))
+              (cond
+                ((search "\"fs-set-project-root\"" body) (%ok-tool-result id))
+                ((search "\"load-system\"" body) (%ok-tool-result id))
+                ((search "\"run-tests\"" body)
+                 (%ok-tool-result id :passed 0 :failed 1))
+                ((search "\"lisp-patch-form\"" body)
+                 (incf patch-call-count)
+                 ;; Patches 1, 2 fail; patch 3 succeeds (resets streak);
+                 ;; patches 4, 5 fail. Counter ends at 2 (not 4) because
+                 ;; the successful patch reset it. The limit (3) is not
+                 ;; reached, so the loop progresses to the finish-call.
+                 (if (= patch-call-count 3)
+                     (%ok-tool-result id)
+                     (%error-tool-result id "parinfer auto-repair failed")))
+                (t (error "unexpected MCP body: ~A" body))))))
+         (mcp (%make-mcp-client-with-handler))
+         (provider (%make-stub-provider))
+         (policy (make-tool-policy :generic-mcp))
+         (limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 50
+                                :max-tool-calls 99
+                                :max-patches 99
+                                :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600
+                                :max-action-parse-errors 99
+                                :max-consecutive-failed-patches 3))
+         (config (make-run-config :project-root "/tmp/proj"
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :issue "x"
+                                  :limits limits))
+         (state (%run-agent-with-temp-logger config provider mcp policy)))
+    (testing "agent does not terminate on :max-consecutive-failed-patches"
+      (ok (not (eq :max-consecutive-failed-patches
+                   (cl-harness/src/agent:agent-state-limit-hit state)))))
+    (testing "streak counter reset to 2 after the recovery patch"
+      (ok (= 2 (cl-harness/src/agent:agent-state-consecutive-failed-patches
+                state))))))
+
 (deftest run-agent-dry-run-skips-mcp-tool-calls
   (let* ((seen-patch-call (cons nil nil))
          (*llm-responses*

@@ -35,6 +35,7 @@
                 #:run-limits-max-repl-evals
                 #:run-limits-max-wall-clock-seconds
                 #:run-limits-max-action-parse-errors
+                #:run-limits-max-consecutive-failed-patches
                 #:run-limits-max-context-tokens)
   (:import-from #:cl-harness/src/compact
                 #:compact-history
@@ -110,6 +111,7 @@
            #:agent-state-started-at
            #:agent-state-limit-hit
            #:agent-state-parse-error-streak
+           #:agent-state-consecutive-failed-patches
            #:agent-state-develop-state
            #:agent-state-reason
            #:agent-state-last-tool-errors
@@ -340,6 +342,16 @@ count. Resets to zero on any successful PARSE-ACTION; when it reaches
 RUN-LIMITS-MAX-ACTION-PARSE-ERRORS the loop exits :limit-exhausted with
 limit-hit :max-action-parse-errors so a malformed-output streak cannot
 silently consume the whole turn budget.")
+   (consecutive-failed-patches
+    :initform 0
+    :accessor agent-state-consecutive-failed-patches
+    :documentation "Consecutive source-mutating tool calls that returned
+isError=true (e.g. lisp-edit-form / lisp-patch-form structural rejection
+from parinfer auto-repair or token-match failure). Resets to zero on any
+successful source-mutating call. When it reaches
+RUN-LIMITS-MAX-CONSECUTIVE-FAILED-PATCHES the loop exits :limit-exhausted
+with limit-hit :max-consecutive-failed-patches (backlog #45). The
+non-streak counterpart is PATCH-ATTEMPTS which never resets.")
    (limit-hit :initform nil :accessor agent-state-limit-hit
               :documentation "When STATUS is :LIMIT-EXHAUSTED, names the
 LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
@@ -489,6 +501,9 @@ limit can fire on any given check."
     ((>= (agent-state-parse-error-streak state)
          (run-limits-max-action-parse-errors limits))
      :max-action-parse-errors)
+    ((>= (agent-state-consecutive-failed-patches state)
+         (run-limits-max-consecutive-failed-patches limits))
+     :max-consecutive-failed-patches)
     (t nil)))
 
 ;; --- Stub ---------------------------------------------------------------
@@ -1187,12 +1202,15 @@ step since no real patch was applied."
               (incf (agent-state-patch-attempts state))
               (cond
                 ((gethash "isError" result)
+                 (incf (agent-state-consecutive-failed-patches state))
                  (values next nil nil nil))
                 (dry-run-p
                  (incf (agent-state-patch-count state))
+                 (setf (agent-state-consecutive-failed-patches state) 0)
                  (values next nil nil nil))
                 (t
                  (incf (agent-state-patch-count state))
+                 (setf (agent-state-consecutive-failed-patches state) 0)
                  (when target
                    (let* ((after (%read-file-safely target))
                           (diff (%compute-unified-diff

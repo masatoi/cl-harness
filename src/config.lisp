@@ -22,6 +22,7 @@
            #:run-limits-max-repl-evals
            #:run-limits-max-wall-clock-seconds
            #:run-limits-max-action-parse-errors
+           #:run-limits-max-consecutive-failed-patches
            #:run-limits-max-context-tokens
            #:run-config-log-llm-requests-p))
 
@@ -43,6 +44,17 @@
     :documentation "Consecutive ACTION-PARSE-ERRORs tolerated before
 RUN-AGENT exits :limit-exhausted with limit-hit :max-action-parse-errors.
 Resets to zero on any successful PARSE-ACTION.")
+   (max-consecutive-failed-patches
+    :initarg :max-consecutive-failed-patches
+    :initform 3
+    :reader run-limits-max-consecutive-failed-patches
+    :documentation "Consecutive failed source-mutating tool calls
+(isError=true from lisp-edit-form / lisp-patch-form / fs-write-file)
+tolerated before RUN-AGENT exits :limit-exhausted with limit-hit
+:max-consecutive-failed-patches (backlog #45). Resets to zero on any
+successful source-mutating call. Prevents the agent from burning the
+full MAX-PATCHES budget on a die-spiral of structurally-invalid patch
+JSON (parinfer auto-repair failure / token-match miss).")
    (max-context-tokens
     :initarg :max-context-tokens
     :initform 4000
@@ -74,6 +86,7 @@ your endpoint can comfortably handle larger prompts."))
                  :max-repl-evals 40
                  :max-wall-clock-seconds 600
                  :max-action-parse-errors 3
+                 :max-consecutive-failed-patches 3
                  :max-context-tokens 4000))
 
 (defclass run-config ()

@@ -1244,7 +1244,25 @@ empirical 測定の S/N 比改善。
 
 **コスト**: small + 1 hour (template 編集 + skill 引数追加)。
 
-### 45. agent patch が `ok=False` で連続する場合の早期 give-up
+### 45. ~~agent patch が `ok=False` で連続する場合の早期 give-up~~ → 実装済 (2026-05-24)
+
+**Status**: ✅ **実装済** — `run-limits` に `max-consecutive-failed-patches`
+(default 3) を追加、`agent-state` に `consecutive-failed-patches` streak counter を
+追加。`handle-tool-call` で source-mutating tool の `isError=true` 時に increment、
+success 時に reset。`check-limits` で streak が limit に達したら
+`:limit-exhausted` (`limit-hit :max-consecutive-failed-patches`) を返す。
+
+tests: 2 件追加
+(`run-agent-aborts-on-consecutive-failed-patches`,
+`agent-state-consecutive-failed-patches-resets-on-successful-patch`)。464 passed.
+
+実 effect 確認は別 bench で (102-counter-class 等、N=3 sweep で `ok=False` 連発した
+fixture を再走らせる)。期待: pathological patch 連発時の wall-clock 大幅短縮、特に
+sweep の 2000s 超 LIMIT-EXHAUSTED run を ~600-800s で早期 give-up に変えられるはず。
+
+**元 entry**:
+
+
 
 **Source**: bench-cycle 2026-05-24, fixture 102-counter-class (Qwen3.6 v3 run)
 **Axis**: cl-harness 実装
