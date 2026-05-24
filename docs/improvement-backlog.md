@@ -1691,5 +1691,59 @@ test `default-review-system-prompt-is-approve-by-default` で wording を pin。
 
 **コスト**: medium + 1 day (review log audit + prompt 修正 + bench 検証)。
 
+---
+
+## 2026-05-25 #54 verification bench 結果 + 新規候補
+
+#54 (review approve-by-default) を 5ee88fb で実装後の verification bench:
+
+| Metric | Pre (5a32b89) | Post (5ee88fb) | Δ |
+|---|---:|---:|---|
+| Pass rate | 5/12 (42%) | **8/12 (67%)** | +25pt |
+| trivial fixtures (100, 101) | 2/6 | **6/6** | +67pt |
+| 102 alone | 2/3 | **0/3** | **-67pt regression** |
+| 104 | 1/3 | 2/3 | +33pt |
+| :MAX-REVIEW-REPLANS | 4 | **0** | -100% (#54 ✅) |
+| Mean wall-clock 100/101 PASSED | ~350-1000s | **~125-160s** | -56-21% |
+
+**主要 finding**: trivial fixture で完全勝利 (3/3 全 PASSED + wall-clock 半減)、
+102 で完全敗北 (2/3 → 0/3、全 trial が max-replans)。
+
+#54 が target だった :MAX-REVIEW-REPLANS は 0 件に。但し副作用として 102 で
+"approve-by-default が weak plan を通してしまう" pattern が露呈、全 3 trial が
+:MAX-REPLANS / :STUCK で失敗。
+
+詳細 doc: `docs/benchmarks/results-2026-05-25-54-verification.md`
+
+### 55. stage-aware / fixture-complexity-aware review threshold
+
+**Source**: #54 verification bench 2026-05-25, fixture 102-counter-class
+**Axis**: cl-harness 実装 (review policy)
+
+**観察**: #54 で review prompt を approve-by-default に softer 化した結果、trivial
+fixture (100, 101) は完璧 (3/3) になったが、複雑 fixture 102 (CLOS class + 3
+generic functions) は **0/3** に regression。Pre は strict review が weak plan を
+reject して improved version を出させていた safety net が消えた。
+
+**仮説**: review threshold は **artifact 種別 / fixture 複雑度に依存** する必要がある:
+- plan review: softer (planner 出力は after-the-fact で agent が修正可能)
+- tests review: stricter (test stub の質が agent の解決可能性を決める)
+- implementation review: softer (#54 通り)
+
+**変更案** (複数案、いずれか or 組み合わせ):
+1. **stage-aware prompt**: `review-development-artifact` で kind に応じて system prompt
+   を切替。:tests / :test-change は引き続き strict、:plan / :implementation は approve-
+   by-default
+2. **failure-aware retry**: agent が同 step で 2+ replan しても progress なしの場合、
+   review prompt を一時的に strict に切替
+3. **planner stub 品質改善 (#41 / #50 強化)**: そもそも weak plan が出ない方向
+4. **scope-based threshold**: plan-step が >= N generic-function を要求するなら
+   tests review を強化
+
+**期待効果**: 102 を 0/3 → 2/3 以上に戻しつつ 100/101 の 3/3 を保つ。
+
+**コスト**: medium + 1 day (stage 分離 prompt + bench 検証)。
+
+
 
 
