@@ -278,6 +278,49 @@ Goal: ~A"
        :feedback (or (gethash "feedback" parsed) "")
        :related-step-index related-step-index))))
 
+(defparameter +tests-review-system-prompt+
+  ;; Backlog #55 (2026-05-25): the soft +default-review-system-prompt+
+  ;; (approve-by-default) helps plan / implementation reviews where the
+  ;; agent can iterate, but on tests review it lets weak planner stubs
+  ;; through and the agent cannot satisfy them — observed regression on
+  ;; 102-counter-class (2/3 → 0/3). This prompt is stricter: it keeps the
+  ;; same falsifiable-defect bar but ADDS a specific test-quality check
+  ;; (behavior coverage vs structural-only).
+  (concatenate
+   'string
+   "You are a development reviewer assessing TEST quality. Return exactly "
+   "JSON: {\"status\":\"approved\"|\"rejected\",\"feedback\":\"...\"}."
+   (string #\Newline) (string #\Newline)
+   "Approve when the test asserts BEHAVIOR coverage of an acceptance "
+   "criterion. Reject (with a CONCRETE citation) when any of:"
+   (string #\Newline)
+   "  1. The test exercises STRUCTURE only (e.g. asserts (typep x 'class) "
+   "without exercising any method on x) for a goal that names a behavior."
+   (string #\Newline)
+   "  2. An implementation could trivially satisfy the test by returning "
+   "NIL or 0 or by writing a stub that ignores arguments."
+   (string #\Newline)
+   "  3. The test directly checks the inverse of what an acceptance "
+   "criterion asks for."
+   (string #\Newline)
+   "  4. A test was weakened (assertions removed / relaxed) without the "
+   "goal explicitly relaxing them."
+   (string #\Newline)
+   "  5. A multi-symbol goal step has a test that only references one of "
+   "the listed symbols (e.g. goal says \"implement put AND get\" but "
+   "test only asserts put). Cite the missing symbol in feedback."
+   (string #\Newline) (string #\Newline)
+   "Do NOT reject for: stylistic preferences, missing comments, choice of "
+   "rove macro (ok vs signals vs testing), or hypothetical \"could be "
+   "improved\" suggestions. Do not invent acceptance criteria the goal "
+   "did not state."
+   (string #\Newline) (string #\Newline)
+   "If the test would not catch a wrong-but-plausible implementation, "
+   "reject and name what's missing. If the test is minimal-but-correct, "
+   "approve.")
+  "Stricter review prompt for the :TESTS artifact kind. Pinned by
+`review-system-prompts-are-stage-aware' test (#55).")
+
 (defparameter +default-review-system-prompt+
   ;; Backlog #54: prior prompt was "You are a strict development reviewer"
   ;; + 4 negative criteria with no positive lift, which biased Qwen3.6
@@ -321,6 +364,18 @@ Goal: ~A"
   "Default system prompt for REVIEW-DEVELOPMENT-ARTIFACT. Pinned by
 `default-review-system-prompt-is-approve-by-default' test (#54).")
 
+(defun review-system-prompt-for (kind)
+  "Return the appropriate review system prompt for KIND (backlog #55).
+
+:TESTS uses the stricter +TESTS-REVIEW-SYSTEM-PROMPT+ — test stub
+quality determines whether the agent can ever pass the step, so under-
+reviewing here costs an entire replan cycle. All other kinds (:PLAN,
+:IMPLEMENTATION, :TEST-CHANGE, unknown) reuse the soft approve-by-default
+prompt — those artifacts can be iterated on without truncating progress."
+  (case kind
+    (:tests +tests-review-system-prompt+)
+    (t +default-review-system-prompt+)))
+
 (defun review-development-artifact (kind &key provider develop-spec plan step
                                            test-change-action
                                            implementation-summary
@@ -343,7 +398,7 @@ before enabling live review calls."
                     provider
                     (list
                      (make-chat-message "system"
-                                        +default-review-system-prompt+)
+                                        (review-system-prompt-for kind))
                      (make-chat-message "user" prompt))))
              (content (chat-response-content resp)))
         (unless (and (stringp content) (plusp (length content)))

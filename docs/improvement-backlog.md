@@ -1715,7 +1715,32 @@ test `default-review-system-prompt-is-approve-by-default` で wording を pin。
 
 詳細 doc: `docs/benchmarks/results-2026-05-25-54-verification.md`
 
-### 55. stage-aware / fixture-complexity-aware review threshold
+### 55. ~~stage-aware / fixture-complexity-aware review threshold~~ → 部分実装済 (2026-05-25)
+
+**Status**: ✅ **stage-aware portion 実装済** (option 1)。`src/review.lisp` に:
+- `+tests-review-system-prompt+` 新規 defparameter (stricter prompt for :TESTS kind)
+- `review-system-prompt-for` dispatcher function (`:tests` → stricter / その他 → 既存 soft)
+- `review-development-artifact` の system-message 構築を `(review-system-prompt-for kind)`
+  経由に変更
+
+`+tests-review-system-prompt+` の特徴:
+- 5 falsifiable rejection criteria (structure-only test, trivial implementation 通過,
+  inverse assertion, weakened test, multi-symbol goal でも test が 1 symbol しか
+  exercise しない)
+- "If the test would not catch a wrong-but-plausible implementation, reject and
+  name what's missing. If the test is minimal-but-correct, approve."
+
+test `review-system-prompts-are-stage-aware` で wording を pin (BEHAVIOR coverage /
+trivially satisfy / CONCRETE / JSON shape を含むことを保証 + plan/implementation/
+unknown kind は default prompt fallback)。
+
+実 effect 確認は別 bench で:
+- 102-counter-class (0/3 → 2-3/3 期待) — tests review が weak stub を弾けば agent
+  が valid stub で実行できる
+- 100/101 (3/3 維持期待) — :tests 以外は soft のまま
+
+残 option (failure-aware retry / scope-based threshold) は本実装の effect 測定後
+判断。option 3 (#41/#50 強化) は既に進行中。
 
 **Source**: #54 verification bench 2026-05-25, fixture 102-counter-class
 **Axis**: cl-harness 実装 (review policy)

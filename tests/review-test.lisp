@@ -103,3 +103,36 @@
     (testing "prompt no longer uses the priming word 'strict'"
       (ok (not (search "strict" p))
           "removing 'strict' lowers reviewer aggressiveness on Qwen3.6"))))
+
+(deftest review-system-prompts-are-stage-aware
+  ;; Backlog #55: 2026-05-25 #54 verification bench observed 102-counter-class
+  ;; regression (2/3 → 0/3) — approve-by-default let weak planner test stubs
+  ;; through, agent could not satisfy them, all 3 trials hit MAX-REPLANS.
+  ;; Solution: keep #54 soft prompt for plan/implementation reviews (where
+  ;; agent can iterate) but apply a stricter prompt to TESTS review (where
+  ;; stub quality determines whether the agent can ever pass).
+  (testing "review-system-prompt-for dispatches by kind"
+    (let ((plan-p (cl-harness/src/review::review-system-prompt-for :plan))
+          (tests-p (cl-harness/src/review::review-system-prompt-for :tests))
+          (impl-p (cl-harness/src/review::review-system-prompt-for :implementation)))
+      (testing "plan and implementation reuse the approve-by-default prompt"
+        (ok (search "APPROVE BY DEFAULT" plan-p))
+        (ok (search "APPROVE BY DEFAULT" impl-p)))
+      (testing "tests prompt is stricter — demands behavior coverage"
+        (ok (search "BEHAVIOR coverage" tests-p)
+            "explicitly requires test to assert behavior, not just structure")
+        (ok (search "trivially satisfy" tests-p)
+            "warns against tests an implementation could pass with NIL"))
+      (testing "tests prompt still uses falsifiable criteria"
+        (ok (search "CONCRETE" tests-p)
+            "rejection still requires concrete citation"))
+      (testing "tests prompt remains JSON-shaped"
+        (ok (search "\"status\"" tests-p))
+        (ok (search "\"feedback\"" tests-p)))))
+  (testing "default-review-system-prompt is the fallback for any kind"
+    ;; Unknown kinds fall back to the soft default so adding a new review
+    ;; kind in the future doesn't crash review-development-artifact.
+    (ok (search "APPROVE BY DEFAULT"
+                (cl-harness/src/review::review-system-prompt-for :test-change)))
+    (ok (search "APPROVE BY DEFAULT"
+                (cl-harness/src/review::review-system-prompt-for :unknown-kind)))))
