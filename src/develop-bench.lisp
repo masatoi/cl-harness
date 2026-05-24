@@ -24,6 +24,8 @@
 
 (defpackage #:cl-harness/src/develop-bench
   (:use #:cl)
+  (:import-from #:cl-harness/src/planner
+                #:parse-predefined-plan)
   (:export #:develop-task
            #:develop-task-id
            #:develop-task-goal
@@ -32,6 +34,7 @@
            #:develop-task-test-file
            #:develop-task-path
            #:develop-task-fixture-path
+           #:develop-task-predefined-plan
            #:develop-task-error
            #:develop-task-error-message
            #:load-develop-task
@@ -55,7 +58,16 @@
    (test-system :initarg :test-system :reader develop-task-test-system)
    (test-file :initarg :test-file :reader develop-task-test-file)
    (path :initarg :path :reader develop-task-path)
-   (fixture-path :initarg :fixture-path :reader develop-task-fixture-path))
+   (fixture-path :initarg :fixture-path :reader develop-task-fixture-path)
+   (predefined-plan :initarg :predefined-plan
+                    :initform nil
+                    :reader develop-task-predefined-plan
+                    :documentation "Optional list of PLAN-STEP instances
+parsed from the develop-task.json predefined_plan array (backlog #46).
+When non-NIL, orchestrator's DEVELOP uses this list verbatim as the
+initial plan and skips the LLM planner call, enabling fixed-plan paired
+benches that compare agent prompts (e.g. #38) without planner-output
+variance. NIL means \"normal LLM planning path\"."))
   (:documentation
    "One greenfield task in a develop-benchmarks/ suite. ID is the
 canonical task name (also the directory name). GOAL is the
@@ -107,14 +119,26 @@ fields."
         (error 'develop-task-error
                :message (format nil "fixture-dir ~A does not exist" fixture-dir-rel)
                :path fixture-path))
-      (make-instance 'develop-task
-                     :id id
-                     :goal goal
-                     :system system
-                     :test-system test-system
-                     :test-file test-file
-                     :path task-dir
-                     :fixture-path fixture-path))))
+      (let ((predefined-plan
+             (multiple-value-bind (raw present)
+                 (gethash "predefined_plan" table)
+               (when present
+                 (handler-case (parse-predefined-plan raw)
+                   (error (c)
+                     (error 'develop-task-error
+                            :message (format nil
+                                             "predefined_plan parse failed: ~A"
+                                             c)
+                            :path json-path)))))))
+        (make-instance 'develop-task
+                       :id id
+                       :goal goal
+                       :system system
+                       :test-system test-system
+                       :test-file test-file
+                       :path task-dir
+                       :fixture-path fixture-path
+                       :predefined-plan predefined-plan)))))
 
 (defun discover-develop-tasks (suite-dir)
   "Walk SUITE-DIR for direct child directories that contain a

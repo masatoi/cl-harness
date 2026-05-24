@@ -1129,6 +1129,7 @@ is exhausted. Returns NIL after stamping STATE on budget exhaustion."
                      (max-review-replans 2)
                      (max-test-revisions 3)
                      (max-impl-review-revisions 2)
+                     predefined-plan
                      (spec-fn #'generate-develop-spec)
                      (review-fn #'review-development-artifact)
                      (planner-fn #'plan-development)
@@ -1238,10 +1239,20 @@ final DEVELOP-RESULT carries the reason through to callers."
                       :system system
                       :test-system test-system)))
           (setf (develop-state-current-plan state)
-                (%plan-with-review
-                 goal planner-fn review-fn provider state mode
-                 project-root system test-system project-inventory
-                 nil nil max-review-replans))
+                (if predefined-plan
+                    ;; backlog #46: fixed-plan paired bench infrastructure.
+                    ;; A non-NIL :predefined-plan replaces the initial
+                    ;; LLM planner call so consecutive runs against the
+                    ;; same fixture see the same plan structure (used to
+                    ;; isolate agent-prompt effects from planner-output
+                    ;; variance). Replans still go through planner-fn so
+                    ;; the loop can recover from failures; pass
+                    ;; :max-replans 0 to forbid replans entirely.
+                    predefined-plan
+                    (%plan-with-review
+                     goal planner-fn review-fn provider state mode
+                     project-root system test-system project-inventory
+                     nil nil max-review-replans)))
           (when (null (develop-state-current-plan state))
             (return-from develop
               (make-instance 'develop-result

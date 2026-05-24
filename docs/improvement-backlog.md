@@ -1292,7 +1292,35 @@ agent はそれを修正しようと更に malformed patch を出す悪循環。
 
 **コスト**: small + half-day (counter + early-termination + regression test)。
 
-### 46. fixed-plan paired bench infrastructure (planner 確定化)
+### 46. ~~fixed-plan paired bench infrastructure (planner 確定化)~~ → core API 実装済 (2026-05-24)
+
+**Status**: ✅ **core API 実装済** — `develop-task.json` に optional
+`predefined_plan` array を追加、`cl-harness/src/develop-bench:develop-task` に
+`predefined-plan` slot 追加、`load-develop-task` が parse、
+`cl-harness/src/planner:parse-predefined-plan` 公開関数でJSON → plan-step list 変換、
+`cl-harness/src/orchestrator:develop` および `cl-harness/src/cli:develop` に
+`:predefined-plan` kwarg 追加、`%plan-with-review` を bypass (replan は従来通り
+planner-fn 使用、replan も止めたければ `:max-replans 0`)。
+
+tests: 6 件追加
+(`parse-predefined-plan-converts-hashtable-list-to-plan-steps`,
+`parse-predefined-plan-signals-on-non-list-input`,
+`parse-predefined-plan-accepts-empty-list`,
+`load-develop-task-defaults-predefined-plan-to-nil`,
+`load-develop-task-parses-predefined-plan`,
+`develop-with-predefined-plan-bypasses-planner-fn`)。470 passed.
+
+**残 follow-up**:
+- bench-cycle skill の predefined plan fixture variants (multi-symbol step / single-symbol step)
+- ON / OFF × N=3 paired bench script を skill に追加
+- `predefined_plan` を持つ実 fixture (例 `104b-cache-simple-paired`) を追加
+
+これらは #46 の "infrastructure" を使う側 (skill / fixture / bench script) の話で、
+本 commit は core API のみ。実 effect 測定の paired bench は次 cycle で実施可能。
+
+**元 entry**:
+
+
 
 **Source**: bench-cycle 2026-05-24 paired #38 on/off run
 **Axis**: bench target

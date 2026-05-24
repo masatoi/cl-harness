@@ -16,10 +16,14 @@
                 #:develop-task-system
                 #:develop-task-test-system
                 #:develop-task-fixture-path
+                #:develop-task-predefined-plan
                 #:develop-task-error
                 #:load-develop-task
                 #:discover-develop-tasks
-                #:prepare-develop-task-sandbox))
+                #:prepare-develop-task-sandbox)
+  (:import-from #:cl-harness/src/planner
+                #:plan-step-test-name
+                #:plan-step-index))
 
 (in-package #:cl-harness/tests/develop-bench-test)
 
@@ -66,6 +70,38 @@
                  (progn (load-develop-task empty) nil)
                (develop-task-error () t)))
       (uiop:delete-directory-tree empty :validate t :if-does-not-exist :ignore))))
+
+(deftest load-develop-task-defaults-predefined-plan-to-nil
+  ;; backlog #46: the predefined-plan slot is optional; tasks without
+  ;; a predefined_plan field in develop-task.json get NIL (so existing
+  ;; fixtures keep working unchanged).
+  (let* ((path (merge-pathnames "100-greet/" (%suite-dir)))
+         (task (load-develop-task path)))
+    (ok (null (develop-task-predefined-plan task)))))
+
+(deftest load-develop-task-parses-predefined-plan
+  ;; backlog #46: develop-task.json may carry a predefined_plan array
+  ;; of plan-step objects to bypass the planner LLM call. The parser
+  ;; converts each into a PLAN-STEP with sequential indices.
+  (let* ((dir (%tmp-dir "with-predefined-plan"))
+         (fixture-dir (merge-pathnames "fixture/" dir))
+         (json (merge-pathnames "develop-task.json" dir)))
+    (ensure-directories-exist fixture-dir)
+    (unwind-protect
+         (progn
+           (with-open-file (out json :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create)
+             (write-string "{\"id\":\"x\",\"goal\":\"g\",\"system\":\"s\",\"test-system\":\"s/tests\",\"test-file\":\"tests/main-test.lisp\",\"predefined_plan\":[{\"issue\":\"i\",\"test_name\":\"step-a\",\"test_source\":\"(deftest step-a (ok t))\"},{\"issue\":\"i2\",\"test_name\":\"step-b\",\"test_source\":\"(deftest step-b (ok t))\"}]}"
+                          out))
+           (let* ((task (load-develop-task dir))
+                  (plan (develop-task-predefined-plan task)))
+             (ok (= 2 (length plan)))
+             (ok (equal "step-a" (plan-step-test-name (first plan))))
+             (ok (= 0 (plan-step-index (first plan))))
+             (ok (equal "step-b" (plan-step-test-name (second plan))))
+             (ok (= 1 (plan-step-index (second plan))))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 (deftest load-develop-task-rejects-missing-required-field
   (let* ((dir (%tmp-dir "bad-json"))

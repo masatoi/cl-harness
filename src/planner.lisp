@@ -40,6 +40,7 @@
            #:investigation-target-name
            #:investigation-target-intent
            #:plan-development
+           #:parse-predefined-plan
            #:planner-error
            #:planner-error-message
            #:+default-planner-system-prompt+
@@ -582,6 +583,30 @@ schema."
         (loop for s in step-list
               for i from 0
               collect (%hash-to-step s i))))))
+
+(defun parse-predefined-plan (raw)
+  "Convert RAW (a list-or-vector of hash-tables, as produced by
+yason:parse over a predefined_plan JSON array) into a list of
+PLAN-STEP instances with sequential indices starting at 0.
+
+Used by orchestrator's DEVELOP when :predefined-plan is supplied to
+bypass the LLM planner call entirely. Each hash-table is validated
+through the same %HASH-TO-STEP path the LLM-driven planner uses, so
+the fixture author gets identical schema enforcement (issue /
+test_name / test_source required, files_to_modify optional, v0.4
+fields optional). RAW=NIL or empty list returns NIL. Signals
+PLANNER-ERROR for any non-list / non-vector top-level value (backlog
+#46)."
+  (cond
+    ((null raw) nil)
+    ((or (listp raw) (vectorp raw))
+     (let ((step-list (if (vectorp raw) (coerce raw 'list) raw)))
+       (loop for s in step-list
+             for i from 0
+             collect (%hash-to-step s i))))
+    (t (error 'planner-error
+              :message "predefined_plan must be a JSON array of step objects"
+              :raw raw))))
 
 ;; --- public entry --------------------------------------------------------
 

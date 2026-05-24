@@ -331,7 +331,8 @@ trivial runs."
         (gather-inventory-p t) (inventory-byte-budget 5000) (mode :mixed)
         (review-policy :auto) (test-revision-policy :additive-only)
         (max-review-replans 2) (max-test-revisions 3)
-        (max-impl-review-revisions 2) log-path (log-llm-requests nil))
+        (max-impl-review-revisions 2) predefined-plan
+        log-path (log-llm-requests nil))
   "Plan, execute, and replan-on-failure to drive a high-level GOAL to a
 green test suite.
 
@@ -430,7 +431,8 @@ inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
                     test-revision-policy :max-review-replans max-review-replans
                     :max-test-revisions max-test-revisions :max-replans
                     max-replans :max-impl-review-revisions
-                    max-impl-review-revisions :log-path path
+                    max-impl-review-revisions :predefined-plan predefined-plan
+                    :log-path path
                     :log-llm-requests log-llm-requests)))
               (format t "~A" (format-develop-report result :log-path path))
               result)

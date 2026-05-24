@@ -31,6 +31,7 @@
                 #:investigation-target-name
                 #:investigation-target-intent
                 #:plan-development
+                #:parse-predefined-plan
                 #:planner-error
                 #:planner-error-message))
 
@@ -353,3 +354,35 @@
   (testing "system prompt includes the counter:make-counter example"
     (ok (search "counter:make-counter"
                 cl-harness/src/planner::+default-planner-system-prompt+))))
+
+(deftest parse-predefined-plan-converts-hashtable-list-to-plan-steps
+  ;; backlog #46: develop-task.json may carry a predefined_plan array
+  ;; (parsed by yason as list-or-vector of hash-tables) which orchestrator's
+  ;; develop uses to bypass the planner LLM call. parse-predefined-plan
+  ;; converts the raw parsed value into a list of plan-step instances
+  ;; with the same semantics as %hash-to-step in the LLM-driven path.
+  (let* ((raw-json
+          "[{\"issue\":\"foo\",\"test_name\":\"foo-test\",\"test_source\":\"(deftest foo-test (ok t))\"},
+            {\"issue\":\"bar\",\"test_name\":\"bar-test\",\"test_source\":\"(deftest bar-test (ok t))\",\"files_to_modify\":[\"src/x.lisp\"]}]")
+         (parsed (yason:parse raw-json))
+         (plan (parse-predefined-plan parsed)))
+    (ok (= 2 (length plan)))
+    (let ((step0 (first plan)))
+      (ok (= 0 (plan-step-index step0)))
+      (ok (equal "foo-test" (plan-step-test-name step0)))
+      (ok (equal "foo" (plan-step-issue step0))))
+    (let ((step1 (second plan)))
+      (ok (= 1 (plan-step-index step1)))
+      (ok (equal "bar-test" (plan-step-test-name step1)))
+      (ok (equal '("src/x.lisp") (plan-step-files-to-modify step1))))))
+
+(deftest parse-predefined-plan-signals-on-non-list-input
+  ;; Defensive: a scalar or hash-table at the top level is not a valid
+  ;; predefined plan; signal planner-error rather than silently swallowing.
+  (ok (handler-case (progn (parse-predefined-plan "not a list") nil)
+        (planner-error () t))))
+
+(deftest parse-predefined-plan-accepts-empty-list
+  ;; An empty predefined plan is allowed (caller can recover with
+  ;; replan / give-up); parser should not error.
+  (ok (null (parse-predefined-plan '()))))

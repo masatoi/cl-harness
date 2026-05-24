@@ -466,6 +466,50 @@ plan (so a stuck loop test can keep getting the same response)."
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 
+(deftest develop-with-predefined-plan-bypasses-planner-fn
+  ;; backlog #46: when :predefined-plan is supplied, develop must NOT
+  ;; invoke planner-fn for the initial plan, and must execute the
+  ;; supplied plan-step list directly via run-fn. Enables fixed-plan
+  ;; paired benches that compare agent prompts without planner-output
+  ;; variance.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-orch-tf-pp-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-predefined-plan"))
+         (planner-called (cons nil nil))
+         (planner-fn
+          (lambda (&rest args)
+            (declare (ignore args))
+            (setf (car planner-called) t)
+            (error "planner-fn must NOT be invoked when :predefined-plan is supplied")))
+         (predef-plan (list (%make-step :index 0
+                                        :test-name "predef-alpha"
+                                        :test-source "(deftest predef-alpha (ok t))")))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner (cons '() nil) outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result (develop "use predefined plan"
+                                  :project-root (namestring project-root)
+                                  :system "demo"
+                                  :test-system "demo/tests"
+                                  :test-file test-file
+                                  :log-path log-path
+                                  :predefined-plan predef-plan
+                                  :planner-fn planner-fn
+                                  :run-fn runner)))
+             (testing "planner-fn was not invoked"
+               (ok (null (car planner-called))))
+             (testing "develop returned :passed"
+               (ok (eq :passed (develop-result-status result))))
+             (testing "exactly the predefined step was executed"
+               (ok (= 1 (length (develop-result-step-results result)))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
 (deftest develop-passes-on-first-attempt-when-plan-passes
   (let* ((project-root (uiop:temporary-directory))
          (test-file (merge-pathnames
