@@ -1,0 +1,44 @@
+{
+  "id": "104b-cache-simple-paired",
+  "goal": "Add a `simple-cache` defclass in package `cache` storing key-value pairs, with two generic functions: `cache-put` (cache key value) → value, and `cache-get` (cache key &optional default) → stored value or default (default defaulting to NIL). Provide a constructor `make-cache` taking no arguments. Keys are compared with EQUAL (so strings work as keys). Export `simple-cache`, `make-cache`, `cache-put`, and `cache-get`.",
+  "system": "cache",
+  "test-system": "cache/tests",
+  "test-file": "tests/main-test.lisp",
+  "fixture-dir": "fixture",
+  "predefined_plan": [
+    {
+      "issue": "Define the simple-cache CLOS class and its make-cache constructor so cache instances can be created.",
+      "test_name": "test-make-cache-instantiation",
+      "test_source": "(deftest test-make-cache-instantiation\n  (ok (typep (cache:make-cache) 'cache:simple-cache)))",
+      "files_to_modify": ["src/main.lisp"],
+      "needs_exploration": "none",
+      "acceptance_criteria": [
+        "cache:simple-cache is a defined CLOS class",
+        "cache:make-cache returns a simple-cache instance"
+      ]
+    },
+    {
+      "issue": "Implement cache-put and cache-get together so a value stored under a key can be retrieved via the same key (EQUAL comparison). Both symbols are required by this single round-trip test.",
+      "test_name": "test-cache-put-get-roundtrip",
+      "test_source": "(deftest test-cache-put-get-roundtrip\n  (let ((c (cache:make-cache)))\n    (cache:cache-put c \"key1\" \"val1\")\n    (ok (equal \"val1\" (cache:cache-get c \"key1\")))))",
+      "files_to_modify": ["src/main.lisp"],
+      "needs_exploration": "none",
+      "acceptance_criteria": [
+        "cache:cache-put stores a value under a key",
+        "cache:cache-get retrieves the value previously put under the same key",
+        "keys compare with EQUAL so string keys work"
+      ]
+    },
+    {
+      "issue": "Make cache-get return the supplied default (or NIL when omitted) for keys that were never put.",
+      "test_name": "test-cache-get-default",
+      "test_source": "(deftest test-cache-get-default\n  (let ((c (cache:make-cache)))\n    (ok (eq :missing (cache:cache-get c \"absent\" :missing)))\n    (ok (null (cache:cache-get c \"also-absent\")))))",
+      "files_to_modify": ["src/main.lisp"],
+      "needs_exploration": "none",
+      "acceptance_criteria": [
+        "cache-get with explicit default returns that default for absent keys",
+        "cache-get without default returns NIL for absent keys"
+      ]
+    }
+  ]
+}

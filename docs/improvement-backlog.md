@@ -1015,7 +1015,27 @@ fixture (102, 104) で recurring pattern なので effect 範囲広い。
 
 **コスト**: small + half-day（diff 比較 + event emit）。
 
-### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 (2026-05-24)
+### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 (2026-05-24)、**N=3 fixed-plan paired で net-negative signal 観察**
+
+**2026-05-24 update**: #46 infra で fixed-plan paired N=3 を実施
+(`docs/benchmarks/results-2026-05-24-46-paired-104b.md`)。**OFF (削除版) が ON より
+consistent に良い**:
+- Pass rate: OFF 3/3, ON 1/3 (CI overlap だが signal あり)
+- Step 1 (multi-symbol) の patch quality: OFF failed 1 / ON failed 2-3
+- Tool errors: OFF 1-2 / ON 3-5
+- どの ON trial でも #38 directive の遵守 (全 symbol を 1 patch でまとめる) は
+  **観察されなかった** — agent は依然 evolved-failure pattern (put→get) を辿る
+
+仮説: Qwen3.6 が "implement ALL in SAME patch" を「大きく複雑な patch を書く」と
+解釈し、JSON/Lisp 構文の正確性が低下、parinfer auto-repair / token-match で reject
+される頻度が上昇。OFF agent は incremental approach で各 patch が小さく valid。
+
+**処置**: 即削除はしない (N=3 統計的有意性なし)。N=10 paired を follow-up:
+- N=10 で OFF > ON が再現すれば #38 段落削除を検討
+- 段落を維持する場合の reword 案: "plan to add all related symbols before
+  submitting first patch; if a single patch becomes too large, split safely"
+
+
 
 **Status**: ✅ **実装済** — `src/agent.lisp` の `system-prompt` 関数
 に新セクション "Patching guidance" を追加（全 policy mode で共通）:
