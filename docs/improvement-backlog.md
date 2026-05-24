@@ -1616,7 +1616,15 @@ form name 一覧を返す。
 **target 完全除去**。Patch quality 4.7x 改善。Pass rate 上昇は控えめだが、別の
 bottleneck (:MAX-REVIEW-REPLANS が新 dominant に) が露出。
 
-### 53. verify-result-status の no-applicable-method guard
+### 53. ~~verify-result-status の no-applicable-method guard~~ → 実装済 (2026-05-24)
+
+**Status**: ✅ **実装済** — `src/verify.lisp` に NIL specializer の defmethod を追加:
+`(defmethod verify-result-status ((result null)) nil)`。downstream の `eq :passed`
+比較は NIL に対しても safe に false を返す。test
+`verify-result-status-returns-nil-for-nil` で pin (verify-result-success-p も
+NIL safe であることを同時 verify)。
+
+
 
 **Source**: #48+#50 verification bench 2026-05-24, fixture 101-double trial2
 **Axis**: cl-harness 実装
@@ -1641,7 +1649,26 @@ ERROR: There is no applicable method for the generic function
 
 **コスト**: small + half-day (root cause 特定 + guard + test)。
 
-### 54. review-policy threshold tuning (MAX-REVIEW-REPLANS 急増)
+### 54. ~~review-policy threshold tuning (MAX-REVIEW-REPLANS 急増)~~ → 実装済 (2026-05-24)
+
+**Status**: ✅ **実装済** — `src/review.lisp` の review system prompt を
+`+default-review-system-prompt+` defparameter に extract、内容を全面刷新:
+- "You are a strict development reviewer" → "You are a development reviewer"
+  ("strict" の priming を除去)
+- "APPROVE BY DEFAULT" rule を明示、4 rejection criteria は具体的 falsifiable
+  conditions に書き直し (各々 feedback での citation を要求)
+- "Do NOT reject for" non-grounds list を追加 (stylistic / docstrings /
+  alternative-but-equivalent designs / single-vs-multi-symbol patches 等)
+- "If unsure, approve" tie-breaker
+- review budget cost の明示 ("wrongful reject costs an entire replan cycle,
+  wrongful approve still gets caught by next verify pass")
+
+test `default-review-system-prompt-is-approve-by-default` で wording を pin。
+
+実 effect 確認は別 bench cycle で。期待: pass rate 5/12 (42%) → 8/12 (67%) 程度
+(以前 review で落とした 3 trial が approve に変われば)。
+
+
 
 **Source**: #48+#50 verification bench 2026-05-24
 **Axis**: cl-harness 実装 (review prompt / threshold)

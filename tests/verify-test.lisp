@@ -233,3 +233,14 @@
       (funcall thunk))
     (ok (null (find-package pkg-name))
         "post-condition: the contaminated package was deleted")))
+
+(deftest verify-result-status-returns-nil-for-nil
+  ;; Backlog #53: 2026-05-24 #48+#50 verification bench triggered
+  ;; "no applicable method for VERIFY-RESULT-STATUS when called with (NIL)"
+  ;; in a develop run, aborting the whole sweep cell. Some upstream code
+  ;; path threads a NIL verify result into status-reading code. The reader
+  ;; must degrade gracefully (returning NIL) rather than dispatch-fail.
+  (testing "calling verify-result-status on NIL returns NIL"
+    (ok (null (verify-result-status nil))))
+  (testing "calling verify-result-success-p on NIL returns NIL (does not error)"
+    (ok (null (verify-result-success-p nil)))))

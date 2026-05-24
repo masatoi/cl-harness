@@ -278,6 +278,49 @@ Goal: ~A"
        :feedback (or (gethash "feedback" parsed) "")
        :related-step-index related-step-index))))
 
+(defparameter +default-review-system-prompt+
+  ;; Backlog #54: prior prompt was "You are a strict development reviewer"
+  ;; + 4 negative criteria with no positive lift, which biased Qwen3.6
+  ;; toward rejection (2026-05-24 #48+#50 verification bench saw
+  ;; :MAX-REVIEW-REPLANS jump 1→4 after patch quality improved). New
+  ;; prompt is balanced: approve-by-default, require concrete defects
+  ;; to reject, enumerate non-grounds.
+  (concatenate
+   'string
+   "You are a development reviewer. Return exactly JSON: "
+   "{\"status\":\"approved\"|\"rejected\",\"feedback\":\"...\"}."
+   (string #\Newline) (string #\Newline)
+   "APPROVE BY DEFAULT. Only reject when you can cite a CONCRETE defect "
+   "in the artifact against the provided acceptance criteria. The four "
+   "rejection criteria, each requiring a citation in feedback:"
+   (string #\Newline)
+   "  1. A test directly checks the inverse of what an acceptance "
+   "criterion asks for (e.g. asserts the function FAILS when the goal "
+   "says it returns a value)."
+   (string #\Newline)
+   "  2. A step's plan adds a feature that the acceptance criteria and "
+   "non-goals do not mention (scope drift)."
+   (string #\Newline)
+   "  3. A test was weakened — assertions removed or relaxed without "
+   "the goal explicitly relaxing them."
+   (string #\Newline)
+   "  4. An implementation summary admits skipping a listed acceptance "
+   "criterion or a non-goal it should have honored."
+   (string #\Newline) (string #\Newline)
+   "Do NOT reject for: stylistic preferences, missing comments / "
+   "docstrings, alternative-but-equivalent designs, choice of "
+   "single-symbol vs multi-symbol patches, optional CL features "
+   "(use of CLOS vs structs vs cons), or hypothetical \"could be "
+   "improved\" suggestions. Do not invent acceptance criteria the "
+   "goal did not state."
+   (string #\Newline) (string #\Newline)
+   "If unsure, approve and leave feedback empty. The agent loop has "
+   "limited review budget; a wrongful reject costs an entire replan "
+   "cycle, while a wrongful approve still gets caught by the next "
+   "verify pass.")
+  "Default system prompt for REVIEW-DEVELOPMENT-ARTIFACT. Pinned by
+`default-review-system-prompt-is-approve-by-default' test (#54).")
+
 (defun review-development-artifact (kind &key provider develop-spec plan step
                                            test-change-action
                                            implementation-summary
@@ -299,9 +342,8 @@ before enabling live review calls."
              (resp (complete-chat
                     provider
                     (list
-                     (make-chat-message
-                      "system"
-                      "You are a strict development reviewer. Return exactly JSON: {\"status\":\"approved\"|\"rejected\",\"feedback\":\"...\"}. Review only against the provided acceptance criteria and explicit non-goals. Reject weak tests, scope drift, test weakening, or implementation overfitting, but do not invent additional requirements or framework rules.")
+                     (make-chat-message "system"
+                                        +default-review-system-prompt+)
                      (make-chat-message "user" prompt))))
              (content (chat-response-content resp)))
         (unless (and (stringp content) (plusp (length content)))

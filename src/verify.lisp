@@ -40,6 +40,16 @@
    "Outcome of one VERIFY-TASK call. STATUS is :PASSED, :TEST-FAILED, or
 :LOAD-FAILED."))
 
+(defmethod verify-result-status ((result null))
+  "Backlog #53: orchestrator / agent paths occasionally thread a NIL
+verify result into status-reading code (observed 2026-05-24 on
+101-double trial2, sweep cell error-aborted). Returning NIL here is
+the same convention as `(verify-result-status (no result yet))` and
+keeps downstream comparisons like `(eq :passed ...)` working without
+dispatch-fail."
+  (declare (ignore result))
+  nil)
+
 (defun verify-result-success-p (result)
   "Return non-NIL when load and tests both reported success."
   (eq (verify-result-status result) :passed))

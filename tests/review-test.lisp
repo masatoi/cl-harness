@@ -79,3 +79,27 @@
                    :develop-spec (make-develop-spec :goal "g"))))
     (ok (review-decision-approved-p decision))
     (ok (eq :plan (review-decision-kind decision)))))
+
+(deftest default-review-system-prompt-is-approve-by-default
+  ;; Backlog #54: 2026-05-24 #48+#50 verification bench observed
+  ;; :MAX-REVIEW-REPLANS jumping from 1 to 4 (4/7 failures) after patch
+  ;; quality improved. Root cause hypothesis: prior prompt said "strict
+  ;; reviewer" + listed 4 reject reasons with no positive guidance,
+  ;; biasing Qwen3.6 toward rejection. Soften prompt to approve-by-default
+  ;; semantics while keeping the 4 rejection criteria as concrete signals.
+  (let ((p cl-harness/src/review::+default-review-system-prompt+))
+    (testing "prompt prefers approval as the default decision"
+      (ok (search "APPROVE BY DEFAULT" p)
+          "explicit approve-by-default rule")
+      (ok (search "If unsure, approve" p)
+          "tie-breaker biases toward approve"))
+    (testing "prompt demands concrete defect for rejection"
+      (ok (search "CONCRETE defect" p)
+          "rejection requires citing a concrete defect"))
+    (testing "prompt enumerates non-grounds for rejection"
+      (ok (search "Do NOT reject" p))
+      (ok (search "stylistic" p)
+          "stylistic preferences are not grounds for rejection"))
+    (testing "prompt no longer uses the priming word 'strict'"
+      (ok (not (search "strict" p))
+          "removing 'strict' lowers reviewer aggressiveness on Qwen3.6"))))
