@@ -1597,4 +1597,72 @@ form name 一覧を返す。
 **今 cycle 推奨**: #48 と #50 を small 実装、次 bench で empirical 検証 (#46 fixed-plan
 で paired)。#49 / #52 は cl-mcp repo の別 task。
 
+---
+
+## 2026-05-24 #48+#50 verification bench 結果 + 新規候補
+
+#48 / #50 を 5a32b89 で実装後、100/101/102/104 × N=3 = 12 cells で empirical 検証
+(`docs/benchmarks/results-2026-05-24-48-50-verification.md`):
+
+| Metric | Pre (0368f1e) | Post (5a32b89) | Δ |
+|---|---:|---:|---|
+| **fs-write-file refusals** | 13 | **0** | **-100%** (#48 ✅) |
+| **MOP helper appearances** | 10 | **0** | **-100%** (#50 ✅) |
+| Tool errors total | 42 | 11 | -74% |
+| Patch fail rate | 42.9% | **9.1%** | -79% |
+| Pass rate | 4/12 (33%) | 5/12 (42%) | +9pt |
+| Total wall-clock | 10138s | 6481s | -36% |
+
+**target 完全除去**。Patch quality 4.7x 改善。Pass rate 上昇は控えめだが、別の
+bottleneck (:MAX-REVIEW-REPLANS が新 dominant に) が露出。
+
+### 53. verify-result-status の no-applicable-method guard
+
+**Source**: #48+#50 verification bench 2026-05-24, fixture 101-double trial2
+**Axis**: cl-harness 実装
+
+**観察**: agent / orchestrator 経由で verify result object が `verify-result` 型でない
+状態 (NIL? hash-table? condition?) で渡され、`verify-result-status` generic function の
+dispatch が失敗:
+```
+ERROR: There is no applicable method for the generic function
+       #<STANDARD-GENERIC-FUNCTION CL-HARNESS/SRC/VERIFY:VERIFY-RESULT-STATUS (1)>
+```
+
+これは internal defensive coding 不足。bench run 全体が error abort する。
+
+**変更案**:
+- `src/verify.lisp` で `verify-result-status` に NIL / fallback method を追加、
+  または呼び出し側 (orchestrator / report) で type guard 追加
+- 上記が起こる正確な call site を特定 (本 trial の JSONL から trace)
+- regression test: NIL を verify-result-status に渡しても 内部 error にならないこと
+
+**期待効果**: bench 内 internal error 1 件削減。production robustness 向上。
+
+**コスト**: small + half-day (root cause 特定 + guard + test)。
+
+### 54. review-policy threshold tuning (MAX-REVIEW-REPLANS 急増)
+
+**Source**: #48+#50 verification bench 2026-05-24
+**Axis**: cl-harness 実装 (review prompt / threshold)
+
+**観察**: Pre→Post で patch quality 改善後、:MAX-REVIEW-REPLANS が 1 → 4 と急増
+(4/7 failures 占有)。review-fn が "complete enough" を判定できていない可能性。
+
+仮説:
+- review prompt が #38 削除 / patch quality 向上に追随していない
+- review が以前 patch fail で短絡 reject していたが、今は実 artifact を見る機会が
+  増え、より厳しく評価
+
+**変更案**:
+- review prompt を audit (`src/review.lisp` の review-development-artifact prompt)
+- 4 trial の reject feedback を分析 → 共通 false-positive pattern を発見すれば prompt 修正
+- もしくは `:auto` policy の "trivial-task short-circuit" 範囲を拡大
+
+**期待効果**: pass rate を 5/12 (42%) → 8/12 (67%) 程度に改善見込み (review が落とした 3 を
+救済すれば)。
+
+**コスト**: medium + 1 day (review log audit + prompt 修正 + bench 検証)。
+
+
 
