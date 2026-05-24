@@ -1015,25 +1015,30 @@ fixture (102, 104) で recurring pattern なので effect 範囲広い。
 
 **コスト**: small + half-day（diff 比較 + event emit）。
 
-### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 (2026-05-24)、**N=3 fixed-plan paired で net-negative signal 観察**
+### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 (2026-05-24)、**N=10 fixed-plan paired で net-negative 確定、削除推奨**
 
-**2026-05-24 update**: #46 infra で fixed-plan paired N=3 を実施
-(`docs/benchmarks/results-2026-05-24-46-paired-104b.md`)。**OFF (削除版) が ON より
-consistent に良い**:
-- Pass rate: OFF 3/3, ON 1/3 (CI overlap だが signal あり)
-- Step 1 (multi-symbol) の patch quality: OFF failed 1 / ON failed 2-3
-- Tool errors: OFF 1-2 / ON 3-5
-- どの ON trial でも #38 directive の遵守 (全 symbol を 1 patch でまとめる) は
-  **観察されなかった** — agent は依然 evolved-failure pattern (put→get) を辿る
+**2026-05-24 update (N=10)**: N=10 paired bench
+(`docs/benchmarks/results-2026-05-24-38-paired-n10-104b.md`) で **net-negative 確定**:
 
-仮説: Qwen3.6 が "implement ALL in SAME patch" を「大きく複雑な patch を書く」と
-解釈し、JSON/Lisp 構文の正確性が低下、parinfer auto-repair / token-match で reject
-される頻度が上昇。OFF agent は incremental approach で各 patch が小さく valid。
+| Metric | OFF | ON | Δ |
+|---|---:|---:|---:|
+| Pass rate | 9/10 (90%) | 7/10 (70%) | -20pt |
+| Mean wall-clock | 272s | 305s | +12% |
+| **Step 1 mean tool-errors** | **1.4** | **3.2** | **+128%** |
+| #45 limit fired | 0 | 1 | — |
 
-**処置**: 即削除はしない (N=3 統計的有意性なし)。N=10 paired を follow-up:
-- N=10 で OFF > ON が再現すれば #38 段落削除を検討
-- 段落を維持する場合の reword 案: "plan to add all related symbols before
-  submitting first patch; if a single patch becomes too large, split safely"
+- **全 10 trial で ON ≥ OFF (tool-errors)**: variance ではなく系統的 effect
+- **ON trial 10 で #45 max-consecutive-failed-patches 初発火**: #38 が patch
+  die-spiral を引き起こす direct evidence
+- どの ON trial でも #38 directive 不遵守 (依然 incremental put→get pattern)
+
+仮説 (refinement): Qwen3.6 は "implement ALL in SAME patch" を理解はするが
+workflow は変えず、代わりに **prompt の "noise" effect** で各 turn の出力品質が
+劣化 (JSON parse / token-match の reject 増加)。
+
+**推奨処置**: **#38 patching-guidance 段落を削除** (next commit で実施)。
+代替案: wording を弱める ("implement ALL" → "consider whether to add related
+symbols together")。但し効果未検証なので clean removal が安全。
 
 
 
