@@ -1244,21 +1244,27 @@ empirical 測定の S/N 比改善。
 
 **コスト**: small + 1 hour (template 編集 + skill 引数追加)。
 
-### 45. ~~agent patch が `ok=False` で連続する場合の早期 give-up~~ → 実装済 (2026-05-24)
+### 45. ~~agent patch が `ok=False` で連続する場合の早期 give-up~~ → 実装済 (2026-05-24)、empirical effect は variance に埋もれ未確認
 
-**Status**: ✅ **実装済** — `run-limits` に `max-consecutive-failed-patches`
+**Status**: ✅ **実装済 (fd02eaa)** — `run-limits` に `max-consecutive-failed-patches`
 (default 3) を追加、`agent-state` に `consecutive-failed-patches` streak counter を
 追加。`handle-tool-call` で source-mutating tool の `isError=true` 時に increment、
 success 時に reset。`check-limits` で streak が limit に達したら
 `:limit-exhausted` (`limit-hit :max-consecutive-failed-patches`) を返す。
 
-tests: 2 件追加
-(`run-agent-aborts-on-consecutive-failed-patches`,
-`agent-state-consecutive-failed-patches-resets-on-successful-patch`)。464 passed.
+tests: 2 件追加 (TDD)。cl-harness/tests 464 passed.
 
-実 effect 確認は別 bench で (102-counter-class 等、N=3 sweep で `ok=False` 連発した
-fixture を再走らせる)。期待: pathological patch 連発時の wall-clock 大幅短縮、特に
-sweep の 2000s 超 LIMIT-EXHAUSTED run を ~600-800s で早期 give-up に変えられるはず。
+**Empirical effect (102/103/104 × N=3 verification on fd02eaa)**:
+- Total wall-clock: 9766s → 6362s (-35%)
+- Pass rate: 4/9 (44%) → 6/9 (67%)
+- >2000s pathological runs: 3 → 0
+- **但し `:MAX-CONSECUTIVE-FAILED-PATCHES` 発火は 0/9** — 改善は variance / 他要因 (
+  spec-generator robustness + CLI max-tokens fix の波及) の可能性。
+- max consecutive failed patches observed in any step: 3 (但し step 全体が PASSED に
+  軟着陸し、新 limit fire せず)
+- 真の causation は fixed-plan paired bench (#46) 実装後に再評価
+
+詳細 doc: `docs/benchmarks/results-2026-05-24-45-verification-102-103-104.md`
 
 **元 entry**:
 
