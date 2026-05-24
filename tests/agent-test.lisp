@@ -1748,6 +1748,20 @@ success result with one text content block."
     (ok (search "code-find-references" prompt))
     (ok (search "vocabulary" prompt))))
 
+(deftest system-prompt-includes-fs-write-file-workflow-guidance
+  ;; Backlog #48: agent often mis-invokes fs-write-file on existing
+  ;; .lisp/.asd files (29% of tool errors in 2026-05-24 JSONL aggregate).
+  ;; The system prompt must steer them to lisp-edit-form for existing
+  ;; source files and reserve fs-write-file for genuinely new files.
+  (dolist (mode '(:runtime-native :generic-mcp))
+    (let* ((policy (make-tool-policy mode))
+           (prompt (cl-harness/src/agent::system-prompt policy)))
+      (testing (format nil "policy mode ~A" mode)
+        (ok (search "fs-write-file" prompt))
+        (ok (search "Cannot overwrite" prompt)
+            "prompt names the diagnostic message so agent recognises misuse")
+        (ok (search "lisp-edit-form" prompt))))))
+
 (deftest system-prompt-omits-patching-guidance
   ;; Backlog #38 was removed on 2026-05-24 after N=10 paired bench on
   ;; 104b-cache-simple-paired showed it was net-negative (tool-errors

@@ -161,7 +161,18 @@
    "- You have no MCP tools; plan from convention "
    "(package-inferred-system layout, src/ + tests/, etc.)."
    (string #\Newline)
-   "- Never include trailing commentary outside the JSON object.")
+   "- Never include trailing commentary outside the JSON object."
+   (string #\Newline)
+   "- Backlog #50 — test_source MUST use only standard CL functions, "
+   "rove primitives (deftest, testing, ok, ng, signals), and symbols "
+   "from the implementation package under test. Do NOT call MOP / "
+   "introspection helpers that tests/main-test does not inherit: "
+   "class-slots, arglist, function-lambda-list, exported-symbols, "
+   "slot-value (use accessors instead), or anything from closer-mop / "
+   "sb-mop / sb-introspect. To check exports, write the assertion as "
+   "`(ok (find-symbol \"NAME\" :pkg))` plus optional `(eq :external "
+   "(nth-value 1 (find-symbol \"NAME\" :pkg)))`. To check slots, call "
+   "the accessor on a fresh instance and ok the value.")
   "Default planner system prompt sent on every PLAN-DEVELOPMENT call.
 Mirrors prompts/planner.md.")
 

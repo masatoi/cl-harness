@@ -355,6 +355,23 @@
     (ok (search "counter:make-counter"
                 cl-harness/src/planner::+default-planner-system-prompt+))))
 
+(deftest default-planner-system-prompt-bans-non-standard-test-helpers
+  ;; Backlog #50: 2026-05-24 JSONL aggregate analysis observed planner-
+  ;; generated tests calling MOP / introspection helpers that the
+  ;; tests/main-test package does NOT inherit:
+  ;;   class-slots, arglist, function-lambda-list, exported-symbols.
+  ;; Each occurrence leaves the step unsolvable (the agent will not
+  ;; reimplement standard library glue). Prompt must explicitly forbid
+  ;; these names.
+  (let ((prompt cl-harness/src/planner::+default-planner-system-prompt+))
+    (testing "prompt names the forbidden helpers"
+      (ok (search "class-slots" prompt))
+      (ok (search "arglist" prompt))
+      (ok (search "function-lambda-list" prompt))
+      (ok (search "exported-symbols" prompt)))
+    (testing "prompt mentions standard CL / rove restriction"
+      (ok (search "standard CL" prompt)))))
+
 (deftest parse-predefined-plan-converts-hashtable-list-to-plan-steps
   ;; backlog #46: develop-task.json may carry a predefined_plan array
   ;; (parsed by yason as list-or-vector of hash-tables) which orchestrator's
