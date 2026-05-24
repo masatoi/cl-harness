@@ -1293,6 +1293,58 @@ prompt-level 改善 backlog で再現性のある evaluation が可能。
 
 **コスト**: medium + 1-2 days (develop-task schema 拡張 + develop kwarg 追加 + skill template 拡張)。
 
+### 47. review JSON parse: invalid escape を tolerate / retry
+
+**Source**: bench-sweep N=3 2026-05-24, fixture 104-cache-simple trial3
+**Axis**: cl-harness 実装
+
+**観察**: 104-cache-simple trial3 で review-development-artifact 内の `complete-chat` が
+返した JSON 文字列に `"\a"` のような invalid JSON escape sequence が含まれ、yason が
+`ECASE fell through. Wanted one of (#\" #\\ #\/ #\b #\f #\n #\r #\t #\u)` で reject。
+bench が 168s で ERROR abort。
+
+**仮説**: LLM (Qwen3.6) が時々 non-standard escape (`\a` 等) を出力する。yason は strict
+JSON parser なので invalid escape を receive すると hard error。
+
+**変更案**:
+- `src/review.lisp` の review JSON parse path で 2 段階処理:
+  1. 元 string を直接 yason に渡す (現状)
+  2. yason error 時、invalid escape sequence をサニタイズ (例: `\a` → `a`, `\<bad>` →
+     `<bad>`) してから retry
+- もしくは LLM call を 1 回 retry してから fail させる (backlog #40 と統合可能)
+- regression test: invalid escape を含む文字列が review-error なく parse される
+
+**期待効果**: sporadic な model output anomaly で bench が abort しなくなる。
+N=3 sweep で 1/21 観測 (5%) → 削減できれば pass rate に直接寄与。
+
+**コスト**: small + half-day (sanitize util + review error path + test)。
+
+---
+
+## 2026-05-24 bench-sweep N=3 結果 — system-wide pass rate baseline
+
+main @ 0368f1e で 7 fixtures × 3 trials = 21 cells を実施 (Qwen3.6, ~5 hours wall-clock)。
+
+**Aggregate pass rate: 8/21 = 38%**
+
+| Fixture | Pass | 主要 failure mode |
+|---|---:|---|
+| 100-greet | 1/3 | :GIVE-UP / :LIMIT-EXHAUSTED |
+| 101-double | 1/3 | :LIMIT-EXHAUSTED / :STUCK |
+| 102-counter-class | 1/3 | :LIMIT-EXHAUSTED / :GIVE-UP |
+| 103-fizz-buzz | 2/3 | :STUCK (1 run only) |
+| 104-cache-simple | 1/3 | :LIMIT-EXHAUSTED / ERROR (yason) |
+| 105-validate-email | 1/3 | :LIMIT-EXHAUSTED / :STUCK ← **初の :PASSED 観測** |
+| 106-format-currency | 1/3 | :LIMIT-EXHAUSTED / :STUCK |
+
+主要 findings:
+- trivial fixture (100, 101) でも 1/3 pass で **system 全体が不安定**
+- 高 wall-clock 浪費 (>2000s) の failure が複数 → backlog #45 (連続 ok=False 早期 give-up) 適用候補
+- 新規 #47: yason invalid escape sequence で review JSON decode fail (1/21)
+- #38 effect は依然測定困難 — fixed-plan paired bench (#46) 実装後に再評価
+
+詳細 doc: `docs/benchmarks/results-2026-05-24-bench-sweep-n3.md`
+
 ---
 
 ## 2026-05-24 paired #38 on/off bench 結果 — #38 entry refinement
