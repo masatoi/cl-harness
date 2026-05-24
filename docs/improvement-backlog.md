@@ -1015,10 +1015,15 @@ fixture (102, 104) で recurring pattern なので effect 範囲広い。
 
 **コスト**: small + half-day（diff 比較 + event emit）。
 
-### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 (2026-05-24)、**N=10 fixed-plan paired で net-negative 確定、削除推奨**
+### 38. ~~agent prompt に「test の全 symbol 1 turn 内」ヒント追加~~ → 実装済 → **削除済 (2026-05-24)、N=10 paired で net-negative 確定**
 
-**2026-05-24 update (N=10)**: N=10 paired bench
-(`docs/benchmarks/results-2026-05-24-38-paired-n10-104b.md`) で **net-negative 確定**:
+**Status**: ❌ **削除済 (2026-05-24)** — N=10 fixed-plan paired bench で net-negative が
+確定したため、`src/agent.lisp` の system-prompt から "Patching guidance" 段落を
+削除。`tests/agent-test.lisp` の test も "不在を pin" する形に反転
+(`system-prompt-omits-patching-guidance`)。
+
+N=10 paired bench 結果
+(`docs/benchmarks/results-2026-05-24-38-paired-n10-104b.md`):
 
 | Metric | OFF | ON | Δ |
 |---|---:|---:|---:|
@@ -1032,13 +1037,14 @@ fixture (102, 104) で recurring pattern なので effect 範囲広い。
   die-spiral を引き起こす direct evidence
 - どの ON trial でも #38 directive 不遵守 (依然 incremental put→get pattern)
 
-仮説 (refinement): Qwen3.6 は "implement ALL in SAME patch" を理解はするが
-workflow は変えず、代わりに **prompt の "noise" effect** で各 turn の出力品質が
-劣化 (JSON parse / token-match の reject 増加)。
+仮説: Qwen3.6 は "implement ALL in SAME patch" を理解はするが workflow は変えず、
+代わりに **prompt の "noise" effect** で各 turn の出力品質が劣化 (JSON parse /
+token-match の reject 増加)。
 
-**推奨処置**: **#38 patching-guidance 段落を削除** (next commit で実施)。
-代替案: wording を弱める ("implement ALL" → "consider whether to add related
-symbols together")。但し効果未検証なので clean removal が安全。
+**教訓**:
+1. Prompt-level 改善は paired empirical test なしで evaluate できない
+2. "もっともらしい hypothesis" でも N=10 で net-negative が出ることがある
+3. #46 (fixed-plan paired infrastructure) なしには この検証が不可能だった
 
 
 

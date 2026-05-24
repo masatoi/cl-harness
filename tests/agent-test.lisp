@@ -1748,18 +1748,20 @@ success result with one text content block."
     (ok (search "code-find-references" prompt))
     (ok (search "vocabulary" prompt))))
 
-(deftest system-prompt-includes-patching-guidance
-  ;; Backlog #38: across all policy modes the system prompt must
-  ;; nudge the agent to enumerate test symbols and add them in a
-  ;; single patch instead of one-at-a-time. Pins the wording so a
-  ;; future refactor doesn't silently drop the hint.
+(deftest system-prompt-omits-patching-guidance
+  ;; Backlog #38 was removed on 2026-05-24 after N=10 paired bench on
+  ;; 104b-cache-simple-paired showed it was net-negative (tool-errors
+  ;; +128%, pass-rate -20pt vs OFF arm). This test pins the absence
+  ;; so a future re-add (e.g. cargo-cult based on the original
+  ;; hypothesis) is caught immediately. See
+  ;; docs/benchmarks/results-2026-05-24-38-paired-n10-104b.md for
+  ;; the evidence.
   (dolist (mode '(:runtime-native :generic-mcp :file-only))
     (let* ((policy (make-tool-policy mode))
            (prompt (cl-harness/src/agent::system-prompt policy)))
       (testing (format nil "policy mode ~A" mode)
-        (ok (search "Patching guidance" prompt))
-        (ok (search "enumerate every" prompt))
-        (ok (search "in the SAME patch" prompt))))))
+        (ok (not (search "Patching guidance" prompt)))
+        (ok (not (search "in the SAME patch" prompt)))))))
 
 (deftest agent-state-reason-defaults-to-nil
   ;; Phase: transport failure-mode coverage.
