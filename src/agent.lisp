@@ -36,6 +36,7 @@
                 #:run-limits-max-wall-clock-seconds
                 #:run-limits-max-action-parse-errors
                 #:run-limits-max-consecutive-failed-patches
+                #:run-limits-max-stalled-verify-cycles
                 #:run-limits-max-context-tokens)
   (:import-from #:cl-harness/src/compact
                 #:compact-history
@@ -112,6 +113,9 @@
            #:agent-state-limit-hit
            #:agent-state-parse-error-streak
            #:agent-state-consecutive-failed-patches
+           #:agent-state-stalled-verify-streak
+           #:agent-state-last-verify-failure-key
+           #:check-limits
            #:agent-state-develop-state
            #:agent-state-reason
            #:agent-state-last-tool-errors
@@ -352,6 +356,27 @@ successful source-mutating call. When it reaches
 RUN-LIMITS-MAX-CONSECUTIVE-FAILED-PATCHES the loop exits :limit-exhausted
 with limit-hit :max-consecutive-failed-patches (backlog #45). The
 non-streak counterpart is PATCH-ATTEMPTS which never resets.")
+   (stalled-verify-streak
+    :initform 0
+    :accessor agent-state-stalled-verify-streak
+    :documentation "Consecutive post-patch verify failures whose root
+cause (failure-key from %VERIFY-FAILURE-KEY) did not evolve between
+iterations. Resets on either a :passed verify or on a failure whose
+key differs from the previous one. When it reaches
+RUN-LIMITS-MAX-STALLED-VERIFY-CYCLES the loop exits :limit-exhausted
+with limit-hit :max-stalled-verify-cycles (backlog #56). Orthogonal to
+CONSECUTIVE-FAILED-PATCHES — that streak counts patch-tool rejections;
+this one counts apply-clean patches that did not move the verify state
+forward. Observed 2026-05-25 on 104-trial2: 2 successful patches + 3
+failed produced 3 identical CFE verifies; max-patches budget was
+exhausted before any limit caught it.")
+   (last-verify-failure-key
+    :initform nil
+    :accessor agent-state-last-verify-failure-key
+    :documentation "String returned by %VERIFY-FAILURE-KEY for the most
+recent failed verify; NIL on initial state or after a :passed verify.
+Used to decide whether to incf or reset STALLED-VERIFY-STREAK on the
+next failed verify (backlog #56).")
    (limit-hit :initform nil :accessor agent-state-limit-hit
               :documentation "When STATUS is :LIMIT-EXHAUSTED, names the
 LIMIT slot keyword that was exceeded (:MAX-TURNS / :MAX-TOOL-CALLS /
@@ -504,7 +529,60 @@ limit can fire on any given check."
     ((>= (agent-state-consecutive-failed-patches state)
          (run-limits-max-consecutive-failed-patches limits))
      :max-consecutive-failed-patches)
+    ((>= (agent-state-stalled-verify-streak state)
+         (run-limits-max-stalled-verify-cycles limits))
+     :max-stalled-verify-cycles)
     (t nil)))
+
+(defun %verify-failure-key (verify-result)
+  "Return a stable string key identifying the failure mode of
+VERIFY-RESULT, or NIL when the verify reported :passed (no failure to
+track). Two consecutive verifies with the same key indicate the agent's
+patches have not moved the root cause forward; backlog #56's
+stalled-verify-streak uses this to detect 'patches succeed but cumulative
+state unchanged' patterns (104-trial2 observation 2026-05-25).
+
+For :test-failed verifies the key is the first failed test's
+TEST_NAME + REASON pair (reason truncated to 200 chars so trivial line-
+number drift in long stack frames does not break key equality).
+For :load-failed verifies the key is the load failure's diagnostic
+content text (also truncated to 200 chars).
+For :passed verifies the key is NIL.
+
+The key is intentionally string-based so it can be stored in
+AGENT-STATE-LAST-VERIFY-FAILURE-KEY without copying hash-tables."
+  (when (and verify-result
+             (not (verify-result-success-p verify-result)))
+    (let* ((tr (verify-result-test verify-result))
+           (failed (and tr (gethash "failed_tests" tr)))
+           (first-failed
+            (cond ((and failed (vectorp failed) (plusp (length failed)))
+                   (elt failed 0))
+                  ((and failed (listp failed) failed)
+                   (first failed)))))
+      (cond
+        ((hash-table-p first-failed)
+         (let ((name (or (gethash "test_name" first-failed) ""))
+               (reason (or (gethash "reason" first-failed) "")))
+           (format nil "test:~A|~A"
+                   name
+                   (subseq reason 0 (min (length reason) 200)))))
+        ((eq :load-failed (verify-result-status verify-result))
+         (let* ((lr (verify-result-load verify-result))
+                (content (and lr (gethash "content" lr))))
+           (when (and content (or (vectorp content) (listp content))
+                      (plusp (length content)))
+             (let* ((first (elt content 0))
+                    (text (and (hash-table-p first) (gethash "text" first))))
+               (when (and text (stringp text))
+                 (format nil "load:~A"
+                         (subseq text 0 (min (length text) 200))))))))
+        (t
+         ;; failed but no failed_tests structure and not :load-failed —
+         ;; fall back to a stable status-only key so streak still
+         ;; advances on persistent unstructured failures.
+         (format nil "status:~A"
+                 (or (verify-result-status verify-result) :unknown)))))))
 
 ;; --- Stub ---------------------------------------------------------------
 
@@ -1248,17 +1326,39 @@ step since no real patch was applied."
                           record)))))
                  (let ((v (verify-task mcp-client config)))
                    (log-event logger :verify (verify-event-payload turn v))
-                   (if (verify-result-success-p v)
-                       (values next :passed v action)
-                       (progn
-                         (%record-failed-verify state v)
-                         (let* ((detail (verify-detail-prose v))
-                                (msg (with-output-to-string (s)
-                                       (format s "Verify after patch: ~A~%"
-                                               (verify-summary v))
-                                       (when detail (format s "~A" detail)))))
-                           (values (append-message next "user" msg)
-                                   nil nil nil))))))))
+                   (cond
+                     ((verify-result-success-p v)
+                      ;; Backlog #56: a passing verify clears the stalled
+                      ;; streak — even if it was about to fire on the next
+                      ;; failure, the agent's last patch obviously moved
+                      ;; the cumulative state forward.
+                      (setf (agent-state-stalled-verify-streak state) 0
+                            (agent-state-last-verify-failure-key state) nil)
+                      (values next :passed v action))
+                     (t
+                      (%record-failed-verify state v)
+                      ;; Backlog #56: track post-patch verify failures whose
+                      ;; root cause did not evolve. Same key → incf streak;
+                      ;; different (or first) key → reset to 1 and remember
+                      ;; the new key. The cap is enforced by CHECK-LIMITS
+                      ;; on the next turn boundary.
+                      (let ((key (%verify-failure-key v)))
+                        (cond
+                          ((and key
+                                (equal key (agent-state-last-verify-failure-key
+                                            state)))
+                           (incf (agent-state-stalled-verify-streak state)))
+                          (t
+                           (setf (agent-state-stalled-verify-streak state) 1
+                                 (agent-state-last-verify-failure-key state)
+                                 key))))
+                      (let* ((detail (verify-detail-prose v))
+                             (msg (with-output-to-string (s)
+                                    (format s "Verify after patch: ~A~%"
+                                            (verify-summary v))
+                                    (when detail (format s "~A" detail)))))
+                        (values (append-message next "user" msg)
+                                nil nil nil))))))))
              (t (values next nil nil nil)))))))))
 
 (defun %maybe-compact-messages (messages run-limits)

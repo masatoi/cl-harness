@@ -1817,7 +1817,30 @@ H instrumentation bench で唯一の failure (104 trial2 :STUCK 1483s) を root 
 順次 fire して abort することは確認 (#45 が round 2 で works as designed)。 但し
 round 1 step 1 で **~700s 消費** した phase は既存 limit では catch できなかった。
 
-### 56. max-stalled-verify-cycles — successful patches between unchanged verify failures
+### 56. ~~max-stalled-verify-cycles — successful patches between unchanged verify failures~~ → 実装済 (2026-05-25)
+
+**Status**: ✅ **実装済** — `src/config.lisp` に `run-limits` slot
+`max-stalled-verify-cycles` (default 3) 追加、 `src/agent.lisp` に:
+- `agent-state` slots `stalled-verify-streak` (init 0) + `last-verify-failure-key` (init nil)
+- `%verify-failure-key` helper: `:test-failed` は `test_name + reason[:200]`、
+  `:load-failed` は `content[0].text[:200]`、 `:passed` は NIL
+- `handle-tool-call` の post-patch verify block で:
+  - :passed → streak 0 + key nil
+  - :failed → key 比較 → 同じなら incf / 違えば 1 に reset + key 更新
+- `check-limits` に `(>= stalled-verify-streak max-stalled-verify-cycles)` →
+  `:limit-exhausted :max-stalled-verify-cycles`
+
+tests: 4 件追加
+(`agent-state-stalled-verify-streak-defaults-to-zero`,
+`run-limits-max-stalled-verify-cycles-default-is-three`,
+`check-limits-fires-on-max-stalled-verify-cycles`,
+`verify-failure-key-coalesces-same-failure-reason`)。482 passed.
+
+`check-limits` を export 追加 (test 経由でアクセスするため)。
+
+実 effect 確認は別 bench で。 期待: 104-trial2 round 1 step 1 のような ~700s phase
+(2 successful patches + 同 reason CFE 3 回) を ~300s 程度に短縮。 #45 と直交する
+limit のため両方併用可。
 
 **Source**: 104-trial2 STUCK analysis 2026-05-25
 **Axis**: cl-harness 実装

@@ -792,6 +792,92 @@ order. Helper for tests that assert against the on-disk transcript."
     (testing "agent stops after exactly the budget"
       (ok (= 3 (cl-harness/src/agent:agent-state-parse-error-streak state))))))
 
+(deftest agent-state-stalled-verify-streak-defaults-to-zero
+  ;; Backlog #56: new slot tracks consecutive post-patch verify failures
+  ;; whose root cause did not evolve. Default fresh = 0.
+  (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+    (ok (zerop (cl-harness/src/agent:agent-state-stalled-verify-streak s)))))
+
+(deftest run-limits-max-stalled-verify-cycles-default-is-three
+  ;; Backlog #56: same default as parse-error-streak / consecutive-failed-patches.
+  (let ((l (cl-harness/src/config:make-default-limits)))
+    (ok (= 3 (cl-harness/src/config:run-limits-max-stalled-verify-cycles l)))))
+
+(deftest check-limits-fires-on-max-stalled-verify-cycles
+  ;; Backlog #56: when the agent's stalled-verify-streak reaches the
+  ;; configured threshold, check-limits returns :max-stalled-verify-cycles
+  ;; so the run-agent loop can abort before max-patches gets burned.
+  (let* ((limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 99 :max-tool-calls 99
+                                :max-patches 99 :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600
+                                :max-action-parse-errors 99
+                                :max-consecutive-failed-patches 99
+                                :max-stalled-verify-cycles 3))
+         (state (make-instance 'cl-harness/src/agent:agent-state)))
+    (setf (cl-harness/src/agent:agent-state-stalled-verify-streak state) 3)
+    (ok (eq :max-stalled-verify-cycles
+            (cl-harness/src/agent:check-limits state limits))
+        "limit fires at exactly the configured threshold"))
+  (let* ((limits (make-instance 'cl-harness/src/config:run-limits
+                                :max-turns 99 :max-tool-calls 99
+                                :max-patches 99 :max-read-files 99
+                                :max-repl-evals 99
+                                :max-wall-clock-seconds 600
+                                :max-action-parse-errors 99
+                                :max-consecutive-failed-patches 99
+                                :max-stalled-verify-cycles 3))
+         (state (make-instance 'cl-harness/src/agent:agent-state)))
+    (setf (cl-harness/src/agent:agent-state-stalled-verify-streak state) 2)
+    (ok (null (cl-harness/src/agent:check-limits state limits))
+        "limit does not fire below threshold")))
+
+(deftest verify-failure-key-coalesces-same-failure-reason
+  ;; Backlog #56: %verify-failure-key extracts a stable string from a
+  ;; verify-result that's IDEntical across two failures with the same
+  ;; root cause, but DIFFERENT when the root cause evolves. Used by
+  ;; the run-agent loop to track stalled-verify-streak.
+  (let* ((failed-tests
+           (vector (alexandria:alist-hash-table
+                    `(("test_name" . "test-cache-put-get")
+                      ("reason" . "CACHE/SRC/MAIN:CACHE-PUT is undefined."))
+                    :test 'equal)))
+         (test-result-1
+           (alexandria:alist-hash-table
+            `(("failed_tests" . ,failed-tests))
+            :test 'equal))
+         (vr-1 (make-instance 'cl-harness/src/verify:verify-result
+                              :status :test-failed
+                              :passed 0 :failed 1
+                              :test-result test-result-1))
+         (failed-tests-evolved
+           (vector (alexandria:alist-hash-table
+                    `(("test_name" . "test-cache-put-get")
+                      ("reason" . "CACHE/SRC/MAIN:CACHE-GET is undefined."))
+                    :test 'equal)))
+         (test-result-2
+           (alexandria:alist-hash-table
+            `(("failed_tests" . ,failed-tests-evolved))
+            :test 'equal))
+         (vr-2 (make-instance 'cl-harness/src/verify:verify-result
+                              :status :test-failed
+                              :passed 0 :failed 1
+                              :test-result test-result-2)))
+    (testing "key from same reason matches its duplicate"
+      (let ((k1 (cl-harness/src/agent::%verify-failure-key vr-1))
+            (k1b (cl-harness/src/agent::%verify-failure-key vr-1)))
+        (ok (equal k1 k1b))))
+    (testing "key differs when reason evolves to a new symbol"
+      (let ((k1 (cl-harness/src/agent::%verify-failure-key vr-1))
+            (k2 (cl-harness/src/agent::%verify-failure-key vr-2)))
+        (ok (not (equal k1 k2)))))
+    (testing "passed verify yields NIL key (no failure to track)"
+      (let ((pass-vr (make-instance 'cl-harness/src/verify:verify-result
+                                    :status :passed
+                                    :passed 1 :failed 0)))
+        (ok (null (cl-harness/src/agent::%verify-failure-key pass-vr)))))))
+
 (deftest run-agent-aborts-on-consecutive-failed-patches
   ;; backlog #45: when agent issues N consecutive patches that all return
   ;; isError=true (e.g. lisp-patch-form structural rejection from

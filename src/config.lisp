@@ -23,6 +23,7 @@
            #:run-limits-max-wall-clock-seconds
            #:run-limits-max-action-parse-errors
            #:run-limits-max-consecutive-failed-patches
+           #:run-limits-max-stalled-verify-cycles
            #:run-limits-max-context-tokens
            #:run-config-log-llm-requests-p))
 
@@ -55,6 +56,23 @@ tolerated before RUN-AGENT exits :limit-exhausted with limit-hit
 successful source-mutating call. Prevents the agent from burning the
 full MAX-PATCHES budget on a die-spiral of structurally-invalid patch
 JSON (parinfer auto-repair failure / token-match miss).")
+   (max-stalled-verify-cycles
+    :initarg :max-stalled-verify-cycles
+    :initform 3
+    :reader run-limits-max-stalled-verify-cycles
+    :documentation "Consecutive post-patch verify failures whose root
+cause (test-name + first-failed-reason, or load-failure diagnosis text)
+did NOT evolve between iterations, tolerated before RUN-AGENT exits
+:limit-exhausted with limit-hit :max-stalled-verify-cycles (backlog #56).
+Resets to zero on either a :passed verify or any verify whose failure
+key differs from the previous one (= the agent's patch moved the
+problem forward, even if not yet fully solved). Orthogonal to
+:max-consecutive-failed-patches — that limit catches structurally-broken
+patches; this one catches patches that apply cleanly but do not change
+which tests still fail (= cumulative state did not advance). Observed
+2026-05-25 on 104-trial2: 2 successful patches + 3 failed, all 3
+verifies returned the same COMPILE-FILE-ERROR, max-patches budget
+exhausted before this signal was visible.")
    (max-context-tokens
     :initarg :max-context-tokens
     :initform 4000
@@ -87,6 +105,7 @@ your endpoint can comfortably handle larger prompts."))
                  :max-wall-clock-seconds 600
                  :max-action-parse-errors 3
                  :max-consecutive-failed-patches 3
+                 :max-stalled-verify-cycles 3
                  :max-context-tokens 4000))
 
 (defclass run-config ()
