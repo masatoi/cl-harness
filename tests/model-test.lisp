@@ -26,6 +26,7 @@
                 #:chat-response-total-tokens
                 #:model-error
                 #:model-error-message
+                #:model-error-type
                 #:chat-build-request-body
                 #:chat-parse-response
                 #:complete-chat))
@@ -83,7 +84,79 @@
                "{\"error\":{\"message\":\"bad key\",\"type\":\"auth\"}}")
               nil)
           (model-error (c)
-            (search "bad key" (model-error-message c)))))))
+            (search "bad key" (model-error-message c))))))
+  (testing "empty content signals model-error :empty-content (backlog #40)"
+    ;; Qwen3.6 reasoning models occasionally exhaust completion tokens on
+    ;; internal thinking and return "" content with finish_reason "stop"
+    ;; or "length". Downstream parsers (review JSON decode, planner JSON
+    ;; decode) then fail cryptically. Promote this to a structured model-
+    ;; error so the retry layer can recover.
+    (ok (handler-case
+            (progn
+              (chat-parse-response
+               "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":12}}")
+              nil)
+          (model-error (c)
+            (eq :empty-content (model-error-type c))))))
+  (testing "missing content key also signals :empty-content"
+    (ok (handler-case
+            (progn
+              (chat-parse-response
+               "{\"choices\":[{\"message\":{\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]}")
+              nil)
+          (model-error (c)
+            (eq :empty-content (model-error-type c)))))))
+
+(deftest complete-chat-retries-on-empty-content
+  ;; Backlog #40: an :empty-content response from chat-parse-response is
+  ;; transient (Qwen3.6 reasoning models exhaust completion tokens). The
+  ;; retry layer should treat it like a transport-timeout — try once more
+  ;; before propagating. Test by stubbing a transport that returns empty
+  ;; content the first time and valid content the second.
+  (let* ((call-count (cons 0 nil))
+         (transport
+           (lambda (url headers body)
+             (declare (ignore url headers body))
+             (incf (car call-count))
+             (let ((reply
+                     (if (= (car call-count) 1)
+                         ;; first call: empty content
+                         "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":10}}"
+                         ;; second call: valid content
+                         "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"recovered\"},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":15}}")))
+               (values reply 200 (make-hash-table :test 'equal)))))
+         (provider (make-openai-provider :base-url "http://x/v1"
+                                         :api-key "k"
+                                         :model "demo"
+                                         :transport transport)))
+    (testing "complete-chat returns recovered content from 2nd attempt"
+      (let ((r (complete-chat provider
+                              (list (make-chat-message "user" "hi")))))
+        (ok (equal "recovered" (chat-response-content r)))))
+    (testing "transport was invoked exactly twice"
+      (ok (= 2 (car call-count))))))
+
+(deftest complete-chat-empty-content-retry-can-be-disabled
+  ;; A provider with retry-p NIL should fail immediately on empty content
+  ;; rather than retrying (matches existing semantics for other retriable
+  ;; reasons; useful for tests that want to probe error paths).
+  (let* ((transport
+           (lambda (url headers body)
+             (declare (ignore url headers body))
+             (values
+              "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":5}}"
+              200 (make-hash-table :test 'equal))))
+         (provider (make-openai-provider :base-url "http://x/v1"
+                                         :api-key "k"
+                                         :model "demo"
+                                         :transport transport
+                                         :retry-p nil)))
+    (ok (handler-case
+            (progn (complete-chat provider
+                                  (list (make-chat-message "user" "hi")))
+                   nil)
+          (model-error (c)
+            (eq :empty-content (model-error-type c)))))))
 
 (deftest openai-provider-construction-defaults
   (let ((p (make-openai-provider :base-url "http://localhost:8080/v1"

@@ -55,7 +55,9 @@
                 #:complete-chat
                 #:make-chat-message
                 #:chat-response-content
-                #:chat-response-total-tokens)
+                #:chat-response-total-tokens
+                #:model-error
+                #:model-error-type)
   (:import-from #:cl-harness/src/action
                 #:parse-action
                 #:agent-action-type
@@ -1470,17 +1472,28 @@ boundary is unit-testable without standing up the whole loop."
 Returns (values NEW-MESSAGES OUTCOME VERIFY ACTION). OUTCOME is NIL when
 the loop should continue, otherwise a terminal status keyword
 (:PASSED / :GIVE-UP)."
-  (let* ((chat (%complete-chat-with-logging provider messages config state
-                                            logger turn))
-         (text (chat-response-content chat)))
-    (cond
-      ((or (null text) (zerop (length text)))
-       ;; C2 empty-content path: immediate :give-up :empty-content,
-       ;; no re-prompt. A degenerate empty reply otherwise triggers
-       ;; an action-parse-error churn that cannot recover -- the
-       ;; provider just returned nothing for the LLM to amend.
-       (setf (agent-state-reason state) :empty-content)
-       (values messages :give-up nil nil))
+  (multiple-value-bind (chat empty-content-error-p)
+      (handler-case (values (%complete-chat-with-logging
+                             provider messages config state logger turn)
+                            nil)
+        (model-error (c)
+          ;; Backlog #40 (2026-05-26): :empty-content from CHAT-PARSE-RESPONSE
+          ;; reaches step-turn after the COMPLETE-CHAT retry layer exhausts
+          ;; its 1 retry. Translate back to the legacy give-up + reason path
+          ;; so the existing test pin (and orchestrator's outer handling)
+          ;; keep working.
+          (if (eq :empty-content (model-error-type c))
+              (values nil t)
+              (error c))))
+    (let ((text (and chat (chat-response-content chat))))
+      (cond
+        ((or empty-content-error-p (null text) (zerop (length text)))
+         ;; C2 empty-content path: immediate :give-up :empty-content,
+         ;; no re-prompt. A degenerate empty reply otherwise triggers
+         ;; an action-parse-error churn that cannot recover -- the
+         ;; provider just returned nothing for the LLM to amend.
+         (setf (agent-state-reason state) :empty-content)
+         (values messages :give-up nil nil))
       (t
        (handler-case
            (let ((action (parse-action text)))
@@ -1510,7 +1523,7 @@ the loop should continue, otherwise a terminal status keyword
              "user"
              (format nil "Could not parse your previous reply: ~A. Respond with one JSON object matching the schema."
                      (action-parse-error-message c)))
-            nil nil nil)))))))
+            nil nil nil))))))))
 
 (defun run-agent (config provider mcp-client policy logger
                   &key (clean-verify-p t)

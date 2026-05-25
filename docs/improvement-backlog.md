@@ -1144,7 +1144,33 @@ agent loop に到達せず measurement 不能。但しその過程で 2 件の l
 
 results doc: `docs/benchmarks/results-2026-05-24-bench-cycle-102-counter-class-104-cache-simple.md`
 
-### 40. complete-chat: empty content / http-client-error 時の透過的 retry
+### 40. ~~complete-chat: empty content / http-client-error 時の透過的 retry~~ → 部分実装済 (2026-05-26)
+
+**Status**: ✅ **empty content portion 実装済** — `src/model.lisp` の
+`chat-parse-response` で content 空 / NIL の時に `model-error :kind :empty-content`
+を raise する。 `+retriable-reasons+` に `:empty-content` 追加で 1 回 retry 発動。
+
+`src/agent.lisp` の `step-turn` も refactor: `%complete-chat-with-logging` 呼び出しを
+`handler-case` で wrap、 `:empty-content` model-error は legacy give-up + reason path
+にあわせて translate (既存 `step-turn-with-empty-content-yields-give-up-empty-content`
+test の semantics 維持)。
+
+tests: 3 件追加
+(`chat-parse-response-extracts-content-and-usage` 拡張 with `:empty-content` cases,
+`complete-chat-retries-on-empty-content` (transport stub: 1st 空 → 2nd 成功で recover),
+`complete-chat-empty-content-retry-can-be-disabled` (retry-p NIL で即 fail))。
+485 passed.
+
+直近 #50b bench で観測された **2 件の Qwen sampling failure** (102-trial2 max-action-
+parse-errors / 104-trial1 planner-error JSON decode) のうち、 後者 (planner-error は
+complete-chat 経由) が 1 回 retry で recover 可能になる。
+
+http-client-error portion は **未実装** (transient 性 borderline、 ある程度様子見)。
+別途 bench で出現したら再評価。
+
+**元 entry**:
+
+
 
 **Source**: bench-cycle 2026-05-24, fixtures 102-counter-class / 104-cache-simple
 **Axis**: cl-harness 実装

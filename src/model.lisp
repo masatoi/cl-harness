@@ -157,14 +157,20 @@ keywords. Other statuses fall through to range checks
 (:http-server-error / :http-client-error) in %CLASSIFY-LLM-FAILURE.")
 
 (defparameter +retriable-reasons+
-  '(:http-server-error :rate-limited :transport-timeout)
+  '(:http-server-error :rate-limited :transport-timeout :empty-content)
   "MODEL-ERROR :KIND values that COMPLETE-CHAT retries once when the
 provider's RETRY-P slot is true. The other reasons are deliberately
 NOT retried: :AUTH-FAILED and :HTTP-CLIENT-ERROR are caller-side
 issues; :MALFORMED-RESPONSE and :TRANSPORT-UNAVAILABLE are
 borderline-transient and excluded until production data shows
-otherwise; :EMPTY-CONTENT is already mapped to :GIVE-UP upstream
-and never surfaces from COMPLETE-CHAT directly.")
+otherwise.
+
+:EMPTY-CONTENT was added in backlog #40 (2026-05-26) — Qwen3.6
+reasoning models occasionally exhaust completion tokens on internal
+thinking and return content=\"\" with finish_reason \"stop\"/\"length\".
+Downstream parsers (planner-error: JSON decode end of file, review-
+error: spec generator returned empty content) then fail cryptically;
+a single retry recovers ~half of these.")
 
 (defun %classify-llm-failure (status body)
   "Map (HTTP STATUS, response BODY) into a reason keyword for
@@ -313,6 +319,21 @@ Signals MODEL-ERROR on an OpenAI error envelope ({\"error\": {...}})."
                :raw parsed)))
     (multiple-value-bind (msg finish)
         (%first-choice-message parsed)
+      (let ((content (and msg (gethash "content" msg))))
+        ;; Backlog #40 (2026-05-26): empty / NIL content is a transient
+        ;; reasoning-model symptom (token budget exhausted on internal
+        ;; thinking before any user-visible text). Promote to
+        ;; MODEL-ERROR :empty-content so the retry layer (+RETRIABLE-
+        ;; REASONS+) can recover instead of returning a CHAT-RESPONSE
+        ;; whose downstream JSON parse fails cryptically.
+        (unless (and (stringp content) (plusp (length content)))
+          (error 'model-error
+                 :kind :empty-content
+                 :message (format nil "chat response content is empty (finish_reason=~S, total_tokens=~A)"
+                                  finish
+                                  (let ((usage (gethash "usage" parsed)))
+                                    (and usage (gethash "total_tokens" usage))))
+                 :raw parsed)))
       (let ((usage (gethash "usage" parsed)))
         (make-instance 'chat-response
                        :content (and msg (gethash "content" msg))
