@@ -172,7 +172,20 @@
    "sb-mop / sb-introspect. To check exports, write the assertion as "
    "`(ok (find-symbol \"NAME\" :pkg))` plus optional `(eq :external "
    "(nth-value 1 (find-symbol \"NAME\" :pkg)))`. To check slots, call "
-   "the accessor on a fresh instance and ok the value.")
+   "the accessor on a fresh instance and ok the value."
+   (string #\Newline)
+   "- Backlog #41/#50 強化 (2026-05-26) — when the goal requires defining "
+   "multiple distinct exported symbols (e.g. a class plus several methods), "
+   "prefer ONE NEW EXPORTED SYMBOL PER STEP. Each step's test_source should "
+   "typically reference at most one NEW symbol that prior steps haven't "
+   "yet introduced. Avoid combined-symbol step names like "
+   "`test-cache-put-and-get` that bundle two undefined symbols into one "
+   "test — splitting into `test-cache-put` and `test-cache-get` keeps "
+   "each verify failure interpretable as \"this single symbol still "
+   "missing\" rather than \"multiple symbols missing simultaneously\", "
+   "which the executor can fix in one focused patch per step. Re-using "
+   "an already-defined symbol across later tests is fine; only introduce "
+   "ONE undefined symbol at a time as the new requirement.")
   "Default planner system prompt sent on every PLAN-DEVELOPMENT call.
 Mirrors prompts/planner.md.")
 

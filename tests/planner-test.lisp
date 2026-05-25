@@ -355,6 +355,25 @@
     (ok (search "counter:make-counter"
                 cl-harness/src/planner::+default-planner-system-prompt+))))
 
+(deftest default-planner-system-prompt-prefers-one-new-symbol-per-step
+  ;; Backlog #41/#50 強化 (2026-05-26): 104-cache-simple chronic 困難の
+  ;; analysis (results-2026-05-26-56b-verification.md follow-up) で、
+  ;; planner が "test-cache-put-and-get" 等の combined-symbol step を
+  ;; 生成すると agent が苦戦することが判明。empirical pass-rate signal:
+  ;; separate put/get steps 62.5% vs combined 28.6%。
+  ;; prompt に "prefer one NEW symbol per step" の rule を追加して
+  ;; combined step を抑制する。
+  (let ((p cl-harness/src/planner::+default-planner-system-prompt+))
+    (testing "prompt prefers one new exported symbol per step"
+      (ok (search "ONE NEW EXPORTED SYMBOL" p)
+          "explicit one-symbol-per-step rule"))
+    (testing "prompt warns against combined-symbol steps"
+      (ok (search "combined" p)
+          "combined-symbol pattern named as anti-pattern"))
+    (testing "prompt explains why (interpretable verify failures)"
+      (ok (search "interpretable" p)
+          "rationale tied to verify failure clarity"))))
+
 (deftest default-planner-system-prompt-bans-non-standard-test-helpers
   ;; Backlog #50: 2026-05-24 JSONL aggregate analysis observed planner-
   ;; generated tests calling MOP / introspection helpers that the
