@@ -1808,6 +1808,54 @@ tests: 3 件追加
 
 詳細: `docs/notes/2026-05-25-context-management-review.md`
 
+---
+
+## 2026-05-25 104-trial2 STUCK analysis 由来
+
+H instrumentation bench で唯一の failure (104 trial2 :STUCK 1483s) を root cause 調査
+(`docs/notes/2026-05-25-104-trial2-stuck-analysis.md`)。 既存 limit が複数 phase で
+順次 fire して abort することは確認 (#45 が round 2 で works as designed)。 但し
+round 1 step 1 で **~700s 消費** した phase は既存 limit では catch できなかった。
+
+### 56. max-stalled-verify-cycles — successful patches between unchanged verify failures
+
+**Source**: 104-trial2 STUCK analysis 2026-05-25
+**Axis**: cl-harness 実装
+
+**観察**: 104-trial2 round 1 step 1 で agent が patch_count=2 / patch_attempts=5
+で max-patches 到達。 但し 2 successful patches の間に挟まれた verify は **全て同じ
+COMPILE-FILE-ERROR で reason 不変**。 patches は structurally 成功するが cumulative
+state が test を満たさず stuck (例: defclass + defgeneric cache-put だけ追加した
+ため test file が依然 CFE)。
+
+既存 #45 (`max-consecutive-failed-patches`) は patch-tool 失敗を見るので catch
+できない (本 case では patches が OK で すり抜け)。 max-patches=5 default の budget
+を使い果たすまで agent が試行錯誤を続ける。
+
+**仮説**: N 連続 verify-fail で reason が同じなら agent の patch 戦略が **意味的に
+前進していない** signal。 max-patches budget を消費する前に bail すれば wall-clock
+節約。
+
+**変更案**:
+- `agent-state` に `stalled-verify-streak` slot (initial 0)
+- 各 post-patch verify で `failed_tests[0].reason` (またはその root-cause symbol) を
+  前 verify と比較
+- 同じ → incf、 異なる → 0 に reset
+- `run-limits` に `max-stalled-verify-cycles` (default 3) 追加
+- `check-limits` に `(>= stalled-verify-streak max-stalled-verify-cycles)` →
+  `:limit-exhausted :max-stalled-verify-cycles`
+
+**期待効果**: 104-trial2 round 1 step 1 のような ~700s wall-clock phase を
+~300s 以下に。 全体 trial が ~1483s → ~1000s。 multi-fixture sweep の wall-clock
+20-30% 削減見込み (recurring の pattern)。
+
+**コスト**: small + half-day (state slot + reason-equal helper + check-limits 追記
++ test)。
+
+実 effect 検証は bench で。 #37 (evolved-failures event) と統合実装可能。
+
+
+
 
 
 
