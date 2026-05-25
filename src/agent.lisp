@@ -1612,6 +1612,18 @@ offending slot."
                             :clean-verify-p clean-verify-p
                             :before-clean-verify-fn effective-before-clean-verify-fn)
            logger)))
+      ;; Backlog #56 follow-up: seed the stalled-verify-streak with the
+      ;; initial verify too. Without this, the streak only starts after
+      ;; the first post-patch verify, so 1 initial + N post-patch failures
+      ;; with the same key would need N >= max-stalled-verify-cycles
+      ;; (default 3) to fire — and many real cases hit max-patches (=5)
+      ;; before that. By counting the initial verify, streak default 3
+      ;; catches 1 initial + 2 post-patch same-key failures (= 104-trial2
+      ;; observed pattern).
+      (let ((key (%verify-failure-key initial)))
+        (when key
+          (setf (agent-state-stalled-verify-streak state) 1
+                (agent-state-last-verify-failure-key state) key)))
       (let ((messages (list (make-chat-message "system" (system-prompt policy))
                             (make-chat-message
                              "user" (initial-user-prompt
