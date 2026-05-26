@@ -1969,8 +1969,20 @@ implementation 切替を促す path がなかった。
 - `enriched-issue-with-review-feedback` 内に test-change-feedback section の test 2 件
   (own labeled block / ordering: test-change → impl-review → memo → task)
 
+### Design doc 反映 (2026-05-27)
 
+5 件の close をもって以下 design doc に設計を反映済み:
 
+- `docs/notes/2026-05-27-test-change-review-architecture.md` (新規) — 二層防御の
+  完全な architecture 説明 (invariants I1-I7、 L1/L2 dispatch、 issue 階層、
+  budget semantic、 未実装 deterministic check の候補)
+- `docs/cl-harness-prd.md` — "Test-change request gate" / "Review pipeline
+  (stage-aware prompts)" / "review-policy default mismatch" / "Run-wide vs
+  per-step budgets" の 4 セクションを追加
+- `docs/development-requirement.md` §4.8.1 — additive-only invariant を
+  要件レベルで明文化
+- `docs/notes/2026-05-06-v0.4-development-harness.md` §11 — design review
+  followup として finding 一覧 + 各 commit を log
 
 
 

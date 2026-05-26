@@ -1498,4 +1498,91 @@ marked `:review-rejected` and the outer replan loop takes over.
 This avoids regenerating the entire plan when the reviewer's
 correction is local to a single step's implementation.
 
+### Test-change request gate (additive-only, DR-2026-05-27)
+
+During step execution agent can emit `:test-change-request` to
+ask for an additional `deftest` to be appended to the test file
+when planner-emitted tests don't cover all acceptance criteria.
+Because tests are the source-of-truth of `verify`, this path is
+guarded by a **two-layer defense** (詳細は
+`docs/notes/2026-05-27-test-change-review-architecture.md` 参照):
+
+1. **L1 deterministic gate** (`validate-test-source` in
+   `src/orchestrator.lisp`): AST-level invariants — exactly one
+   `(deftest ...)` / `(rove:deftest ...)` top-level form, no
+   `(skip ...)` anywhere in the body, valid Lisp.
+2. **L2 LLM strict review** (`:test-change` kind in
+   `src/review.lisp`, `+test-change-review-system-prompt+`):
+   semantic invariants — additive-only (no overwrite),
+   no name collision with existing tests, no scope drift
+   beyond stated acceptance criteria, no contradiction with
+   acceptance criteria.
+
+When L2 rejects, `%maybe-handle-test-change-request` returns
+`:REJECTED <feedback>` and `%execute-step` re-runs the same step
+with the feedback prepended to the issue string under
+`## Prior test-change review feedback` (rendered ahead of
+`## Prior implementation review feedback`). The budget is
+controlled by `:max-test-revisions` (default 3) and is
+**run-wide**, not per-step — see "Run-wide vs per-step budgets"
+below.
+
+### Review pipeline (stage-aware prompts)
+
+The review pipeline dispatches on `kind` to keep
+intervention strength proportional to the risk of the
+artifact being approved:
+
+| kind | prompt constant | stance |
+|---|---|---|
+| `:plan` | `+default-review-system-prompt+` | soft (approve-by-default) |
+| `:tests` | `+tests-review-system-prompt+` | strict |
+| `:implementation` | `+default-review-system-prompt+` | soft |
+| `:test-change` | `+test-change-review-system-prompt+` | strictest (additive-only) |
+
+Plan / implementation reviews are deliberately soft because
+they sit on top of separate verification mechanisms
+(planner-emitted tests, `run-tests` green-gate). Tests and
+test-changes have no such downstream gate and must be reviewed
+strictly. See `review-system-prompt-for` in `src/review.lisp`
+for the dispatcher.
+
+### review-policy default mismatch (intentional)
+
+`:review-policy` has **deliberately different defaults** at
+two entry points:
+
+- `cl-harness:develop` (CLI facade in `src/cli.lisp`):
+  `:auto` — user-facing runs enable plan / test / impl review
+  gates by default.
+- `cl-harness/src/orchestrator:develop` (core API): `:none` —
+  programmatic callers and test stubs run without LLM review
+  calls.
+
+Programmatic callers wanting CLI-equivalent behavior must
+pass `:review-policy :auto` explicitly. Both docstrings
+cross-reference this contract.
+
+### Run-wide vs per-step budgets
+
+| budget | scope | default | notes |
+|---|---|---|---|
+| `:max-replans` | run-wide | 3 | outer replan loop |
+| `:max-patches` | per-step | (model-dep) | bounds patch attempts within a step |
+| `:max-consecutive-failed-patches` | per-step | 3 | catches patch oscillation |
+| `:max-stalled-verify-cycles` | per-step | 3 | catches verify-without-progress |
+| `:max-impl-review-revisions` | per-step | 2 | impl-review retry |
+| **`:max-test-revisions`** | **run-wide** | **3** | test_change_request budget |
+
+`:max-test-revisions` is **intentionally run-wide** (not
+per-step) to bound total LLM cost. The semantic implication
+is that if step 0 consumes the entire budget, step 1+ cannot
+request additional tests. Empirically (paired bench
+observations through 2026-05-27) the typical step issues
+0-1 test-change requests, so the N=3 default has not been
+constraining in practice. If empirical evidence accumulates
+that legitimate per-step needs exceed this, introduce a
+separate `:max-test-revisions-per-step` rather than raising
+the run-wide cap (see backlog).
+
 この原則を満たす MVP ができれば、`cl-harness` は単なる Common Lisp 用 agent wrapper ではなく、runtime-native coding agent architecture の研究・実用基盤として成立する。

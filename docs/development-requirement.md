@@ -236,6 +236,30 @@ macro / DSL の導入は特に慎重に扱うこと。
 - 必要に応じてintegration testを追加する
 ```
 
+#### 4.8.1 Additive-only invariant (DR-2026-05-27)
+
+テストスイートは `verify` の source-of-truth であり、エージェントが
+途中でテストを **改変・削除・無効化** できると、`verify` が正しく
+受け入れ条件を反映している保証が崩れる。 そのため、開発ループ中に
+エージェントがテストファイルへ与えうる変更は **追加のみ** に制限する。
+具体的不変条件:
+
+```text
+- 既存 deftest を modify / overwrite しない
+- 既存 deftest を delete しない
+- (skip ...) で既存 assertion を無効化しない
+- 新規 deftest は受け入れ条件と矛盾しない
+- 新規 deftest は受け入れ条件外の feature をカバーしない
+- 新規 deftest 名は既存名と衝突しない
+```
+
+実装上は `:test-change-request` という協調プロトコルを通して
+エージェントが新 deftest 1 件の追加を申し立て、 deterministic AST
+gate と LLM strict review の **二層** で上記不変条件を強制する。
+詳細仕様は `docs/cl-harness-prd.md` の "Test-change request gate"
+セクションと `docs/notes/2026-05-27-test-change-review-architecture.md`
+を参照。
+
 ---
 
 ### 4.9 Integration
