@@ -1503,7 +1503,32 @@ multi-paragraph branches without spinning up a real run-agent."
     (testing "empty-string review-feedback is treated like NIL"
       (let ((result (cl-harness/src/orchestrator::%enriched-issue
                      step nil :review-feedback "")))
-        (ok (equal "original task body" result))))))
+        (ok (equal "original task body" result))))
+    ;; Finding 5 (design review 2026-05-27): test-change-feedback section
+    ;; is rendered as its own block when a test_change_request was
+    ;; rejected, so the agent can see which constraint it violated and
+    ;; retry.
+    (testing "test-change-feedback renders its own labeled block"
+      (let ((result (cl-harness/src/orchestrator::%enriched-issue
+                     step nil
+                     :test-change-feedback
+                     "rejection condition 2: introduces (rove:skip)")))
+        (ok (search "## Prior test-change review feedback" result))
+        (ok (search "rejection condition 2" result))
+        (ok (search "original task body" result))))
+    (testing "test-change-feedback prepends BEFORE review-feedback BEFORE memo"
+      (let* ((result (cl-harness/src/orchestrator::%enriched-issue
+                      step "memo content"
+                      :review-feedback "impl missing AC-2"
+                      :test-change-feedback "additive-only violated"))
+             (tc-pos (search "Prior test-change" result))
+             (rv-pos (search "Prior implementation" result))
+             (exp-pos (search "Prior exploration" result))
+             (task-pos (search "## Task" result)))
+        (ok (and tc-pos rv-pos exp-pos task-pos))
+        (ok (< tc-pos rv-pos))
+        (ok (< rv-pos exp-pos))
+        (ok (< exp-pos task-pos))))))
 
 (defun %make-fake-passed-state ()
   "A minimal agent-state with status :passed for inner-loop stub tests."

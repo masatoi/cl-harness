@@ -396,22 +396,36 @@ recognize is reported as :unknown."
      ("status" . ,(%symbol-status (develop-step-result-status result))))
    :test 'equal))
 
-(defun %enriched-issue (step memo &key review-feedback)
-  "Return the issue string fed to the implement step. When
-REVIEW-FEEDBACK is non-empty, prepend it as a `Prior implementation
-review feedback' block (rendered first because it is the most
-recent and most specific signal). When MEMO is non-empty, prepend
-the explore memo as a `Prior exploration:' block. The original
-issue is shown last under `## Task'. Sections with empty content
-are omitted."
-  (let ((fb (and review-feedback (plusp (length review-feedback))
+(defun %enriched-issue (step memo &key review-feedback test-change-feedback)
+  "Return the issue string fed to the implement step.
+
+Sections are rendered in priority order (newest / most-specific first),
+each as a labeled block; the original task body is shown last under
+`## Task'. Empty / NIL sections are omitted.
+
+  1. `## Prior test-change review feedback' (Finding 5, design review
+     2026-05-27): the agent's most recent test_change_request was
+     rejected; this block carries the reviewer's reasoning so the
+     agent can retry with corrected criteria or fall back to direct
+     implementation.
+  2. `## Prior implementation review feedback': impl-review rejected
+     the last patch; the agent should incorporate the feedback.
+  3. `## Prior exploration (read-only)': memo from the explore phase
+     (when needs_exploration was lightweight / deep).
+  4. `## Task': the original plan-step issue text."
+  (let ((tcf (and test-change-feedback
+                  (plusp (length test-change-feedback))
+                  test-change-feedback))
+        (fb (and review-feedback (plusp (length review-feedback))
                  review-feedback))
         (mm (and memo (plusp (length memo)) memo)))
     (cond
-      ((and (null fb) (null mm))
+      ((and (null tcf) (null fb) (null mm))
        (plan-step-issue step))
       (t
        (with-output-to-string (s)
+         (when tcf
+           (format s "## Prior test-change review feedback~%~A~%~%" tcf))
          (when fb
            (format s "## Prior implementation review feedback~%~A~%~%" fb))
          (when mm
@@ -580,9 +594,28 @@ implementation."
 
 (defun %maybe-handle-test-change-request (step state test-file review-fn
                                           provider develop-state)
-  "Approve and materialize an additive TEST_CHANGE_REQUEST.
-Returns true when a request was approved and the caller should rerun
-the same step."
+  "Process a TEST_CHANGE_REQUEST emitted by the agent.
+
+Returns (VALUES OUTCOME FEEDBACK) where OUTCOME is one of:
+  :APPROVED — the request was reviewed, validated, and materialized to
+              the test file. Caller should rerun the same step. FEEDBACK
+              is NIL on this path.
+  :REJECTED — the request was reviewed and rejected (Finding 5 of the
+              2026-05-27 design review). Caller should NOT rerun blindly;
+              instead it should feed FEEDBACK (a string) back to the
+              agent on the next attempt so the agent can correct the
+              request or fall back to direct implementation. The
+              develop-state's test-revision-count IS incremented because
+              the attempt consumed budget regardless of approval. When
+              the rejection feedback is empty, FEEDBACK falls back to a
+              generic message so the agent still sees a signal.
+  NIL       — not applicable: review is disabled, the policy isn't
+              additive-only, or the agent's terminal status isn't
+              :test-change-request. FEEDBACK is NIL.
+
+The structural gate `validate-test-source' is applied AFTER approval —
+an LLM reviewer that approves a malformed payload is still caught by
+the deterministic check (Finding 1)."
   (when (and (%review-enabled-p develop-state)
              (eq :additive-only
                  (develop-state-test-revision-policy develop-state))
@@ -601,16 +634,31 @@ the same step."
                       :step step
                       :test-change-action request)))
       (develop-state-record-test-change-request develop-state request)
-      (when (and (review-decision-approved-p decision)
-                 (stringp source)
-                 (search "(deftest " source))
-        (validate-test-source source (plan-step-index step))
-        (materialize-test-source (%resolve-test-file-path
-                                  (develop-state-project-root develop-state)
-                                  test-file)
-                                 source)
-        (incf (develop-state-test-revision-count develop-state))
-        t))))
+      (cond
+        ((and (review-decision-approved-p decision)
+              (stringp source)
+              (search "(deftest " source))
+         ;; structural gate — signals planner-error on violation, no
+         ;; silent approval of malformed payloads
+         (validate-test-source source (plan-step-index step))
+         (materialize-test-source (%resolve-test-file-path
+                                   (develop-state-project-root develop-state)
+                                   test-file)
+                                  source)
+         (incf (develop-state-test-revision-count develop-state))
+         (values :approved nil))
+        (t
+         ;; Finding 5: rejection is no longer a terminal outcome.
+         ;; Increment the budget counter (attempt was made), and
+         ;; surface the reviewer's feedback so the agent retry sees
+         ;; what went wrong. Empty-feedback case gets a generic fallback
+         ;; so the agent still has a usable signal.
+         (incf (develop-state-test-revision-count develop-state))
+         (let* ((raw (review-decision-feedback decision))
+                (text (if (and (stringp raw) (plusp (length raw)))
+                          raw
+                          "test_change_request rejected (no specific feedback). Either revise the request to comply with the additive-only contract (a single new (deftest ...) form with a distinct name and no skip / weakening) or proceed with the implementation against the existing tests.")))
+           (values :rejected text)))))))
 
 (defun %review-implementation (step state review-fn provider develop-state)
   "Return (VALUES APPROVED-P FEEDBACK) for the implementation review of
@@ -789,6 +837,7 @@ exit via UNWIND-PROTECT."
                 (policy (make-tool-policy condition))
                 (impl-retry-count 0)
                 (review-feedback nil)
+                (test-change-feedback nil)
                 (impl-review-passed-p nil)
                 (state
                  (unwind-protect
@@ -796,7 +845,8 @@ exit via UNWIND-PROTECT."
                         (loop
                           for issue = (%enriched-issue
                                        step memo
-                                       :review-feedback review-feedback)
+                                       :review-feedback review-feedback
+                                       :test-change-feedback test-change-feedback)
                           for rc = (make-run-config
                                     :project-root project-root
                                     :system system
@@ -815,14 +865,43 @@ exit via UNWIND-PROTECT."
                                      (< (develop-state-test-revision-count
                                          develop-state)
                                         max-test-revisions)
-                                     (%maybe-handle-test-change-request
-                                      step state test-file review-fn provider
-                                      develop-state))
-                                (%log-develop-event
-                                 logger :test-change-applied
-                                 (alist-hash-table
-                                  `(("step_index" . ,(plan-step-index step)))
-                                  :test 'equal)))
+                                     (eq :test-change-request
+                                         (%state-status-from-agent-state state)))
+                                (multiple-value-bind (tc-outcome tc-feedback)
+                                    (%maybe-handle-test-change-request
+                                     step state test-file review-fn provider
+                                     develop-state)
+                                  (case tc-outcome
+                                    (:approved
+                                     (setf test-change-feedback nil)
+                                     (%log-develop-event
+                                      logger :test-change-applied
+                                      (alist-hash-table
+                                       `(("step_index" . ,(plan-step-index step)))
+                                       :test 'equal)))
+                                    (:rejected
+                                     ;; Finding 5: feed rejection feedback
+                                     ;; back into the next attempt instead of
+                                     ;; terminating the step. The
+                                     ;; max-test-revisions counter was already
+                                     ;; incremented by
+                                     ;; %maybe-handle-test-change-request, so
+                                     ;; the WHILE clause above will exit the
+                                     ;; loop once the budget is gone.
+                                     (setf test-change-feedback tc-feedback)
+                                     (%log-develop-event
+                                      logger :test-change-rejected
+                                      (alist-hash-table
+                                       `(("step_index" . ,(plan-step-index step))
+                                         ("feedback"
+                                          . ,(%truncate-feedback tc-feedback 1500)))
+                                       :test 'equal)))
+                                    (t
+                                     ;; nil outcome: review disabled / wrong
+                                     ;; policy / not actually a test change.
+                                     ;; Fall through and exit the step with
+                                     ;; the agent's terminal status.
+                                     (return-from run-step state)))))
                                ;; 2) verify :passed -> implementation review
                                ((eq :passed (%read-status-from-state state))
                                 (multiple-value-bind (approved-p feedback)
