@@ -177,8 +177,17 @@ test revisions. v0.6 starts with :ADDITIVE-ONLY.")
 rejection replans have been consumed.")
    (test-revision-count :initform 0
                         :accessor develop-state-test-revision-count
-                        :documentation "How many approved additive
-test revisions have been materialized.")
+                        :documentation "How many test_change_request
+attempts have consumed the budget — incremented on EVERY attempt
+regardless of outcome (approved-and-materialized, rejected by L2
+LLM review, structurally rejected by VALIDATE-TEST-SOURCE, or
+rejected for name collision with an existing deftest). Bounded by
+the MAX-TEST-REVISIONS keyword to DEVELOP / EXECUTE-PLAN so total
+LLM cost is capped across the run. Implementation review Finding
+L1 (2026-05-27): documentation was previously \"approved additive
+test revisions have been materialized\", which understated the
+counter's scope after the Finding 5 reject-feedback path landed in
+b1fee38.")
    (review-decisions :initform nil :accessor %review-decisions
                      :documentation "Reverse-chronological
 REVIEW-DECISION records.")

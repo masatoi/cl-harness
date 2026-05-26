@@ -41,6 +41,7 @@
                 #:plan-step-needs-exploration
                 #:plan-development
                 #:planner-error
+                #:planner-error-message
                 #:+supported-development-modes+)
   (:import-from #:cl-harness/src/explore
                 #:run-explore-agent
@@ -230,6 +231,12 @@ index context. Returns NIL form when SOURCE is whitespace-only."
 top-level form with no embedded skip / weakening patterns. Step-index
 0-based, used in error messages.
 
+Returns (VALUES SOURCE TEST-NAME-STRING) on success, where
+TEST-NAME-STRING is the upcased symbol-name of deftest's first
+argument (suitable for STRING-EQUAL comparison against existing
+deftest names). Older callers that only inspected the primary value
+are unaffected. (Implementation review Finding H1, 2026-05-27.)
+
 Backlog Finding 1 (design review 2026-05-27): the legacy check was
 \"contains the substring `(deftest `\", which an LLM reviewer could
 trivially bypass with a malicious payload that smuggled extra forms
@@ -241,13 +248,18 @@ not contingent on LLM reviewer judgment.
 
 Rejects:
 - Empty / non-string source
-- Source that does not READ as Lisp (unbalanced parens, dotted-pair garbage)
+- Source that does not READ as Lisp (unbalanced parens, dotted-pair
+  garbage, or package-qualified symbols whose package is not loaded)
 - Sources with more than one top-level form
 - Top-level form whose CAR is not a deftest symbol
 - Any `(skip ...)` / `(rove:skip ...)` node anywhere in the form
 
-Accepts both `(deftest ...)` and `(rove:deftest ...)` since
-package-qualification is stylistic."
+Accepts unqualified `(deftest ...)`. Package-qualified
+`(rove:deftest ...)` is environment-dependent: it passes only when
+the qualifier's package is currently loaded; otherwise READ itself
+fails and the source is rejected as unparseable. Planners SHOULD
+emit unqualified forms (the test file's defpackage imports / uses
+rove already)."
   (unless (and (stringp source) (plusp (length source)))
     (error 'planner-error
            :message (format nil
@@ -281,8 +293,11 @@ package-qualification is stylistic."
              :message (format nil
                               "step ~D test_source contains a (skip ...) form, which would short-circuit assertions (additive-only rule, Finding 1)"
                               step-index)
-             :raw source)))
-  source)
+             :raw source))
+    (let ((name-form (and (consp (cdr form)) (cadr form))))
+      (values source
+              (when (symbolp name-form)
+                (string-upcase (symbol-name name-form)))))))
 
 (defun materialize-test-source (path source)
   "Append SOURCE to PATH on disk, creating PATH if it does not exist.
@@ -313,6 +328,61 @@ though it was on disk."
     (when (and fasl (probe-file fasl))
       (handler-case (delete-file fasl) (error () nil))))
   (values))
+
+(defun %extract-deftest-names-from-file (path)
+  "Return a list of upcased deftest-name strings extracted from PATH.
+
+Used by %MAYBE-HANDLE-TEST-CHANGE-REQUEST to enforce the
+\"no name collision\" invariant of the additive-only contract
+(Implementation review Finding H1, 2026-05-27): if the agent's
+test_change_request would introduce a deftest whose name already
+exists in the file, the request is rejected before MATERIALIZE-
+TEST-SOURCE silently overwrites by appending.
+
+Strategy: read PATH form by form with *PACKAGE* bound to :CL so
+symbols intern into a safe default and qualified references to
+packages that don't happen to be loaded in this image don't blow
+up the scan. (IN-PACKAGE ...) forms shift *PACKAGE* when the named
+package exists; otherwise the scan stays on :CL. Read errors on
+any single form abort the scan and return what we have so far —
+this is best-effort, not exhaustive. The collision check is a
+defense in depth: a false negative (missed collision) is still
+covered by the L2 LLM review.
+
+Returns NIL when PATH is NIL, does not exist, or yields no
+deftest forms."
+  (unless (and path (probe-file path))
+    (return-from %extract-deftest-names-from-file nil))
+  (let ((names '()))
+    (block scan
+      (with-open-file (in path :direction :input)
+        (let ((*read-eval* nil)
+              (*package* (find-package :cl)))
+          (loop
+            (let ((form
+                    (handler-case (read in nil :eof)
+                      (error ()
+                        (return-from scan)))))
+              (cond
+                ((eq form :eof) (return-from scan))
+                ((and (consp form)
+                      (consp (cdr form))
+                      (symbolp (car form))
+                      (string-equal "IN-PACKAGE"
+                                    (symbol-name (car form))))
+                 (let* ((named (cadr form))
+                        (pkg
+                         (cond
+                           ((stringp named) (find-package named))
+                           ((symbolp named) (find-package (symbol-name named)))
+                           (t nil))))
+                   (when pkg (setf *package* pkg))))
+                ((and (consp form)
+                      (consp (cdr form))
+                      (%deftest-symbol-p (car form))
+                      (symbolp (cadr form)))
+                 (push (string-upcase (symbol-name (cadr form))) names))))))))
+    (nreverse names)))
 
 (defun %resolve-test-file-path (project-root test-file)
   "Resolve TEST-FILE relative to PROJECT-ROOT when it is not absolute."
@@ -592,72 +662,98 @@ implementation."
   (and (typep state 'agent-state)
        (cl-harness/src/agent:agent-state-status state)))
 
-(defun %maybe-handle-test-change-request (step state test-file review-fn
-                                          provider develop-state)
+(defun %maybe-handle-test-change-request
+       (step state test-file review-fn provider develop-state)
   "Process a TEST_CHANGE_REQUEST emitted by the agent.
 
 Returns (VALUES OUTCOME FEEDBACK) where OUTCOME is one of:
-  :APPROVED — the request was reviewed, validated, and materialized to
-              the test file. Caller should rerun the same step. FEEDBACK
-              is NIL on this path.
-  :REJECTED — the request was reviewed and rejected (Finding 5 of the
-              2026-05-27 design review). Caller should NOT rerun blindly;
-              instead it should feed FEEDBACK (a string) back to the
-              agent on the next attempt so the agent can correct the
-              request or fall back to direct implementation. The
-              develop-state's test-revision-count IS incremented because
-              the attempt consumed budget regardless of approval. When
-              the rejection feedback is empty, FEEDBACK falls back to a
+  :APPROVED — the request was reviewed, structurally validated,
+              collision-checked against existing deftest names,
+              and materialized to the test file. Caller should
+              rerun the same step. FEEDBACK is NIL on this path.
+  :REJECTED — the request was rejected. Three rejection paths:
+              (1) L2 LLM review rejected it (Finding 5 of the
+                  2026-05-27 design review).
+              (2) L1 deterministic validator rejected it
+                  (malformed source / multiple top-level forms /
+                  embedded skip / non-deftest top-level form;
+                  Implementation review Finding M2).
+              (3) Name collision with an existing deftest in the
+                  test file (Implementation review Finding H1).
+              In all three cases the develop-state's
+              test-revision-count IS incremented because the
+              attempt consumed budget, and FEEDBACK (a string) is
+              fed back to the agent via %ENRICHED-ISSUE so it can
+              retry with a corrected request or switch to direct
+              implementation. Empty L2 feedback falls back to a
               generic message so the agent still sees a signal.
   NIL       — not applicable: review is disabled, the policy isn't
               additive-only, or the agent's terminal status isn't
               :test-change-request. FEEDBACK is NIL.
 
-The structural gate `validate-test-source' is applied AFTER approval —
-an LLM reviewer that approves a malformed payload is still caught by
-the deterministic check (Finding 1)."
-  (when (and (%review-enabled-p develop-state)
-             (eq :additive-only
-                 (develop-state-test-revision-policy develop-state))
-             (eq :test-change-request (%state-status-from-agent-state state)))
+Two-layer defense (DR-2026-05-27 + Implementation review):
+  L2 (LLM strict review) runs first and gates entry into
+  validation. If L2 approves, L1 (deterministic structural gate +
+  collision check) runs inside HANDLER-CASE so any PLANNER-ERROR
+  it signals is converted to :REJECTED with the structural error
+  message embedded in the feedback. This guarantees that a
+  malformed-but-LLM-approved payload still surfaces actionable
+  feedback to the agent instead of bubbling the planner-error up
+  the call stack and bypassing the retry loop."
+  (when
+      (and (%review-enabled-p develop-state)
+           (eq :additive-only
+               (develop-state-test-revision-policy develop-state))
+           (eq :test-change-request (%state-status-from-agent-state state)))
     (let* ((action (agent-state-final-action state))
            (source (and action (agent-action-test-source action)))
-           (request (make-test-change-record
-                     :step-index (plan-step-index step)
-                     :criteria (and action (agent-action-criteria action))
-                     :rationale (and action (agent-action-rationale action))
-                     :test-source source))
-           (decision (%call-review
-                      review-fn :test-change
-                      :develop-state develop-state
-                      :provider provider
-                      :step step
-                      :test-change-action request)))
+           (request
+            (make-test-change-record
+             :step-index (plan-step-index step)
+             :criteria (and action (agent-action-criteria action))
+             :rationale (and action (agent-action-rationale action))
+             :test-source source))
+           (decision
+            (%call-review review-fn :test-change
+                          :develop-state develop-state
+                          :provider provider
+                          :step step
+                          :test-change-action request)))
       (develop-state-record-test-change-request develop-state request)
       (cond
-        ((and (review-decision-approved-p decision)
-              (stringp source)
-              (search "(deftest " source))
-         ;; structural gate — signals planner-error on violation, no
-         ;; silent approval of malformed payloads
-         (validate-test-source source (plan-step-index step))
-         (materialize-test-source (%resolve-test-file-path
-                                   (develop-state-project-root develop-state)
-                                   test-file)
-                                  source)
-         (incf (develop-state-test-revision-count develop-state))
-         (values :approved nil))
+        ((and (review-decision-approved-p decision) (stringp source))
+         (handler-case
+             (multiple-value-bind (validated new-name)
+                 (validate-test-source source (plan-step-index step))
+               (declare (ignore validated))
+               (let* ((path (%resolve-test-file-path
+                             (develop-state-project-root develop-state)
+                             test-file))
+                      (existing (%extract-deftest-names-from-file path)))
+                 (when (and new-name
+                            (member new-name existing :test #'string-equal))
+                   (error 'planner-error
+                          :message
+                          (format nil
+                                  "test_change_request rejected: a deftest named ~A already exists in the test file. Additive-only requires a distinct name."
+                                  new-name)
+                          :raw source))
+                 (materialize-test-source path source)
+                 (incf (develop-state-test-revision-count develop-state))
+                 (values :approved nil)))
+           (planner-error (c)
+             (incf (develop-state-test-revision-count develop-state))
+             (values :rejected
+                     (format nil
+                             "test_change_request rejected by structural validator: ~A Either fix the test_source to comply with the additive-only contract (a single unqualified (deftest NAME ...) form with a distinct name and no skip / weakening), or omit test_change_request and proceed with implementation against the existing tests."
+                             (planner-error-message c))))))
         (t
-         ;; Finding 5: rejection is no longer a terminal outcome.
-         ;; Increment the budget counter (attempt was made), and
-         ;; surface the reviewer's feedback so the agent retry sees
-         ;; what went wrong. Empty-feedback case gets a generic fallback
-         ;; so the agent still has a usable signal.
          (incf (develop-state-test-revision-count develop-state))
          (let* ((raw (review-decision-feedback decision))
-                (text (if (and (stringp raw) (plusp (length raw)))
-                          raw
-                          "test_change_request rejected (no specific feedback). Either revise the request to comply with the additive-only contract (a single new (deftest ...) form with a distinct name and no skip / weakening) or proceed with the implementation against the existing tests.")))
+                (text
+                 (if (and (stringp raw) (plusp (length raw)))
+                     raw
+                     "test_change_request rejected (no specific feedback). Either revise the request to comply with the additive-only contract (a single new (deftest ...) form with a distinct name and no skip / weakening) or proceed with the implementation against the existing tests.")))
            (values :rejected text)))))))
 
 (defun %review-implementation (step state review-fn provider develop-state)

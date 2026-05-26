@@ -1917,3 +1917,209 @@ multi-paragraph branches without spinning up a real run-agent."
                (let ((content (uiop:read-file-string test-file)))
                  (ok (search "(deftest extra-tx" content))))))
       (when (probe-file test-file) (delete-file test-file)))))
+
+(deftest validate-test-source-returns-test-name-as-second-value
+  ;; Implementation review Finding H1 (2026-05-27): the deterministic
+  ;; gate must surface the new test's name so callers can enforce the
+  ;; additive-only "distinct name" invariant.
+  ;; validate-test-source returns (VALUES SOURCE TEST-NAME-STRING).
+  (multiple-value-bind (src name)
+      (validate-test-source "(deftest my-new-test (ok t))" 0)
+    (ok (equal "(deftest my-new-test (ok t))" src))
+    (ok (stringp name))
+    (ok (string-equal "MY-NEW-TEST" name)
+        "second value is upcased symbol-name of deftest's first arg")))
+
+(deftest extract-deftest-names-from-file-helper
+  ;; Implementation review Finding H1: the collision check needs to
+  ;; read existing deftest names from the test file. The helper must
+  ;; (a) return upcased names suitable for STRING-EQUAL comparison,
+  ;; (b) survive (in-package ...) forms naming packages that don't
+  ;;     exist in the current image, and
+  ;; (c) return NIL for nonexistent / empty files.
+  (let ((path (%tmp-path "extract-helper")))
+    (unwind-protect
+         (progn
+           (with-open-file (out path :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create)
+             (format out "(defpackage #:demo/tests/foo (:use #:cl #:rove))~%")
+             (format out "(in-package #:demo/tests/foo)~%")
+             (format out "(deftest alpha (ok t))~%")
+             (format out "(deftest beta (ok t))~%"))
+           (let ((names
+                  (cl-harness/src/orchestrator::%extract-deftest-names-from-file
+                   path)))
+             (ok (member "ALPHA" names :test #'string-equal)
+                 "alpha extracted")
+             (ok (member "BETA" names :test #'string-equal)
+                 "beta extracted")))
+      (when (probe-file path) (delete-file path))))
+  (testing "nonexistent file returns NIL"
+    (ok (null (cl-harness/src/orchestrator::%extract-deftest-names-from-file
+               (%tmp-path "does-not-exist"))))))
+
+(deftest maybe-handle-test-change-rejects-validator-failure-as-feedback
+  ;; Implementation review Finding M2 (2026-05-27): when the LLM
+  ;; reviewer approves but the deterministic L1 gate rejects (e.g.
+  ;; malformed source, multiple top-level forms, embedded skip),
+  ;; %maybe-handle-test-change-request must convert the
+  ;; planner-error into a (:REJECTED <feedback>) return value so the
+  ;; agent gets a chance to retry. Otherwise the structural
+  ;; rejection bubbles up the call stack and bypasses the Finding 5
+  ;; feedback loop entirely.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-m2-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (run-fn-call-count 0)
+         (bad-source "(deftest x (ok t)) (defun sneaky () nil)")
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-call-count)
+            (case run-fn-call-count
+              (1
+               (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+                 (setf (cl-harness/src/agent:agent-state-status s)
+                       :test-change-request)
+                 (setf (cl-harness/src/agent:agent-state-final-action s)
+                       (make-instance 'cl-harness/src/action:agent-action
+                                      :type :test-change-request
+                                      :test-source bad-source
+                                      :criteria nil
+                                      :rationale "bad source"))
+                 s))
+              (otherwise
+               (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+                 (setf (cl-harness/src/agent:agent-state-status s) :give-up)
+                 s)))))
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (cl-harness/src/review:make-review-decision
+             :kind kind :status :approved
+             :feedback "(reviewer would have approved)")))
+         (step
+          (make-instance 'cl-harness/src/planner:plan-step
+                         :index 0 :issue "demo"
+                         :test-name "tx"
+                         :test-source "(deftest tx (ok t))"
+                         :needs-exploration :none))
+         (devstate
+          (cl-harness/src/state:make-develop-state
+           :goal "g"
+           :project-root (namestring project-root)
+           :system "demo"
+           :test-system "demo/tests"
+           :review-policy :auto)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-test-revisions 2)))
+             (testing "validator rejection does not materialize bad source"
+               (let ((content (uiop:read-file-string test-file)))
+                 (ok (not (search "defun sneaky" content))
+                     "sneaky defun never written to disk")))
+             (testing "result returned cleanly (loop did not blow up)"
+               (ok result "step result populated"))
+             (testing "budget was consumed by the failed attempt"
+               (ok (plusp
+                    (cl-harness/src/state:develop-state-test-revision-count
+                     devstate))
+                   "test-revision-count incremented even on rejection"))))
+      (when (probe-file test-file) (delete-file test-file)))))
+
+(deftest maybe-handle-test-change-rejects-on-name-collision
+  ;; Implementation review Finding H1 (2026-05-27): an LLM reviewer
+  ;; that approves a test whose name collides with an existing
+  ;; deftest must NOT be allowed to silently overwrite. The
+  ;; deterministic collision check rejects the request via the
+  ;; Finding 5 reject path so the agent can pick a distinct name.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-h1-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (run-fn-call-count 0)
+         (run-fn
+          (lambda (rc provider mcp-client policy logger
+                   &key develop-state &allow-other-keys)
+            (declare (ignore rc provider mcp-client policy logger
+                             develop-state))
+            (incf run-fn-call-count)
+            (case run-fn-call-count
+              (1
+               (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+                 (setf (cl-harness/src/agent:agent-state-status s)
+                       :test-change-request)
+                 (setf (cl-harness/src/agent:agent-state-final-action s)
+                       (make-instance 'cl-harness/src/action:agent-action
+                                      :type :test-change-request
+                                      :test-source
+                                      "(deftest alpha (ok t))"
+                                      :criteria nil
+                                      :rationale "duplicate"))
+                 s))
+              (otherwise
+               (let ((s (make-instance 'cl-harness/src/agent:agent-state)))
+                 (setf (cl-harness/src/agent:agent-state-status s) :give-up)
+                 s)))))
+         (review-fn
+          (lambda (kind &key &allow-other-keys)
+            (cl-harness/src/review:make-review-decision
+             :kind kind :status :approved :feedback "")))
+         (step
+          (make-instance 'cl-harness/src/planner:plan-step
+                         :index 0 :issue "demo"
+                         :test-name "tx"
+                         :test-source "(deftest tx (ok t))"
+                         :needs-exploration :none))
+         (devstate
+          (cl-harness/src/state:make-develop-state
+           :goal "g"
+           :project-root (namestring project-root)
+           :system "demo"
+           :test-system "demo/tests"
+           :review-policy :auto)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (with-open-file (out test-file :direction :output
+                                          :if-exists :append
+                                          :if-does-not-exist :create)
+             (format out "(deftest alpha (ok t))~%"))
+           (let ((result
+                  (cl-harness/src/orchestrator::%execute-step
+                   step run-fn (namestring project-root) "demo" "demo/tests"
+                   :generic-mcp test-file nil nil nil nil nil
+                   :develop-state devstate
+                   :review-fn review-fn
+                   :max-test-revisions 2)))
+             (declare (ignore result))
+             (testing "no second alpha deftest was appended"
+               (let* ((after-content (uiop:read-file-string test-file))
+                      (alpha-count
+                       (loop with start = 0 with count = 0
+                             for pos = (search "(deftest alpha"
+                                               after-content
+                                               :start2 start)
+                             while pos
+                             do (incf count) (setf start (1+ pos))
+                             finally (return count))))
+                 (ok (= 1 alpha-count)
+                     "exactly one (deftest alpha — colliding request rejected")))
+             (testing "test-revision-count incremented for rejected request"
+               (ok (plusp
+                    (cl-harness/src/state:develop-state-test-revision-count
+                     devstate))
+                   "budget consumed by the rejected attempt"))))
+      (when (probe-file test-file) (delete-file test-file)))))

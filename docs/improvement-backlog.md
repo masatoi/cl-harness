@@ -1969,6 +1969,25 @@ implementation 切替を促す path がなかった。
 - `enriched-issue-with-review-feedback` 内に test-change-feedback section の test 2 件
   (own labeled block / ordering: test-change → impl-review → memo → task)
 
+### Implementation review followup (2026-05-27)
+
+DR-2026-05-27 の実装に対する implementation review
+(`/tmp/cl-harness-implementation-review.md`) で 4 件の弱点を指摘
+→ すべて TDD で fix:
+
+| # | Issue | Severity | Fix |
+|---|---|---|---|
+| H1 | 既存 test name 衝突検査が deterministic に未実装 | High | `%extract-deftest-names-from-file` + `validate-test-source` の 2nd value で test name 返却 + collision check 統合 |
+| M1 | `(search "(deftest " source)` substring check が validator と不整合 | Medium | substring check 削除、 validator 結果のみに信頼、 docstring で qualified form の environment dependency 明示 |
+| M2 | L1 structural reject が agent feedback loop に乗らない | Medium | `%maybe-handle-test-change-request` の approve 分岐を `handler-case` で wrap、 planner-error を `:rejected feedback` に変換 |
+| L1 | `develop-state-test-revision-count` docstring が古い | Low | attempted/consumed budget の semantic を反映 |
+
+新規 test 4 件 (`validate-test-source-returns-test-name-as-second-value`,
+`extract-deftest-names-from-file-helper`,
+`maybe-handle-test-change-rejects-on-name-collision`,
+`maybe-handle-test-change-rejects-validator-failure-as-feedback`)。
+全 495 件 + 新規 → all green。
+
 ### Design doc 反映 (2026-05-27)
 
 5 件の close をもって以下 design doc に設計を反映済み:

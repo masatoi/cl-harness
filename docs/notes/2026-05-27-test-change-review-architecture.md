@@ -27,11 +27,11 @@ implementation を進める)。
 
 | # | Invariant | Layer |
 |---|---|---|
-| **I1** | test_source が exactly one `(deftest ...)` または `(rove:deftest ...)` の top-level form であること | L1 (deterministic) |
+| **I1** | test_source が exactly one `(deftest ...)` の top-level form であること (unqualified; `(rove:deftest ...)` は ROVE package が load されている時のみ accept、 そうでなければ read error → reject) | L1 (deterministic) |
 | **I2** | test_source body の任意ノードに `(skip ...)` / `(rove:skip ...)` が含まれないこと | L1 (deterministic) |
 | **I3** | test_source が valid Lisp として read 可能であること | L1 (deterministic) |
 | **I4** | test_source は既存テストを modify / overwrite せず、 純粋に **追加** であること (= additive-only) | L1 部分 + L2 |
-| **I5** | 新 test の名前が既存 test 名と衝突しないこと | L2 (LLM, manual code review pending) |
+| **I5** | 新 test の名前が既存 test 名と衝突しないこと (silent overwrite 防止) | L1 (deterministic, **`%extract-deftest-names-from-file`** で test file 走査) |
 | **I6** | 新 test が acceptance criteria に listed されていない feature をカバーしないこと (scope drift 防止) | L2 (LLM) |
 | **I7** | 新 test が acceptance criteria と矛盾しないこと (inverse assertion 等の disguised weakening 排除) | L2 (LLM) |
 
@@ -158,17 +158,17 @@ programmatic caller が CLI と同等の挙動を望む場合は **明示的に 
 
 L2 LLM に依存している不変条件は、 paired bench data (`#38 N=10 paired`, `#54/#55`)
 から **LLM が prompt の指示を完全には遵守しない** ことが分かっている。 即ち
-**I5 / I6 / I7 は failure-prone**。 これらを deterministic にしたい場合:
+**I6 / I7 は failure-prone** (semantic check が必須なので deterministic 化困難)。
+LLM judgment を信頼するしかない (但し prompt strict)。
 
-- I5 (name collision): 既存 test file を read → existing deftest names を抽出 →
-  request の test name と比較。 small + half-day。
-- I6 / I7 (scope drift / contradiction): semantic check が必須なので deterministic
-  化困難。 LLM judgment を信頼するしかない (但し prompt strict)。
-
-I5 の deterministic 化は **次の自然な改善ターゲット**。 現状は L2 prompt が
-「new test's name collides with an existing test's name (silent overwrite risk)」 を
-rejection condition 3 として明示しているが、 LLM が見落とすケースを deterministic に
-catch できる余地あり。
+I5 (name collision) は元々 L2 だけに任せていたが、 Implementation review
+(2026-05-27, Finding H1) で deterministic 化された:
+`%extract-deftest-names-from-file` が test file を `*PACKAGE*` = `:CL` で
+tolerant-read し、 既存 deftest 名 (upcased) を抽出。 `%maybe-handle-test-change-request`
+が新 deftest 名と STRING-EQUAL で比較し、 衝突時は L1 planner-error として
+reject feedback path に乗せる。 false negative の余地 (read error で scan が
+早期終了するケース) は残るが、 その場合も L2 prompt の rejection condition 3
+(silent overwrite risk) が backup として機能する。
 
 ## 9. design review 5 findings (closed)
 
@@ -182,3 +182,21 @@ catch できる余地あり。
 
 元 review 文書 (`/tmp/cl-harness-development-design-review.md`) と各 commit の
 diff を併せ読むことで設計判断の根拠が完全に追跡できる。
+
+## 10. Implementation review followup (Implementation review 2026-05-27)
+
+design review の各 finding 実装に対して別途 implementation review を行い
+(`/tmp/cl-harness-implementation-review.md`)、 4 件の弱点を指摘:
+
+| # | Issue | Severity | Status |
+|---|---|---|---|
+| H1 | 既存 test name 衝突検査が deterministic に未実装 (I5 が L2 LLM 依存) | High | ✅ 実装済 — `%extract-deftest-names-from-file` + collision check |
+| M1 | `(rove:deftest ...)` 受領時 substring check `(search "(deftest " source)` が validator と不整合、 ROVE 未 load 環境では read error | Medium | ✅ 実装済 — substring check 削除、 docstring で qualified form の environment dependency を明示 |
+| M2 | L1 structural reject (`validate-test-source` の `planner-error`) が agent feedback loop に乗らない | Medium | ✅ 実装済 — `handler-case` で `:REJECTED <feedback>` に変換 |
+| L1 | `develop-state-test-revision-count` slot docstring が approved 限定の古い記述 | Low | ✅ 実装済 — attempted/consumed budget の semantic を反映 |
+
+各 fix には対応する unit test を追加:
+- `validate-test-source-returns-test-name-as-second-value` (H1 前提)
+- `extract-deftest-names-from-file-helper` (H1 helper)
+- `maybe-handle-test-change-rejects-on-name-collision` (H1 end-to-end)
+- `maybe-handle-test-change-rejects-validator-failure-as-feedback` (M2 end-to-end)
