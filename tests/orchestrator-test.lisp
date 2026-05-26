@@ -146,6 +146,21 @@
   (validate-test-source "(rove:deftest foo (ok t))" 0)
   (ok t "rove:deftest qualified form passes validation"))
 
+(deftest validate-test-source-accepts-qualified-symbols-from-unknown-packages
+  ;; Regression guard (2026-05-27 bench-cycle): planner-emitted
+  ;; test_source routinely references the new system's package via
+  ;; package-qualified symbols (e.g. `(deftest fizz-buzz::sample (ok
+  ;; (= 1 (fizz-buzz:fizz-buzz 1))))`). The system being built does
+  ;; not yet exist in the running image, so a naive READ blows up
+  ;; with `Package FIZZ-BUZZ does not exist.`. validate-test-source
+  ;; must tolerate qualified references to packages not yet loaded
+  ;; — without that, every greenfield develop run dies in plan
+  ;; validation.
+  (validate-test-source
+   "(deftest sample (ok (= 1 (cl-harness-regression-test-pkg-zzz:foo 1))))"
+   0)
+  (ok t "qualified symbol referencing missing package did not blow up"))
+
 ;; --- materialize-test-source --------------------------------------------
 
 (deftest materialize-test-source-appends-form-with-leading-newline

@@ -199,6 +199,85 @@ deftest body, not just at the top level."
     ((%skip-form-p tree) t)
     (t (some #'%tree-contains-skip-p (cdr tree)))))
 
+(defun %pre-create-referenced-packages (source)
+  "Scan SOURCE for package-qualifier prefixes (NAME: or NAME::) and
+ensure each NAME has at least an empty package, plus that the
+symbol referenced after the colon(s) is interned (and, for single-
+colon NAME:SYM, exported) so the reader can resolve qualified
+symbols without package-error.
+
+Used by %READ-SINGLE-FORM-FROM-STRING so the validator can inspect
+test_source forms that legitimately reference packages not yet
+loaded — most importantly the new system's package that the
+planner is about to create (e.g. `(deftest fizz-buzz::sample
+(ok (= 1 (fizz-buzz:fizz-buzz 1))))`). Without this step every
+greenfield develop run dies in plan validation with `Package
+FIZZ-BUZZ does not exist.` or `Symbol FIZZ-BUZZ not found in
+the FIZZ-BUZZ package.` (regression discovered 2026-05-27
+bench-cycle).
+
+Created packages are bare (:USE nil) and the interned symbols
+have no values / functions / classes attached — they exist only
+to satisfy the reader. Side-effect on the worker image is
+bounded: develop runs use ephemeral sandbox workers, so leaked
+empty packages don't outlive the bench run.
+
+Scanner is conservative: it skips strings and line comments to
+avoid hallucinating package names from inside literal data."
+  (let ((i 0) (len (length source)))
+    (labels ((symbol-char-p (c)
+               (or (alphanumericp c)
+                   (member c '(#\- #\_ #\/ #\* #\+
+                               #\! #\? #\< #\> #\=))))
+             (scan-name ()
+               (let ((start i))
+                 (loop while (and (< i len)
+                                  (symbol-char-p (char source i)))
+                       do (incf i))
+                 (when (> i start)
+                   (subseq source start i)))))
+      (loop while (< i len) do
+        (let ((c (char source i)))
+          (cond
+            ((char= c #\")
+             (incf i)
+             (loop while (and (< i len) (char/= (char source i) #\"))
+                   do (when (and (char= (char source i) #\\)
+                                 (< (1+ i) len))
+                        (incf i))
+                      (incf i))
+             (when (< i len) (incf i)))
+            ((char= c #\;)
+             (loop while (and (< i len) (char/= (char source i) #\Newline))
+                   do (incf i)))
+            ((or (alpha-char-p c) (symbol-char-p c))
+             (let ((pkg-name (scan-name)))
+               (when (and pkg-name (< i len)
+                          (char= (char source i) #\:))
+                 (let* ((upcased (string-upcase pkg-name))
+                        (pkg
+                         (or (find-package upcased)
+                             (handler-case
+                                 (make-package upcased :use nil)
+                               (error () nil)))))
+                   (incf i)
+                   (let ((external-only-p t))
+                     (when (and (< i len)
+                                (char= (char source i) #\:))
+                       (incf i)
+                       (setf external-only-p nil))
+                     (let ((sym-name (scan-name)))
+                       (when (and pkg sym-name (plusp (length sym-name)))
+                         (handler-case
+                             (let ((upsym (string-upcase sym-name)))
+                               (multiple-value-bind (sym status)
+                                   (intern upsym pkg)
+                                 (when (and external-only-p
+                                            (not (eq status :external)))
+                                   (export sym pkg))))
+                           (error () nil)))))))))
+            (t (incf i))))))))
+
 (defun %read-single-form-from-string (source)
   "Read a single Lisp form from SOURCE and confirm no trailing forms
 follow. Returns (VALUES FORM TRAILING-P), where TRAILING-P is T when
@@ -207,7 +286,10 @@ PLANNER-ERROR on read errors so callers can wrap with their step-
 index context. Returns NIL form when SOURCE is whitespace-only."
   ;; Use a permissive readtable: bind *read-eval* to NIL so #. cannot
   ;; execute code, and disable *read-suppress* to surface structural
-  ;; problems.
+  ;; problems. Pre-create any referenced packages so qualified
+  ;; symbols pointing at the new (not-yet-loaded) system package
+  ;; don't trip the reader (regression 2026-05-27).
+  (%pre-create-referenced-packages source)
   (let ((*read-eval* nil)
         (*read-suppress* nil))
     (with-input-from-string (in source)
