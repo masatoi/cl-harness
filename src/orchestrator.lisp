@@ -171,27 +171,117 @@
 
 ;; --- helpers --------------------------------------------------------------
 
+(defun %deftest-symbol-p (sym)
+  "True when SYM names rove's deftest macro (unqualified or
+package-qualified `rove:deftest'). Symbol equality uses string-equal
+because the reader returns interned symbols from arbitrary packages
+and we want to recognise the deftest semantics regardless of which
+package the symbol was read into."
+  (and (symbolp sym)
+       (string-equal "DEFTEST" (symbol-name sym))))
+
+(defun %skip-form-p (form)
+  "True when FORM is a function call to rove's SKIP macro (unqualified
+or package-qualified). Used by VALIDATE-TEST-SOURCE to reject
+test_source bodies that would short-circuit assertions — that's a
+test-weakening pattern Finding 1 explicitly forbids."
+  (and (consp form)
+       (symbolp (car form))
+       (string-equal "SKIP" (symbol-name (car form)))))
+
+(defun %tree-contains-skip-p (tree)
+  "Recursively walk TREE for any %SKIP-FORM-P node. Used by
+VALIDATE-TEST-SOURCE to reject any (skip ...) anywhere in the
+deftest body, not just at the top level."
+  (cond
+    ((atom tree) nil)
+    ((%skip-form-p tree) t)
+    (t (some #'%tree-contains-skip-p (cdr tree)))))
+
+(defun %read-single-form-from-string (source)
+  "Read a single Lisp form from SOURCE and confirm no trailing forms
+follow. Returns (VALUES FORM TRAILING-P), where TRAILING-P is T when
+non-whitespace material remains after the first form. Signals
+PLANNER-ERROR on read errors so callers can wrap with their step-
+index context. Returns NIL form when SOURCE is whitespace-only."
+  ;; Use a permissive readtable: bind *read-eval* to NIL so #. cannot
+  ;; execute code, and disable *read-suppress* to surface structural
+  ;; problems.
+  (let ((*read-eval* nil)
+        (*read-suppress* nil))
+    (with-input-from-string (in source)
+      (let* ((first
+              (handler-case (read in nil :eof)
+                (error (c)
+                  (error 'planner-error
+                         :message (format nil "test_source parse error: ~A" c)
+                         :raw source))))
+             (second
+              (handler-case (read in nil :eof)
+                (error (c)
+                  (error 'planner-error
+                         :message (format nil "test_source parse error: ~A" c)
+                         :raw source)))))
+        (values (and (not (eq first :eof)) first)
+                (not (eq second :eof)))))))
+
 (defun validate-test-source (source step-index)
-  "Signal PLANNER-ERROR unless SOURCE looks like a rove (deftest ...)
-form. Step-index 0-based, used in the error message so the user can
-see which step the bad test_source lives in. Address the test-fidelity
-risk #1 from docs/notes/2026-05-06-planner-orchestrator.md: the LLM
-sometimes emits (defun test-foo ...) instead, which never wires into
-rove and would let the executor's verify pass on an irrelevant
-green signal."
+  "Signal PLANNER-ERROR unless SOURCE is exactly one (deftest ...)
+top-level form with no embedded skip / weakening patterns. Step-index
+0-based, used in error messages.
+
+Backlog Finding 1 (design review 2026-05-27): the legacy check was
+\"contains the substring `(deftest `\", which an LLM reviewer could
+trivially bypass with a malicious payload that smuggled extra forms
+(`(deftest foo ...) (defun sneaky () nil)`), wrapped the deftest in
+another form (`(progn (deftest foo ...))`), or short-circuited
+assertions with `(rove:skip)`. This version reads the source as Lisp
+data and enforces the contract structurally so the safety property is
+not contingent on LLM reviewer judgment.
+
+Rejects:
+- Empty / non-string source
+- Source that does not READ as Lisp (unbalanced parens, dotted-pair garbage)
+- Sources with more than one top-level form
+- Top-level form whose CAR is not a deftest symbol
+- Any `(skip ...)` / `(rove:skip ...)` node anywhere in the form
+
+Accepts both `(deftest ...)` and `(rove:deftest ...)` since
+package-qualification is stylistic."
   (unless (and (stringp source) (plusp (length source)))
     (error 'planner-error
            :message (format nil
                             "step ~D test_source must be a non-empty string"
                             step-index)
            :raw source))
-  (unless (search "(deftest " source)
-    (error 'planner-error
-           :message (format nil
-                            "step ~D test_source must contain a (deftest ...) form (got: ~A)"
-                            step-index
-                            (subseq source 0 (min 80 (length source))))
-           :raw source))
+  (multiple-value-bind (form trailing-p)
+      (%read-single-form-from-string source)
+    (unless form
+      (error 'planner-error
+             :message (format nil
+                              "step ~D test_source must contain a (deftest ...) form (got whitespace / empty)"
+                              step-index)
+             :raw source))
+    (when trailing-p
+      (error 'planner-error
+             :message (format nil
+                              "step ~D test_source must contain exactly one top-level form, got additional trailing form(s)"
+                              step-index)
+             :raw source))
+    (unless (and (consp form)
+                 (%deftest-symbol-p (car form)))
+      (error 'planner-error
+             :message (format nil
+                              "step ~D test_source top-level form must be a deftest (got: ~A...)"
+                              step-index
+                              (subseq source 0 (min 80 (length source))))
+             :raw source))
+    (when (%tree-contains-skip-p (cdr form))
+      (error 'planner-error
+             :message (format nil
+                              "step ~D test_source contains a (skip ...) form, which would short-circuit assertions (additive-only rule, Finding 1)"
+                              step-index)
+             :raw source)))
   source)
 
 (defun materialize-test-source (path source)

@@ -78,6 +78,74 @@
           (progn (validate-test-source "" 0) nil)
         (planner-error () t))))
 
+;; --- Finding 1: AST-level additive-only gate (design review 2026-05-27) --
+
+(deftest validate-test-source-rejects-multiple-top-level-forms
+  ;; Finding 1: an LLM reviewer that approves text containing "(deftest "
+  ;; might let through hostile payloads with extra top-level forms.
+  ;; Reject anything beyond exactly one (deftest ...) at the top.
+  (ok (handler-case
+          (progn (validate-test-source
+                  "(deftest foo (ok t)) (defun sneaky () nil)" 0)
+                 nil)
+        (planner-error (c)
+          (search "exactly one" (planner-error-message c)))))
+  (ok (handler-case
+          (progn (validate-test-source
+                  "(deftest a (ok t)) (deftest b (ok t))" 0)
+                 nil)
+        (planner-error (c)
+          (search "exactly one" (planner-error-message c))))))
+
+(deftest validate-test-source-rejects-skip-forms
+  ;; Finding 1: (rove:skip) / (skip) inside the body short-circuits
+  ;; assertions to passes, effectively weakening the test. Reject.
+  (ok (handler-case
+          (progn (validate-test-source
+                  "(deftest foo (rove:skip) (ok t))" 0)
+                 nil)
+        (planner-error (c)
+          (search "skip" (planner-error-message c)))))
+  (ok (handler-case
+          (progn (validate-test-source
+                  "(deftest foo (skip \"todo\") (ok t))" 0)
+                 nil)
+        (planner-error (c)
+          (search "skip" (planner-error-message c))))))
+
+(deftest validate-test-source-rejects-non-deftest-top-level-form
+  ;; Finding 1: a non-deftest top-level form (defun / defvar / setf /
+  ;; eval-when / etc.) introduces project-side state and is NOT
+  ;; additive-only. Reject even if the source happens to contain a
+  ;; (deftest ...) substring elsewhere.
+  (ok (handler-case
+          (progn (validate-test-source
+                  "(progn (deftest foo (ok t)))" 0)
+                 nil)
+        (planner-error (c)
+          (search "deftest" (planner-error-message c)))))
+  (ok (handler-case
+          (progn (validate-test-source
+                  "(defvar *secret* 42)" 0)
+                 nil)
+        (planner-error () t))))
+
+(deftest validate-test-source-rejects-unreadable-source
+  ;; Finding 1: source that fails to read (unbalanced parens, dotted
+  ;; pair garbage) must not pass through with the legacy substring
+  ;; check. Reject with a structured error.
+  (ok (handler-case
+          (progn (validate-test-source "(deftest foo (ok t)" 0)
+                 nil)
+        (planner-error (c)
+          (search "parse" (planner-error-message c))))))
+
+(deftest validate-test-source-accepts-rove-qualified-deftest
+  ;; Finding 1: a `(rove:deftest ...)' form is also a valid deftest;
+  ;; planners may use the qualified form to be explicit. Accept.
+  (validate-test-source "(rove:deftest foo (ok t))" 0)
+  (ok t "rove:deftest qualified form passes validation"))
+
 ;; --- materialize-test-source --------------------------------------------
 
 (deftest materialize-test-source-appends-form-with-leading-newline

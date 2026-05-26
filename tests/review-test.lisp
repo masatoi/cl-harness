@@ -133,6 +133,26 @@
     ;; Unknown kinds fall back to the soft default so adding a new review
     ;; kind in the future doesn't crash review-development-artifact.
     (ok (search "APPROVE BY DEFAULT"
-                (cl-harness/src/review::review-system-prompt-for :test-change)))
-    (ok (search "APPROVE BY DEFAULT"
                 (cl-harness/src/review::review-system-prompt-for :unknown-kind)))))
+
+(deftest test-change-review-uses-strict-prompt
+  ;; Finding 2 (design review 2026-05-27): :test-change is at least as
+  ;; safety-critical as :tests — the agent is asking to MUTATE the test
+  ;; suite, which directly affects the source-of-truth for verify.
+  ;; #55 introduced stage-aware prompts but :test-change fell through to
+  ;; the soft approve-by-default default. Lift it to a dedicated strict
+  ;; prompt that demands additive-only proof.
+  (testing "review-system-prompt-for dispatches :test-change to a strict prompt"
+    (let ((p (cl-harness/src/review::review-system-prompt-for :test-change)))
+      (testing ":test-change prompt is NOT the soft approve-by-default"
+        (ok (not (search "APPROVE BY DEFAULT" p))
+            "uses a strict prompt instead of the soft default"))
+      (testing ":test-change prompt demands additive-only justification"
+        (ok (search "additive" p)
+            "rejection criteria reference additive semantics"))
+      (testing ":test-change prompt names weakening as a reject reason"
+        (ok (search "weaken" p)
+            "explicitly names test-weakening as grounds for rejection"))
+      (testing ":test-change prompt still returns JSON shape"
+        (ok (search "\"status\"" p))
+        (ok (search "\"feedback\"" p))))))

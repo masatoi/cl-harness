@@ -364,16 +364,79 @@ Goal: ~A"
   "Default system prompt for REVIEW-DEVELOPMENT-ARTIFACT. Pinned by
 `default-review-system-prompt-is-approve-by-default' test (#54).")
 
-(defun review-system-prompt-for (kind)
-  "Return the appropriate review system prompt for KIND (backlog #55).
+(defparameter +test-change-review-system-prompt+
+  ;; Finding 2 (design review 2026-05-27): :test-change is at least as
+  ;; safety-critical as :tests — the agent is asking to MUTATE the test
+  ;; suite mid-run, which directly affects the source-of-truth for
+  ;; verify. The soft approve-by-default prompt under-protects this
+  ;; gate; lift to a dedicated strict prompt that enforces additive-only
+  ;; semantics regardless of how confident the LLM reviewer feels.
+  (concatenate
+   'string
+   "You are a development reviewer assessing an additive TEST CHANGE "
+   "request. Return exactly JSON: "
+   "{\"status\":\"approved\"|\"rejected\",\"feedback\":\"...\"}."
+   (string #\Newline) (string #\Newline)
+   "STRICT MODE — reject whenever any of these conditions hold. State "
+   "the specific condition number in feedback so the agent can recover:"
+   (string #\Newline)
+   "  1. The change is NOT additive — it modifies, removes, or rewrites "
+   "an existing test (additive-only rule). Only NEW tests with NEW "
+   "names are permitted."
+   (string #\Newline)
+   "  2. The change would weaken any existing test — e.g. introduces "
+   "`(skip ...)` / `(rove:skip ...)`, relaxes an assertion, or replaces "
+   "a precise check with a tautology."
+   (string #\Newline)
+   "  3. The new test's name collides with an existing test's name "
+   "(silent overwrite risk)."
+   (string #\Newline)
+   "  4. The change adds coverage that contradicts the acceptance "
+   "criteria (asserts the inverse of what the goal asks)."
+   (string #\Newline)
+   "  5. The change adds non-test top-level forms (defun / defvar / "
+   "setf / eval-when / progn-wrapper around deftest, etc.)."
+   (string #\Newline)
+   "  6. The change adds coverage for a feature the acceptance criteria "
+   "do not list (scope drift via test expansion)."
+   (string #\Newline) (string #\Newline)
+   "APPROVE when ALL of these hold:"
+   (string #\Newline)
+   "  - test_source is exactly one new (deftest ...) form;"
+   (string #\Newline)
+   "  - it covers a behavior listed in the acceptance criteria that the "
+   "initial planner-authored test missed;"
+   (string #\Newline)
+   "  - it does not touch existing tests, names, or non-test surface."
+   (string #\Newline) (string #\Newline)
+   "Note: a deterministic structural gate (validate-test-source) also "
+   "checks conditions 1, 2, and 5 mechanically. Your job is the "
+   "semantic checks that the structural gate cannot perform: scope "
+   "drift, contradiction with acceptance criteria, and judgment about "
+   "whether the change is genuinely additive coverage vs disguised "
+   "weakening.")
+  "Strict review prompt for the :TEST-CHANGE artifact kind (Finding 2,
+2026-05-27 design review). Pinned by `test-change-review-uses-strict-
+prompt' test.")
 
-:TESTS uses the stricter +TESTS-REVIEW-SYSTEM-PROMPT+ — test stub
-quality determines whether the agent can ever pass the step, so under-
-reviewing here costs an entire replan cycle. All other kinds (:PLAN,
-:IMPLEMENTATION, :TEST-CHANGE, unknown) reuse the soft approve-by-default
-prompt — those artifacts can be iterated on without truncating progress."
+(defun review-system-prompt-for (kind)
+  "Return the appropriate review system prompt for KIND.
+
+:TESTS — stricter +TESTS-REVIEW-SYSTEM-PROMPT+ (backlog #55, 2026-05-25).
+   test stub quality determines whether the agent can ever pass the
+   step, so under-reviewing costs an entire replan cycle.
+
+:TEST-CHANGE — even stricter +TEST-CHANGE-REVIEW-SYSTEM-PROMPT+
+   (Finding 2, 2026-05-27). The agent is mutating the test suite
+   mid-run; additive-only is a core invariant and must be defended
+   semantically (the deterministic gate covers the structural part).
+
+All other kinds (:PLAN, :IMPLEMENTATION, unknown) reuse the soft
+approve-by-default prompt — those artifacts can be iterated on without
+truncating progress."
   (case kind
     (:tests +tests-review-system-prompt+)
+    (:test-change +test-change-review-system-prompt+)
     (t +default-review-system-prompt+)))
 
 (defun review-development-artifact (kind &key provider develop-spec plan step
