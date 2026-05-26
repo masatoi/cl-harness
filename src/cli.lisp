@@ -358,6 +358,21 @@ LOG-LLM-REQUESTS, when non-NIL, instructs each step's run logger to
 emit full :llm-request JSONL events containing the complete message
 history sent to the model.
 
+REVIEW-POLICY default is :AUTO here (CLI users get the plan / test /
+implementation review gates by default). NOTE: the underlying
+`cl-harness/src/orchestrator:develop' uses :NONE as ITS default —
+that path is programmatic / test-stub friendly. Programmatic callers
+that want CLI-equivalent review behaviour must pass :REVIEW-POLICY
+:AUTO explicitly. See orchestrator's docstring for the rationale
+(design review finding 3, 2026-05-27).
+
+MAX-TEST-REVISIONS is a RUN-WIDE budget shared across all steps in
+the develop loop, not per-step. The `test_change_request' counter
+increments the same value across every step, so an early step that
+spends the budget leaves later steps without it. See orchestrator's
+docstring for the cost-bounding rationale (design review finding 4,
+2026-05-27).
+
 Returns the populated DEVELOP-RESULT. Caller is responsible for
 inspecting STATUS / REPLAN-COUNT / LIMIT-HIT to decide on follow-up."
   (check-type goal string)

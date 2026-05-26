@@ -1267,6 +1267,23 @@ MODE (v0.4 Phase 6) selects the development style:
               to :LIGHTWEIGHT.
 :MIXED     -- let the planner decide per step (default).
 
+REVIEW-POLICY default is :NONE here (programmatic / test-stub friendly:
+no LLM calls for review). The CLI facade `cl-harness:develop' overrides
+to :AUTO so user-facing runs get plan / test / implementation review
+gates. Pass :AUTO explicitly when invoking this function from a script
+that wants the same defaults as the CLI (design review finding 3,
+2026-05-27).
+
+MAX-TEST-REVISIONS is a RUN-WIDE budget, not per-step. The agent's
+`test_change_request' protocol increments the same counter across all
+steps in a develop run, so a step that exhausts the budget leaves none
+for later steps. This is intentional cost-bounding (caps the total
+test-mutation LLM calls), but means scenarios where many steps each
+legitimately want one additive test will starve the later steps. If
+empirical data shows per-step semantics are more useful, redesign
+RUN-LIMITS-MAX-TEST-REVISIONS-PER-STEP and reset the counter at step
+boundaries (design review finding 4, 2026-05-27).
+
 A typed MODEL-ERROR raised by the LLM transport layer (auth /
 HTTP / shape failure inside complete-chat) is caught at the top
 of the planner+execute body. The run terminates with status
