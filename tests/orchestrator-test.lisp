@@ -161,6 +161,69 @@
    0)
   (ok t "qualified symbol referencing missing package did not blow up"))
 
+(deftest plan-with-review-replans-on-structurally-invalid-test-source
+  ;; Finding 6 (2026-05-27 N=10 sweep on 104-cache-simple): when a
+  ;; planner emits an unbalanced / truncated test_source (Qwen's
+  ;; token-budget exhaustion cuts off the closing parens),
+  ;; %plan-with-review must catch the structural failure and feed
+  ;; it back to the planner for a fresh attempt — NOT bubble the
+  ;; planner-error up and abort the whole develop run. The fix
+  ;; tightens %plan-with-review's contract: every plan that reaches
+  ;; execute-plan has been deterministically L1-validated.
+  ;;
+  ;; Test stub: planner returns a malformed plan first (unbalanced
+  ;; parens) and a valid plan second. develop should retry rather
+  ;; than abort with planner-error.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-finding6-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-finding6"))
+         (call-count 0)
+         (planner-fn
+          (lambda (goal &key &allow-other-keys)
+            (declare (ignore goal))
+            (incf call-count)
+            (case call-count
+              (1
+               ;; malformed: unbalanced parens (eof inside deftest)
+               (list (%make-step :index 0
+                                 :test-name "broken"
+                                 :test-source "(deftest broken (ok t")))
+              (otherwise
+               (list (%make-step :index 0
+                                 :test-name "fixed"
+                                 :test-source "(deftest fixed (ok t))"))))))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (develop
+                   "retry on structurally invalid plan"
+                   :project-root (namestring project-root)
+                   :system "demo"
+                   :test-system "demo/tests"
+                   :test-file test-file
+                   :log-path log-path
+                   :planner-fn planner-fn
+                   :run-fn runner
+                   :review-policy :auto
+                   :max-review-replans 2)))
+             (testing "develop did not abort with planner-error"
+               (ok result "develop returned a result instead of signalling"))
+             (testing "planner was called at least twice (initial + replan)"
+               (ok (>= call-count 2)
+                   (format nil "planner-fn calls=~A" call-count)))
+             (testing "final status is :passed (replan recovered)"
+               (ok (eq :passed (develop-result-status result))
+                   (format nil "status=~A" (develop-result-status result))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
 ;; --- materialize-test-source --------------------------------------------
 
 (deftest materialize-test-source-appends-form-with-leading-newline

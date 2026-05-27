@@ -1429,38 +1429,97 @@ Reads:
               for idx from 1
               do (format s "~A~%" (%render-tool-error-entry idx entry)))))))
 
-(defun %plan-with-review (goal planner-fn review-fn provider state mode
-                          project-root system test-system project-inventory
-                          prior-plan failure-context max-review-replans)
+(defun %validate-plan-test-sources (plan)
+  "Run VALIDATE-TEST-SOURCE on each PLAN-STEP's test_source. Return
+(VALUES OK-P FEEDBACK). When OK-P is NIL, FEEDBACK is a string
+listing every step that failed plus the structural reason, suitable
+to drop into a planner failure-context for replan.
+
+Implementation review followup Finding 6 (2026-05-27 N=10 sweep
+on 104-cache-simple): Qwen's token-budget exhaustion occasionally
+truncates a deftest mid-form, producing planner output like
+`(deftest foo (ok t` (unbalanced parens). EXECUTE-PLAN runs
+validate-test-source on every step right at entry and bubbles up
+the planner-error, killing the whole develop run because the
+develop loop's outer HANDLER-CASE only catches MODEL-ERROR. By
+running L1 validation here (after PLANNER-FN returns, before
+EXECUTE-PLAN), the develop loop can treat structural failures as
+\"reject this plan, ask the planner for a fresh one\" — the same
+shape as a plan/test review rejection."
+  (let ((failures '()))
+    (dolist (step plan)
+      (handler-case
+          (validate-test-source (plan-step-test-source step)
+                                (plan-step-index step))
+        (planner-error (c)
+          (push (format nil "step ~D (test_name=~A): ~A"
+                        (plan-step-index step)
+                        (plan-step-test-name step)
+                        (planner-error-message c))
+                failures))))
+    (if failures
+        (values nil
+                (format nil
+                        "Plan structural validation rejected ~D step(s). Re-emit a plan where every step's test_source is exactly one unqualified (deftest NAME ...) form, read as valid Lisp, with no embedded skip / weakening, and a distinct test_name. Failures:~%~{- ~A~%~}"
+                        (length failures)
+                        (nreverse failures)))
+        (values t ""))))
+
+(defun %plan-with-review
+       (goal planner-fn review-fn provider state mode project-root system
+        test-system project-inventory prior-plan failure-context
+        max-review-replans)
   "Call PLANNER-FN until plan/test review approves or review budget
-is exhausted. Returns NIL after stamping STATE on budget exhaustion."
-  (loop
-    for plan = (%apply-mode-to-plan
-                (funcall planner-fn goal
-                         :project-root project-root
-                         :system system
-                         :test-system test-system
-                         :provider provider
-                         :project-inventory project-inventory
-                         :mode mode
-                         :prior-plan prior-plan
-                         :failure-context failure-context
-                         :develop-state state)
-                mode)
-    do (multiple-value-bind (approved-p feedback)
-           (%review-plan-and-tests plan review-fn provider state)
-         (when approved-p
-           (return plan))
-         (when (>= (develop-state-review-replan-count state)
-                   max-review-replans)
-           (setf (develop-state-status state) :limit-exhausted
-                 (develop-state-limit-hit state) :max-review-replans)
-           (return nil))
-         (incf (develop-state-review-replan-count state))
-         (setf prior-plan plan
-               failure-context
-               (format nil "Plan/test review rejected the previous output: ~A"
-                       feedback)))))
+is exhausted. Returns NIL after stamping STATE on budget exhaustion.
+
+Each planner output passes through two gates in series before being
+accepted:
+  L1 (deterministic): every step's test_source is structurally
+      valid (single deftest form, no embedded skip, readable Lisp).
+      Failures convert to a replan request — same shape as a LLM
+      review rejection — instead of bubbling planner-error out of
+      EXECUTE-PLAN and killing the develop run. (Implementation
+      review followup Finding 6, 2026-05-27 N=10 sweep on
+      104-cache-simple.)
+  L2 (LLM):  plan-review and tests-review when enabled by policy."
+  (loop for plan = (%apply-mode-to-plan
+                    (funcall planner-fn goal :project-root project-root :system
+                             system :test-system test-system :provider provider
+                             :project-inventory project-inventory :mode mode
+                             :prior-plan prior-plan :failure-context
+                             failure-context :develop-state state)
+                    mode)
+        do (multiple-value-bind (struct-ok-p struct-feedback)
+               (%validate-plan-test-sources plan)
+             (cond
+               ((not struct-ok-p)
+                (when (>= (develop-state-review-replan-count state)
+                          max-review-replans)
+                  (setf (develop-state-status state) :limit-exhausted
+                        (develop-state-limit-hit state) :max-review-replans)
+                  (return nil))
+                (incf (develop-state-review-replan-count state))
+                (setf prior-plan plan
+                      failure-context
+                      (format nil
+                              "Plan structural validation rejected the previous output: ~A"
+                              struct-feedback)))
+               (t
+                (multiple-value-bind (approved-p feedback)
+                    (%review-plan-and-tests plan review-fn provider state)
+                  (when approved-p (return plan))
+                  (when
+                      (>= (develop-state-review-replan-count state)
+                          max-review-replans)
+                    (setf (develop-state-status state) :limit-exhausted
+                          (develop-state-limit-hit state) :max-review-replans)
+                    (return nil))
+                  (incf (develop-state-review-replan-count state))
+                  (setf prior-plan plan
+                        failure-context
+                        (format nil
+                                "Plan/test review rejected the previous output: ~A"
+                                feedback))))))))
 
 (defun develop (goal
                 &key project-root system test-system test-file
