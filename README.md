@@ -248,54 +248,7 @@ Per-ledger introspection via the develop-result's `develop-state`
   (cl-harness/src/state:develop-state-project-summary state))
 ```
 
-## Architecture
-
-```
-cl-harness/
-├── src/
-│   ├── agent.lisp           turn-based loop, system prompt, recorders
-│   ├── orchestrator.lisp    develop loop: plan / explore / execute / replan
-│   ├── planner.lisp         LLM-driven plan-step decomposer
-│   ├── action.lisp          LLM JSON action parser (tool_call / finish / finding)
-│   ├── state.lisp           v0.5 A: central develop-state (7 ledger slots)
-│   ├── context-view.lisp    v0.5 C: per-phase context-view formatter
-│   ├── verify.lisp          incremental + clean verification
-│   ├── model.lisp           OpenAI-compatible chat client (+ typed model-error)
-│   ├── mcp{,-stdio,-resolve}.lisp  JSON-RPC + stdio/HTTP transport
-│   ├── policy.lisp          tool allow-list per condition
-│   ├── config.lisp          run-config + run-limits
-│   ├── cli{,-main}.lisp     programmatic + binary entry points
-│   ├── bench.lisp           fix benchmark runner
-│   ├── develop-bench.lisp   greenfield benchmark loader / sandbox
-│   ├── log.lisp             JSONL transcript writer
-│   ├── compact.lisp         chat-history compaction
-│   ├── review.lisp          LLM review gates (plan / tests / impl / test-change)
-│   ├── report.lisp          structured markdown reporting
-│   ├── explore.lisp         read-only sub-agent
-│   ├── integration.lisp     static cross-package consistency check
-│   ├── inventory.lisp       project vocabulary snapshot for planner
-│   ├── abstraction.lisp     ADOPTED:/REJECTED:/DEFERRED: ledger
-│   ├── failure-ledger.lisp  active/resolved failure partition
-│   ├── source-fact.lisp     read-tool record + mtime-at-read
-│   ├── patch-record.lisp    source-mutating-tool record + verify-status
-│   ├── runtime-vocabulary.lisp  code-find/describe/refs ledger
-│   ├── repl-finding.lisp    (hypothesis probe finding decision) tuple
-│   ├── project-summary.lisp structured project-context + dirty flag
-│   ├── step-result.lisp     develop-step-result class
-│   ├── subtask-summary.lisp derived subtask-summary
-│   └── main.lisp            facade re-exports under nickname cl-harness
-├── tests/                   rove unit tests (mostly stub-driven, no LLM)
-├── benchmarks/              12 deliberately broken mini ASDF projects
-├── develop-benchmarks/      greenfield fixtures for cl-harness:develop
-├── prompts/                 planner + REPL-driven-dev system prompts
-└── docs/
-    ├── cl-harness-prd.md
-    ├── context-management.md     v0.5 requirements doc
-    ├── notes/                    design notes
-    ├── plans/                    per-phase implementation plans
-    ├── release-notes/            v0.4 / v0.5.x release notes
-    └── benchmarks/               per-run results
-```
+## Conditions
 
 Conditions (PRD §8.5) gate which cl-mcp tools the LLM can invoke:
 
