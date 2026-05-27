@@ -12,37 +12,9 @@ lower layer that exposes the Lisp runtime as MCP tools.
 
 ## Status
 
-Active development on top of **v0.5.2**. Public CLI surface
-(`fix` / `bench` / `develop` / `scaffold`) is stable; recent work
-focuses on `develop`-loop resilience.
-
-**Recent improvements** (post-v0.5.2):
-
-- **3-layer defense in `%plan-with-review`** (Findings 6+7,
-  2026-05-27/28): planner-fn errors (yason JSON decode, schema) and
-  L1 structural failures (malformed `test_source`) are converted into
-  replan requests instead of bubbling up and killing the develop run.
-  N=10 sweep on 104-cache-simple: silent ERROR 40% → 0%, pass rate
-  40% → 70%. Same fix verified on 102-counter-class (ERROR 33% → 0%).
-- **Tolerant package read** in `validate-test-source` (2026-05-27):
-  pre-creates packages referenced by qualified symbols so the
-  greenfield-system package the planner is about to define doesn't
-  trip the reader. Three benchmark fixtures went from 0% pass
-  (deterministic abort) to 100% pass on smoke re-test.
-- **DR-2026-05-27 implementation review fix series**: deterministic
-  collision check for `test_change_request` (H1), `:test-change`
-  strict review prompt (Finding 2), L1 structural reject feedback
-  path (Finding 5 + M2), `run-wide` test-revision budget
-  documentation (Finding 4).
-
-**498 unit tests** pass on a clean cl-mcp worker. See
-`docs/benchmarks/results-2026-05-2*.md` for per-bench narratives.
-
-For the v0.5.x feature set (central `develop-state`, context-views,
-ledgers, structured reporting, typed `model-error`, retry policy),
-see `docs/release-notes/v0.5.0.md` through `v0.5.2.md`. Public
-v0.4 entry points keep their kwarg / flag shapes; v0.5 additions are
-opt-in via the `:develop-state` kwarg.
+Public CLI surface (`fix` / `bench` / `develop` / `scaffold`) is
+stable. Versioned changes live in `docs/release-notes/`; per-run
+benchmark effect measurements live in `docs/benchmarks/`.
 
 ## Quick start
 
