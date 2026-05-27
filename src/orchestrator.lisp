@@ -1472,29 +1472,73 @@ shape as a plan/test review rejection."
   "Call PLANNER-FN until plan/test review approves or review budget
 is exhausted. Returns NIL after stamping STATE on budget exhaustion.
 
-Each planner output passes through two gates in series before being
+Each planner output passes through three failure paths before being
 accepted:
+  P0 (planner-fn itself): PLANNER-ERROR raised inside PLANNER-FN
+      (yason JSON decode failure on truncated Qwen output, schema
+      violation, etc.) is converted to a replan request with the
+      planner-error-message as failure-context. Without this the
+      planner-error escapes to develop's outer HANDLER-CASE — which
+      only catches MODEL-ERROR — and kills the whole develop run.
+      Implementation review followup Finding 7 (2026-05-27 N=10
+      sweep on 104-cache-simple).
   L1 (deterministic): every step's test_source is structurally
       valid (single deftest form, no embedded skip, readable Lisp).
       Failures convert to a replan request — same shape as a LLM
       review rejection — instead of bubbling planner-error out of
-      EXECUTE-PLAN and killing the develop run. (Implementation
-      review followup Finding 6, 2026-05-27 N=10 sweep on
-      104-cache-simple.)
+      EXECUTE-PLAN and killing the develop run. Implementation
+      review followup Finding 6 (2026-05-27 N=10 sweep on
+      104-cache-simple).
   L2 (LLM):  plan-review and tests-review when enabled by policy."
-  (loop for plan = (%apply-mode-to-plan
-                    (funcall planner-fn goal :project-root project-root :system
-                             system :test-system test-system :provider provider
-                             :project-inventory project-inventory :mode mode
-                             :prior-plan prior-plan :failure-context
-                             failure-context :develop-state state)
-                    mode)
-        do (multiple-value-bind (struct-ok-p struct-feedback)
-               (%validate-plan-test-sources plan)
-             (cond
-               ((not struct-ok-p)
-                (when (>= (develop-state-review-replan-count state)
-                          max-review-replans)
+  (loop
+    (let* ((failed-feedback nil)
+           (plan
+            (handler-case
+                (%apply-mode-to-plan
+                 (funcall planner-fn goal :project-root project-root :system
+                          system :test-system test-system :provider provider
+                          :project-inventory project-inventory :mode mode
+                          :prior-plan prior-plan :failure-context
+                          failure-context :develop-state state)
+                 mode)
+              (planner-error (c)
+                (setf failed-feedback
+                        (format nil
+                                "Planner LLM output could not be parsed: ~A. Re-emit a valid plan that satisfies the JSON schema."
+                                (planner-error-message c)))
+                nil))))
+      (cond
+        (failed-feedback
+         (when (>= (develop-state-review-replan-count state) max-review-replans)
+           (setf (develop-state-status state) :limit-exhausted
+                 (develop-state-limit-hit state) :max-review-replans)
+           (return nil))
+         (incf (develop-state-review-replan-count state))
+         (setf prior-plan nil
+               failure-context failed-feedback))
+        (t
+         (multiple-value-bind (struct-ok-p struct-feedback)
+             (%validate-plan-test-sources plan)
+           (cond
+             ((not struct-ok-p)
+              (when (>= (develop-state-review-replan-count state)
+                        max-review-replans)
+                (setf (develop-state-status state) :limit-exhausted
+                      (develop-state-limit-hit state) :max-review-replans)
+                (return nil))
+              (incf (develop-state-review-replan-count state))
+              (setf prior-plan plan
+                    failure-context
+                    (format nil
+                            "Plan structural validation rejected the previous output: ~A"
+                            struct-feedback)))
+             (t
+              (multiple-value-bind (approved-p feedback)
+                  (%review-plan-and-tests plan review-fn provider state)
+                (when approved-p (return plan))
+                (when
+                    (>= (develop-state-review-replan-count state)
+                        max-review-replans)
                   (setf (develop-state-status state) :limit-exhausted
                         (develop-state-limit-hit state) :max-review-replans)
                   (return nil))
@@ -1502,24 +1546,8 @@ accepted:
                 (setf prior-plan plan
                       failure-context
                       (format nil
-                              "Plan structural validation rejected the previous output: ~A"
-                              struct-feedback)))
-               (t
-                (multiple-value-bind (approved-p feedback)
-                    (%review-plan-and-tests plan review-fn provider state)
-                  (when approved-p (return plan))
-                  (when
-                      (>= (develop-state-review-replan-count state)
-                          max-review-replans)
-                    (setf (develop-state-status state) :limit-exhausted
-                          (develop-state-limit-hit state) :max-review-replans)
-                    (return nil))
-                  (incf (develop-state-review-replan-count state))
-                  (setf prior-plan plan
-                        failure-context
-                        (format nil
-                                "Plan/test review rejected the previous output: ~A"
-                                feedback))))))))
+                              "Plan/test review rejected the previous output: ~A"
+                              feedback)))))))))))
 
 (defun develop (goal
                 &key project-root system test-system test-file

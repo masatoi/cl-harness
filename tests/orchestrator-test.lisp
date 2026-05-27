@@ -224,6 +224,69 @@
       (when (probe-file test-file) (delete-file test-file))
       (when (probe-file log-path) (delete-file log-path)))))
 
+(deftest plan-with-review-replans-on-planner-fn-error
+  ;; Finding 7 (2026-05-27 N=10 sweep on 104-cache-simple post Finding 6):
+  ;; planner-fn itself can raise PLANNER-ERROR (e.g. yason fails to
+  ;; decode the LLM response when Qwen's output gets truncated mid-JSON).
+  ;; This happens BEFORE %plan-with-review's deterministic L1 gate ever
+  ;; sees a plan, so the Finding 6 fix doesn't catch it.
+  ;;
+  ;; %plan-with-review must wrap the planner-fn call in HANDLER-CASE and
+  ;; convert PLANNER-ERROR into a replan request, same shape as L1 / LLM
+  ;; review rejection. Otherwise the planner-error escapes to the develop
+  ;; loop's outer HANDLER-CASE (which only catches MODEL-ERROR) and the
+  ;; whole develop run dies with status :ERROR.
+  (let* ((project-root (uiop:temporary-directory))
+         (test-file (merge-pathnames
+                     (format nil "cl-harness-finding7-~A.lisp"
+                             (get-universal-time))
+                     project-root))
+         (log-path (%tmp-path "develop-finding7"))
+         (call-count 0)
+         (planner-fn
+          (lambda (goal &key &allow-other-keys)
+            (declare (ignore goal))
+            (incf call-count)
+            (case call-count
+              (1
+               ;; First call: simulate yason failure mid-decode.
+               (error 'planner-error
+                      :message "JSON decode failed: end of file"
+                      :raw "{\"steps\": ["))
+              (otherwise
+               (list (%make-step :index 0
+                                 :test-name "recovered"
+                                 :test-source
+                                 "(deftest recovered (ok t))"))))))
+         (call-log (cons '() nil))
+         (outcomes (cons (list :passed) nil))
+         (runner (%fake-runner call-log outcomes)))
+    (unwind-protect
+         (progn
+           (%make-test-file test-file)
+           (let ((result
+                  (develop
+                   "retry on planner-fn JSON decode failure"
+                   :project-root (namestring project-root)
+                   :system "demo"
+                   :test-system "demo/tests"
+                   :test-file test-file
+                   :log-path log-path
+                   :planner-fn planner-fn
+                   :run-fn runner
+                   :review-policy :auto
+                   :max-review-replans 2)))
+             (testing "develop did not abort with planner-error"
+               (ok result "develop returned a result instead of signalling"))
+             (testing "planner was called at least twice"
+               (ok (>= call-count 2)
+                   (format nil "planner-fn calls=~A" call-count)))
+             (testing "final status is :passed"
+               (ok (eq :passed (develop-result-status result))
+                   (format nil "status=~A" (develop-result-status result))))))
+      (when (probe-file test-file) (delete-file test-file))
+      (when (probe-file log-path) (delete-file log-path)))))
+
 ;; --- materialize-test-source --------------------------------------------
 
 (deftest materialize-test-source-appends-form-with-leading-newline
