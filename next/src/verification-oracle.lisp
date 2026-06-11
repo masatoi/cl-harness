@@ -62,7 +62,15 @@ action space must permit these tools (:runtime-native)."))
   (handler-case
       (progn
         (when (eq :clean (oracle-mode oracle))
-          (perform-action environment "pool-kill-worker" (%args)))
+          (let ((kill-result
+                  (perform-action environment "pool-kill-worker" (%args))))
+            (when (%result-error-p kill-result)
+              (return-from evaluate
+                (make-verdict :oracle (oracle-name oracle) :pass-p nil
+                              :reason (format nil
+                                              "pool-kill-worker failed: ~A"
+                                              (or (%result-text kill-result)
+                                                  "(no detail)")))))))
         (let ((load-result
                 (perform-action environment "load-system"
                                 (%args "system" (oracle-system oracle)))))

@@ -134,3 +134,25 @@
                                  :condition :file-only))))
     (ok (not (verdict-pass-p verdict)))
     (ok (search "verification error" (verdict-reason verdict)))))
+
+(deftest iserror-kill-fails-the-clean-verdict
+  ;; Final-review fix: a failed worker reset must never yield a
+  ;; "(clean image)" PASS — the one case where the oracle and the SP3
+  ;; ledger would otherwise disagree in the unsafe direction.
+  (with-log-path (path)
+    (let* ((responses
+             (list* (cons "pool-kill-worker"
+                          (concatenate 'string
+                                       "{\"isError\":true,\"content\":"
+                                       "[{\"type\":\"text\",\"text\":\"pool disabled\"}]}"))
+                    (remove "pool-kill-worker" *green-responses*
+                            :key #'car :test #'string=)))
+           (log (open-event-log path))
+           (environment (%env responses :event-log log))
+           (verdict (consult (%oracle) environment :event-log log)))
+      (ok (not (verdict-pass-p verdict)))
+      (ok (search "pool-kill-worker failed" (verdict-reason verdict)))
+      ;; And the ledger agrees over the same trail.
+      (ok (not (clean-verified-p
+                (world-model-projection (build-world-model path)
+                                        :verification)))))))

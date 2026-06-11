@@ -1661,3 +1661,11 @@ git commit -m "feat(next): facade exports + SP4 oracles/governor acceptance test
   stances — revisit with real LLM traffic (SP5/L5).
 - Wiring pack `:budgets` into governor construction sugar (one-liner
   for the kernel; the initargs exist).
+- Review-verdict parsing is substring-based and fails open on negated
+  approvals ("cannot APPROVE"); revisit with structured verdicts
+  (final review Minor #2, SP5).
+- "judge error" conflates profile config errors with transport errors;
+  invariant-oracle conversely errors loudly on unknown invariants —
+  unify the config-error stance when the kernel consumes both (SP5).
+- Failing consults serialize "pass": null (yason NIL); normalize to
+  false for the L5 transcript miner.

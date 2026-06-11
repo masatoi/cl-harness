@@ -41,7 +41,10 @@
 
 (defclass governor (projection oracle)
   ((max-actions :initarg :max-actions :initform nil
-                :reader governor-max-actions)
+                :reader governor-max-actions
+                :documentation "Counts ALL environment actions,
+including oracle consultations (a clean verify spends 3) — the only
+replay-consistent semantic. Calibrate pack budgets accordingly.")
    (max-patches :initarg :max-patches :initform nil
                 :reader governor-max-patches)
    (max-consecutive-failed-patches
