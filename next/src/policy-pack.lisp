@@ -54,7 +54,8 @@ non-negative integers. Signals an ERROR on anything else."
 carrying a keyword :id.")
 
 (define-condition policy-pack-invalid (error)
-  ((message :initarg :message :reader policy-pack-invalid-message)
+  ((message :initarg :message :initform "(no message)"
+            :reader policy-pack-invalid-message)
    (path :initarg :path :initform nil :reader policy-pack-invalid-path))
   (:report (lambda (condition stream)
              (format stream "Invalid policy pack~@[ at ~A~]: ~A"

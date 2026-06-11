@@ -97,3 +97,9 @@
   (with-pack-file (path "(:name \"x\" :version \"0.1.0\") (:extra)")
     (ok (handler-case (progn (load-policy-pack path) nil)
           (policy-pack-invalid () t)))))
+
+(deftest condition-prints-without-message
+  ;; Review fix: a :path-only condition must print, not signal
+  ;; UNBOUND-SLOT from inside the :report lambda.
+  (ok (stringp (princ-to-string
+                (make-condition 'policy-pack-invalid :path "/tmp/x")))))
