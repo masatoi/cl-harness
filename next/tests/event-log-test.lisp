@@ -80,3 +80,27 @@ not exist yet and is deleted afterwards."
                  (event-log-parse-error (e) e))))
       (ok (typep err 'event-log-parse-error))
       (ok (= 2 (event-log-parse-error-line-number err))))))
+
+(deftest replay-counts-a-projection
+  (with-log-path (path)
+    (let ((log (open-event-log path)))
+      (emit-event log :action nil)
+      (emit-event log :action nil)
+      (emit-event log :note nil))
+    (ok (= 2 (replay-events path
+                            (lambda (count event)
+                              (if (eq :action (event-type event))
+                                  (1+ count)
+                                  count))
+                            0)))))
+
+(deftest unknown-type-line-signals-parse-error
+  (with-log-path (path)
+    (with-open-file (out path :direction :output :if-does-not-exist :create)
+      (write-line
+       (concatenate 'string
+                    "{\"seq\":1,\"type\":\"weird_type\",\"timestamp\":\"t\","
+                    "\"schema_version\":1,\"payload\":{}}")
+       out))
+    (ok (handler-case (progn (read-events path) nil)
+          (event-log-parse-error () t)))))
