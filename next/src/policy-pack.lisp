@@ -46,3 +46,102 @@ non-negative integers. Signals an ERROR on anything else."
         when (< x y) return t
         when (> x y) return nil
         finally (return nil)))
+
+(alexandria:define-constant +section-keys+
+    '(:prompts :budgets :oracle-profiles :dial-rules)
+  :test #'equal
+  :documentation "Optional pack sections; each is a list of plists
+carrying a keyword :id.")
+
+(define-condition policy-pack-invalid (error)
+  ((message :initarg :message :reader policy-pack-invalid-message)
+   (path :initarg :path :initform nil :reader policy-pack-invalid-path))
+  (:report (lambda (condition stream)
+             (format stream "Invalid policy pack~@[ at ~A~]: ~A"
+                     (policy-pack-invalid-path condition)
+                     (policy-pack-invalid-message condition))))
+  (:documentation "Signaled by LOAD-POLICY-PACK on unreadable or
+schema-violating pack files."))
+
+(defclass policy-pack ()
+  ((name :initarg :name :reader pack-name)
+   (version :initarg :version :reader pack-version
+            :documentation "Semver string.")
+   (prompts :initarg :prompts :initform nil :reader pack-prompts)
+   (budgets :initarg :budgets :initform nil :reader pack-budgets)
+   (oracle-profiles :initarg :oracle-profiles :initform nil
+                    :reader pack-oracle-profiles)
+   (dial-rules :initarg :dial-rules :initform nil :reader pack-dial-rules)
+   (source-path :initarg :source-path :initform nil
+                :reader pack-source-path)
+   (fingerprint :initarg :fingerprint :reader pack-fingerprint
+                :documentation "SHA-256 hex of the canonical form."))
+  (:documentation "An immutable, validated policy pack (spec §10.1)."))
+
+(defun %read-pack-form (path)
+  "Read exactly one top-level form from PATH with a hardened reader:
+*READ-EVAL* is NIL (so #. signals at read time) and *PACKAGE* is the
+KEYWORD package, so every unqualified symbol in the file reads as a
+keyword and nothing is interned into code packages. Wraps any reader
+failure in POLICY-PACK-INVALID."
+  (handler-case
+      (with-standard-io-syntax
+        (let ((*read-eval* nil)
+              (*package* (find-package :keyword)))
+          (with-open-file (in path :direction :input
+                                   :external-format :utf-8)
+            (let ((form (read in)))
+              (when (read in nil nil)
+                (error "pack file must contain exactly one top-level form"))
+              form))))
+    (error (e)
+      (error 'policy-pack-invalid :path path
+             :message (format nil "unreadable pack file: ~A" e)))))
+
+(defun %validate-pack-form (form path)
+  "Check FORM against the SP1 pack schema and return it. Required:
+:name (string), :version (semver string). Optional: +SECTION-KEYS+,
+each a list of plists with a keyword :id. Unknown top-level keys are
+rejected to catch typos early."
+  (flet ((invalid (control &rest arguments)
+           (error 'policy-pack-invalid :path path
+                  :message (apply #'format nil control arguments))))
+    (unless (and (listp form) (evenp (length form)))
+      (invalid "top-level form must be a plist"))
+    (loop for (key nil) on form by #'cddr
+          unless (member key (list* :name :version +section-keys+))
+            do (invalid "unknown top-level key ~S" key))
+    (let ((name (getf form :name))
+          (version (getf form :version)))
+      (unless (stringp name)
+        (invalid ":name must be a string"))
+      (unless (stringp version)
+        (invalid ":version must be a string"))
+      (handler-case (parse-semver version)
+        (error () (invalid ":version ~S is not MAJOR.MINOR.PATCH" version))))
+    (dolist (section +section-keys+)
+      (dolist (entry (getf form section))
+        (unless (and (listp entry) (keywordp (getf entry :id)))
+          (invalid "every ~S entry needs a keyword :id, got ~S"
+                   section entry))))
+    form))
+
+(defun %fingerprint (form)
+  "Placeholder until Task 8: canonical-print FORM without hashing."
+  (with-standard-io-syntax
+    (let ((*print-pretty* nil))
+      (prin1-to-string form))))
+
+(defun load-policy-pack (path)
+  "Load, validate, and fingerprint the policy pack at PATH. Returns a
+POLICY-PACK. Signals POLICY-PACK-INVALID on read or schema failure."
+  (let ((form (%validate-pack-form (%read-pack-form path) path)))
+    (make-instance 'policy-pack
+                   :name (getf form :name)
+                   :version (getf form :version)
+                   :prompts (getf form :prompts)
+                   :budgets (getf form :budgets)
+                   :oracle-profiles (getf form :oracle-profiles)
+                   :dial-rules (getf form :dial-rules)
+                   :source-path (pathname path)
+                   :fingerprint (%fingerprint form))))
