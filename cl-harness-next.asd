@@ -31,7 +31,8 @@
                "cl-harness-next/tests/mcp-client-test"
                "cl-harness-next/tests/mcp-stdio-test"
                "cl-harness-next/tests/action-space-test"
-               "cl-harness-next/tests/environment-test")
+               "cl-harness-next/tests/environment-test"
+               "cl-harness-next/tests/projection-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
