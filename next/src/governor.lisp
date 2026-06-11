@@ -122,3 +122,56 @@ Categories: :budget (resource counts) and :progress (stall signals)."
                       :reason (format nil "~{~A~^; ~}"
                                       (mapcar #'cdr breaches)))
         (make-verdict :oracle :governor :pass-p t :reason nil))))
+
+(define-condition governor-intervention (condition)
+  ((governor :initarg :governor :initform nil
+             :reader intervention-governor)
+   (reason :initarg :reason :initform "(no reason)"
+           :reader intervention-reason))
+  (:report (lambda (condition stream)
+             (format stream "Governor intervention: ~A"
+                     (intervention-reason condition))))
+  (:documentation "Base for governor interventions (spec §11). Plain
+CONDITION, not ERROR — unhandled signals fall through and the run
+continues; handlers choose an intervention by invoking one of the
+keyword-named restarts (:demote-dial :replan :park-mission :ask-human
+:abort-run)."))
+
+(define-condition progress-stalled (governor-intervention)
+  ()
+  (:documentation "Stall thresholds breached (oscillating patches or
+verify-without-progress)."))
+
+(define-condition budget-exhausted (governor-intervention)
+  ()
+  (:documentation "Resource budget thresholds breached (actions,
+patches)."))
+
+(define-condition oracle-conflict (governor-intervention)
+  ()
+  (:documentation "Consulted oracles disagree. Defined as part of the
+spec §11 intervention vocabulary; detection wiring arrives with the
+kernel (SP5), which is the first place multiple verdicts meet."))
+
+(defun check-governor (governor)
+  "Check thresholds and signal interventions (spec §11). Restart names
+are KEYWORDS so cross-package handlers can simply
+(invoke-restart :replan) — the project's documented restart-name
+lesson. Returns the chosen intervention keyword, or :continue when
+nothing breached or no handler chose a restart."
+  (dolist (breach (governor-breaches governor) :continue)
+    (destructuring-bind (category . reason) breach
+      (let ((outcome
+              (restart-case
+                  (progn (signal (ecase category
+                                   (:budget 'budget-exhausted)
+                                   (:progress 'progress-stalled))
+                                 :governor governor :reason reason)
+                         :continue)
+                (:demote-dial () :demote-dial)
+                (:replan () :replan)
+                (:park-mission () :park-mission)
+                (:ask-human () :ask-human)
+                (:abort-run () :abort-run))))
+        (unless (eq :continue outcome)
+          (return-from check-governor outcome))))))
