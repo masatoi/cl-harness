@@ -28,10 +28,11 @@
 (defun %hash (&rest plist)
   (alexandria:plist-hash-table plist :test #'equal))
 
-(defun %interaction (tool &key arguments error (observation-seq 2))
+(defun %interaction (tool &key arguments result error (observation-seq 2))
   (make-instance 'interaction
                  :tool tool
                  :arguments arguments
+                 :result result
                  :error-message error
                  :action-seq (1- observation-seq)
                  :observation-seq observation-seq))
@@ -104,3 +105,17 @@
           (fact-a (second (source-facts ledger))))
       (ok (source-fact-stale-p fact-a ledger))
       (ok (not (source-fact-stale-p fact-b ledger))))))
+
+(deftest iserror-patch-is-not-ok
+  (let ((ledger (make-instance 'change-ledger)))
+    (apply-interaction
+     ledger (%interaction "lisp-read-file"
+                          :arguments (%hash "path" "src/a.lisp")
+                          :observation-seq 3))
+    (apply-interaction
+     ledger (%interaction "lisp-edit-form"
+                          :arguments (%hash "file_path" "src/a.lisp")
+                          :result (%hash "isError" t)
+                          :observation-seq 5))
+    (ok (not (patch-entry-ok-p (first (patches ledger)))))
+    (ok (not (source-fact-stale-p (first (source-facts ledger)) ledger)))))

@@ -19,6 +19,7 @@
                 #:apply-interaction
                 #:interaction-tool
                 #:interaction-ok-p
+                #:interaction-succeeded-p
                 #:interaction-observation-seq
                 #:argument-string
                 #:result-text
@@ -95,22 +96,24 @@ legacy-proven Phase-H heuristic. Idempotent."
           (setf (finding-promoted-p finding) t))))))
 
 (defmethod apply-interaction ((ledger exploration-ledger) interaction)
-  (when (interaction-ok-p interaction)
-    (let ((tool (interaction-tool interaction))
-          (seq (interaction-observation-seq interaction)))
-      (cond
-        ((member tool +probe-tool-names+ :test #'string=)
-         (push (make-probe :tool tool
-                           :code (argument-string interaction "code")
-                           :summary (result-text interaction)
-                           :seq seq)
-               (probes ledger)))
-        ((member tool +patch-tool-names+ :test #'string=)
-         (setf (%invalidation-seq ledger) seq)
-         (%promote-matching-findings ledger interaction))
-        ((or (string= tool "load-system")
-             (string= tool "pool-kill-worker"))
-         (setf (%invalidation-seq ledger) seq)))))
+  (let ((tool (interaction-tool interaction))
+        (seq (interaction-observation-seq interaction)))
+    (cond
+      ((and (interaction-ok-p interaction)
+            (member tool +probe-tool-names+ :test #'string=))
+       (push (make-probe :tool tool
+                         :code (argument-string interaction "code")
+                         :summary (result-text interaction)
+                         :seq seq)
+             (probes ledger)))
+      ((and (interaction-succeeded-p interaction)
+            (member tool +patch-tool-names+ :test #'string=))
+       (setf (%invalidation-seq ledger) seq)
+       (%promote-matching-findings ledger interaction))
+      ((and (interaction-succeeded-p interaction)
+            (or (string= tool "load-system")
+                (string= tool "pool-kill-worker")))
+       (setf (%invalidation-seq ledger) seq))))
   ledger)
 
 (defun probe-stale-p (probe ledger)

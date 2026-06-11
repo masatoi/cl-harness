@@ -13,10 +13,11 @@
                 #:projection
                 #:apply-interaction
                 #:interaction-tool
-                #:interaction-ok-p
+                #:interaction-succeeded-p
                 #:interaction-result
                 #:interaction-error-message
                 #:interaction-observation-seq
+                #:result-text
                 #:+patch-tool-names+)
   (:export #:verification-ledger
            #:last-load
@@ -130,7 +131,7 @@ same test name, or same reason for unnamed (unstructured) failures."
 (defmethod apply-interaction ((ledger verification-ledger) interaction)
   (let ((tool (interaction-tool interaction))
         (seq (interaction-observation-seq interaction))
-        (ok (interaction-ok-p interaction)))
+        (ok (interaction-succeeded-p interaction)))
     (cond
       ((string= tool "pool-kill-worker")
        (when ok (setf (%kill-seq ledger) seq)))
@@ -142,7 +143,8 @@ same test name, or same reason for unnamed (unstructured) failures."
        (setf (last-load ledger)
              (make-load-result
               :ok-p ok
-              :summary (interaction-error-message interaction)
+              :summary (or (interaction-error-message interaction)
+                           (unless ok (result-text interaction)))
               :seq seq))
        (when ok (setf (%load-seq ledger) seq)))
       ((string= tool "run-tests")

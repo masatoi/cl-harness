@@ -26,6 +26,8 @@
            #:interaction-ok-p
            #:argument-string
            #:result-text
+           #:result-error-p
+           #:interaction-succeeded-p
            #:+patch-tool-names+))
 
 (in-package #:cl-harness-next/src/projection)
@@ -113,3 +115,16 @@ the shape is absent (lesson: check key presence, never guess shapes)."
                       (concatenate 'string (subseq text 0 limit)
                                    " …[truncated]")
                       text))))))))))
+
+(defun result-error-p (interaction)
+  "True when the TOOL itself reported failure (MCP result \"isError\")
+— distinct from transport-level failure (INTERACTION-OK-P)."
+  (let ((result (interaction-result interaction)))
+    (and (hash-table-p result)
+         (multiple-value-bind (value present-p) (gethash "isError" result)
+           (and present-p value t)))))
+
+(defun interaction-succeeded-p (interaction)
+  "True when the round-trip completed AND the tool reported success."
+  (and (interaction-ok-p interaction)
+       (not (result-error-p interaction))))

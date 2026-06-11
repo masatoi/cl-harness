@@ -125,3 +125,13 @@
     (%feed ledger "run-tests" 3 :result (%hash "passed" 4 "failed" 2))
     (%feed ledger "run-tests" 5 :result (%hash "passed" 4 "failed" 2))
     (ok (= 1 (length (active-failures ledger))))))
+
+(deftest iserror-load-is-not-ok
+  ;; SP4 coherence fix: cl-mcp reports tool failure via result isError,
+  ;; not a transport error. A failed load must not enable clean-verify.
+  (let ((ledger (make-instance 'verification-ledger)))
+    (%feed ledger "pool-kill-worker" 5)
+    (%feed ledger "load-system" 6 :result (%hash "isError" t))
+    (ok (not (load-result-ok-p (last-load ledger))))
+    (%feed ledger "run-tests" 7 :result (%tests-result 5 0))
+    (ok (not (clean-verified-p ledger)))))

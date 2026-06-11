@@ -126,3 +126,15 @@
     (apply-interaction ledger (%interaction "pool-kill-worker"
                                             :observation-seq 4))
     (ok (probe-stale-p (first (probes ledger)) ledger))))
+
+(deftest iserror-patch-neither-promotes-nor-invalidates
+  (let ((ledger (make-instance 'exploration-ledger)))
+    (apply-event ledger (%finding-event 2 "ordering bug"))
+    (apply-interaction ledger (%interaction "repl-eval" :observation-seq 3))
+    (apply-interaction
+     ledger (%interaction "lisp-edit-form"
+                          :arguments (%hash "content" "ordering bug fix")
+                          :result (%hash "isError" t)
+                          :observation-seq 5))
+    (ok (not (finding-promoted-p (first (findings ledger)))))
+    (ok (not (probe-stale-p (first (probes ledger)) ledger)))))

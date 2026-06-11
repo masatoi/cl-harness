@@ -20,7 +20,9 @@
                 #:interaction-observation-seq
                 #:interaction-ok-p
                 #:argument-string
-                #:result-text))
+                #:result-text
+                #:result-error-p
+                #:interaction-succeeded-p))
 
 (in-package #:cl-harness-next/tests/projection-test)
 
@@ -82,3 +84,31 @@
                                    :action-seq 1 :observation-seq 2)))
     (ok (null (result-text no-result)))
     (ok (null (result-text no-content)))))
+
+(deftest result-error-p-reads-iserror
+  (let ((errorful (make-instance 'interaction :tool "x"
+                                 :result (%hash "isError" t)
+                                 :action-seq 1 :observation-seq 2))
+        (fine (make-instance 'interaction :tool "x"
+                             :result (%hash "isError" nil)
+                             :action-seq 1 :observation-seq 2))
+        (absent (make-instance 'interaction :tool "x"
+                               :result (%hash "passed" 3)
+                               :action-seq 1 :observation-seq 2)))
+    (ok (result-error-p errorful))
+    (ok (not (result-error-p fine)))
+    (ok (not (result-error-p absent)))))
+
+(deftest succeeded-requires-transport-and-tool-success
+  (let ((tool-failed (make-instance 'interaction :tool "x"
+                                    :result (%hash "isError" t)
+                                    :action-seq 1 :observation-seq 2))
+        (transport-failed (make-instance 'interaction :tool "x"
+                                         :error-message "boom"
+                                         :action-seq 1 :observation-seq 2))
+        (fine (make-instance 'interaction :tool "x"
+                             :result (%hash "ok" t)
+                             :action-seq 1 :observation-seq 2)))
+    (ok (not (interaction-succeeded-p tool-failed)))
+    (ok (not (interaction-succeeded-p transport-failed)))
+    (ok (interaction-succeeded-p fine))))

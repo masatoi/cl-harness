@@ -11,7 +11,7 @@
                 #:projection
                 #:apply-interaction
                 #:interaction-tool
-                #:interaction-ok-p
+                #:interaction-succeeded-p
                 #:interaction-observation-seq
                 #:argument-string
                 #:+patch-tool-names+)
@@ -63,10 +63,10 @@ attempts are recorded too (ok-p NIL) — patch oscillation is a signal.")
               :form-type (argument-string interaction "form_type")
               :form-name (argument-string interaction "form_name")
               :operation (or (argument-string interaction "operation") tool)
-              :ok-p (interaction-ok-p interaction)
+              :ok-p (interaction-succeeded-p interaction)
               :seq (interaction-observation-seq interaction))
              (patches ledger)))
-      ((and (interaction-ok-p interaction)
+      ((and (interaction-succeeded-p interaction)
             (member tool +read-tool-names+ :test #'string=))
        (push (make-source-fact
               :file (%interaction-file interaction)
