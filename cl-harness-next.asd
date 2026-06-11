@@ -38,7 +38,8 @@
                "cl-harness-next/tests/change-ledger-test"
                "cl-harness-next/tests/verification-ledger-test"
                "cl-harness-next/tests/world-model-test"
-               "cl-harness-next/tests/context-compiler-test")
+               "cl-harness-next/tests/context-compiler-test"
+               "cl-harness-next/tests/oracle-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
