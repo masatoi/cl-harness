@@ -24,7 +24,8 @@
   :depends-on ("rove"
                "cl-harness-next"
                "cl-harness-next/tests/main-test"
-               "cl-harness-next/tests/event-test")
+               "cl-harness-next/tests/event-test"
+               "cl-harness-next/tests/event-log-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
