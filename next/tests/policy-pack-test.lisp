@@ -27,7 +27,7 @@
   (ok (equal '(0 1 0) (parse-semver "0.1.0"))))
 
 (deftest semver-rejects-non-semver
-  (dolist (bad '("1.2" "1.2.3.4" "1.2.x" "" "v1.2.3"))
+  (dolist (bad '("1.2" "1.2.3.4" "1.2.x" "" "v1.2.3" "1.2.-3" "+1.2.3" "1. 2.3" " 1.2.3"))
     (ok (handler-case (progn (parse-semver bad) nil)
           (error () t))
         (format nil "~S should not parse" bad))))

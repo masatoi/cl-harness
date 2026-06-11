@@ -3,7 +3,7 @@
 ;;;; Policy pack: the versioned artifact bundle of the redesign
 ;;;; (spec §10.1). Prompts, budgets, oracle profiles, and dial rules
 ;;;; live here as *data*, never code: packs are read with a hardened
-;;;; reader (*READ-EVAL* nil, symbols confined to keywords) and
+;;;; reader (*READ-EVAL* nil, unqualified symbols read as keywords) and
 ;;;; identified by a SHA-256 fingerprint of their canonical form, so
 ;;;; every run can record exactly which pack produced its metrics.
 
@@ -33,11 +33,18 @@
 
 (defun parse-semver (string)
   "Parse a strict \"MAJOR.MINOR.PATCH\" STRING into a list of three
-non-negative integers. Signals an ERROR on anything else."
+non-negative integers. Each part must be plain decimal digits — no
+signs, whitespace, or leading-zero-with-more-digits quirks beyond
+what digits allow. Signals an ERROR on anything else."
   (let ((parts (uiop:split-string string :separator ".")))
     (unless (= 3 (length parts))
       (error "Not a MAJOR.MINOR.PATCH semver string: ~S" string))
-    (mapcar (lambda (part) (parse-integer part)) parts)))
+    (mapcar (lambda (part)
+              (unless (and (plusp (length part))
+                           (every #'digit-char-p part))
+                (error "Not a MAJOR.MINOR.PATCH semver string: ~S" string))
+              (parse-integer part))
+            parts)))
 
 (defun semver< (a b)
   "True when semver string A denotes a strictly older version than B."
@@ -83,7 +90,8 @@ schema-violating pack files."))
   "Read exactly one top-level form from PATH with a hardened reader:
 *READ-EVAL* is NIL (so #. signals at read time) and *PACKAGE* is the
 KEYWORD package, so every unqualified symbol in the file reads as a
-keyword and nothing is interned into code packages. Wraps any reader
+keyword. Package-qualified symbols can still intern into their named package; schema
+validation constrains where non-keywords can appear. Wraps any reader
 failure in POLICY-PACK-INVALID."
   (handler-case
       (with-standard-io-syntax

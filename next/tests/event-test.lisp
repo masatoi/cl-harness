@@ -70,3 +70,7 @@
 (deftest make-event-validates-type
   (ok (handler-case (progn (make-harness-event :bogus nil :seq 1) nil)
         (unknown-event-type () t))))
+
+(deftest unknown-event-type-prints-without-initargs
+  ;; Final-review fix: conditions must print even when constructed bare.
+  (ok (stringp (princ-to-string (make-condition 'unknown-event-type)))))

@@ -35,7 +35,7 @@ detail in payloads, not new types: a patch is an :action, a clean
 verification verdict is an :oracle-result, etc.")
 
 (define-condition unknown-event-type (error)
-  ((name :initarg :name :reader unknown-event-type-name))
+  ((name :initarg :name :initform nil :reader unknown-event-type-name))
   (:report (lambda (condition stream)
              (format stream "Unknown event type ~S (known: ~{~S~^ ~})."
                      (unknown-event-type-name condition)

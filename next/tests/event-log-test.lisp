@@ -104,3 +104,7 @@ not exist yet and is deleted afterwards."
        out))
     (ok (handler-case (progn (read-events path) nil)
           (event-log-parse-error () t)))))
+
+(deftest parse-error-prints-without-initargs
+  ;; Final-review fix: conditions must print even when constructed bare.
+  (ok (stringp (princ-to-string (make-condition 'event-log-parse-error)))))

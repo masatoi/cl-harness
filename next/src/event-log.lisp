@@ -2,8 +2,9 @@
 ;;;;
 ;;;; Append-only JSONL event log — the single source of truth at L0
 ;;;; (spec §8.1). Durability over speed: each emit opens, appends,
-;;;; and closes the file, so a crash never loses an acknowledged
-;;;; event. Projections are built by folding with REPLAY-EVENTS.
+;;;; and closes the file, so a process crash never loses an acknowledged
+;;;; event (no fsync: OS/power failure may tear the final line).
+;;;; Projections are built by folding with REPLAY-EVENTS.
 
 (defpackage #:cl-harness-next/src/event-log
   (:use #:cl)
@@ -27,12 +28,12 @@
 (in-package #:cl-harness-next/src/event-log)
 
 (define-condition event-log-parse-error (error)
-  ((path :initarg :path :reader event-log-parse-error-path)
-   (line-number :initarg :line-number
+  ((path :initarg :path :initform nil :reader event-log-parse-error-path)
+   (line-number :initarg :line-number :initform nil
                 :reader event-log-parse-error-line-number)
-   (cause :initarg :cause :reader event-log-parse-error-cause))
+   (cause :initarg :cause :initform nil :reader event-log-parse-error-cause))
   (:report (lambda (condition stream)
-             (format stream "Malformed event at ~A line ~D: ~A"
+             (format stream "Malformed event at ~A line ~A: ~A"
                      (event-log-parse-error-path condition)
                      (event-log-parse-error-line-number condition)
                      (event-log-parse-error-cause condition))))
@@ -54,8 +55,9 @@ recorded seq, so suspend/resume needs nothing but the log file."
     (make-instance 'event-log :path (pathname path) :next-seq next)))
 
 (defun emit-event (log type payload)
-  "Append a TYPE event carrying PAYLOAD to LOG and return it. The line
-is durably on disk (file closed) before this function returns."
+  "Append a TYPE event carrying PAYLOAD to LOG and return it. The
+line is flushed to the OS (file closed) before this function returns;
+survives process crash, not necessarily power loss."
   (let ((event (make-harness-event type payload
                                    :seq (event-log-next-seq log))))
     (with-open-file (out (event-log-path log)
