@@ -25,7 +25,9 @@ SP1 ships the L0 event log (JSONL event sourcing) and policy pack
 (versioned, fingerprinted prompt/config bundles); SP2 adds the L1
 environment — cl-mcp wrapped as a policy-restricted observation/action
 space (stdio subprocess per run) whose actions and observations are
-recorded into the event log. It does not affect the `cl-harness` CLI.
+recorded into the event log; SP3 adds the L2 world model (projections
+with staleness and derived clean-verify state) and the token-budgeted
+context compiler. It does not affect the `cl-harness` CLI.
 
 ## Quick start
 

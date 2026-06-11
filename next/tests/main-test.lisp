@@ -79,3 +79,44 @@ test; lives here because the test must only use facade symbols."))
       (ok (equal '(:action :observation)
                  (mapcar #'cl-harness-next:event-type
                          (cl-harness-next:read-events log-path)))))))
+
+(deftest world-model-and-context-from-event-log
+  ;; SP3 acceptance: replaying a full synthetic run's event log yields
+  ;; a world model whose compiled views are bounded and annotated
+  ;; (spec §8.2/§8.3; doc §5/§7/§9).
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let ((log (cl-harness-next:open-event-log log-path)))
+      (flet ((emit (type &rest plist)
+               (cl-harness-next:emit-event
+                log type (alexandria:plist-hash-table plist :test #'equal)))
+             (h (&rest plist)
+               (alexandria:plist-hash-table plist :test #'equal)))
+        (emit :run-start "goal" "Fix evict")
+        (emit :decision "kind" "finding" "hypothesis" "ordering bug"
+              "probe" "repl" "finding" "reversed" "decision" "fix it")
+        (emit :action "tool" "repl-eval" "arguments" (h "code" "(evict)"))
+        (emit :observation "tool" "repl-eval" "result" (h "ok" t))
+        (emit :action "tool" "lisp-edit-form"
+              "arguments" (h "file_path" "src/cache.lisp"
+                             "content" "ordering bug fix"))
+        (emit :observation "tool" "lisp-edit-form" "result" (h "ok" t))
+        (emit :action "tool" "pool-kill-worker")
+        (emit :observation "tool" "pool-kill-worker" "result" (h "ok" t))
+        (emit :action "tool" "load-system")
+        (emit :observation "tool" "load-system" "result" (h "ok" t))
+        (emit :action "tool" "run-tests")
+        (emit :observation "tool" "run-tests"
+              "result" (h "passed" 5 "failed" 0))))
+    (let* ((world-model (cl-harness-next:build-world-model log-path))
+           (view (cl-harness-next:compile-context world-model))
+           (small (cl-harness-next:compile-context world-model
+                                                   :token-budget 50)))
+      (ok (cl-harness-next:clean-verified-p
+           (cl-harness-next:world-model-projection world-model
+                                                   :verification)))
+      (ok (search "Fix evict" view))
+      (ok (search "clean-verified: YES" view))
+      (ok (search "[PROMOTED]" view))
+      (ok (search "[STALE]" view))
+      (ok (<= (cl-harness-next:estimate-tokens small) 50)))))

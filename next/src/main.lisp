@@ -90,6 +90,19 @@
                 #:cl-mcp-environment
                 #:make-cl-mcp-environment
                 #:environment-event-log)
+  (:import-from #:cl-harness-next/src/world-model
+                #:world-model
+                #:make-world-model
+                #:make-standard-world-model
+                #:world-model-projection
+                #:world-model-last-seq
+                #:update-world-model
+                #:build-world-model)
+  (:import-from #:cl-harness-next/src/verification-ledger
+                #:clean-verified-p)
+  (:import-from #:cl-harness-next/src/context-compiler
+                #:compile-context
+                #:estimate-tokens)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -173,7 +186,19 @@
            #:environment-event-log
            ;; policy-pack (SP2 additions)
            #:pack-tool-policies
-           #:pack-tool-policy))
+           #:pack-tool-policy
+           ;; world-model
+           #:world-model
+           #:make-world-model
+           #:make-standard-world-model
+           #:world-model-projection
+           #:world-model-last-seq
+           #:update-world-model
+           #:build-world-model
+           #:clean-verified-p
+           ;; context-compiler
+           #:compile-context
+           #:estimate-tokens))
 
 (in-package #:cl-harness-next/src/main)
 
