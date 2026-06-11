@@ -8,7 +8,7 @@
 
 **Tech Stack:** SBCL, rove, alexandria, yason, **dexador + usocket (new top-level deps — return for HTTP LLM traffic)**.
 
-**Conventions** (same as SP1–SP4): 2-space indent, ≤100 cols, blank lines between forms, docstrings, no `:local-nicknames`, conditions get `:initform` on every slot, `%`-internals unexported. cl-mcp tools for Lisp work; `mallet` before commits; tests via `run-tests` `{"system": "cl-harness-next/tests"}`; worker-restart recovery `(asdf:load-asd "/home/wiz/.roswell/local-projects/cl-harness/cl-harness-next.asd")`. Unused test-file imports flagged by mallet get removed (note it). **Adapt-copy honesty valve:** if a pinned test expectation contradicts the verbatim legacy behavior you observe, do NOT weaken the code or silently adjust — report BLOCKED with the discrepancy; the controller arbitrates.
+**Conventions** (same as SP1–SP4): 2-space indent, ≤100 cols, blank lines between forms, docstrings, no `:local-nicknames`, conditions get `:initform` on every slot, `%`-internals unexported. cl-mcp tools for Lisp work; `mallet` before commits; tests via `run-tests` `{"system": "cl-harness-next/tests"}`; worker-restart recovery `(asdf:load-asd "/home/wiz/.roswell/local-projects/cl-harness/cl-harness-next.asd")`. Unused test-file imports flagged by mallet get removed (note it). **Adapt-copy honesty valve:** if a pinned test expectation contradicts the verbatim legacy behavior you observe, do NOT weaken the code or silently adjust — report BLOCKED with the discrepancy; the controller arbitrates. Indexing into yason-parsed JSON arrays must use sequence-generic `elt`, never `first` — the cl-mcp worker sets `yason:*parse-json-arrays-as-vectors*` globally.
 
 ---
 
@@ -106,8 +106,8 @@ Create `next/tests/model-test.lisp`:
                   "m" (list (make-chat-message "user" "hi"))
                   :temperature 0.5 :max-tokens 32))))
     (ok (equal "m" (gethash "model" parsed)))
-    (ok (equal "user" (gethash "role" (first (gethash "messages" parsed)))))
-    (ok (equal "hi" (gethash "content" (first (gethash "messages" parsed)))))
+    (ok (equal "user" (gethash "role" (elt (gethash "messages" parsed) 0))))
+    (ok (equal "hi" (gethash "content" (elt (gethash "messages" parsed) 0))))
     (ok (= 32 (gethash "max_tokens" parsed)))))
 
 (deftest parse-response-extracts-content-and-usage

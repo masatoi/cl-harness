@@ -16,6 +16,8 @@
                "local-time"
                "ironclad"
                "bordeaux-threads"
+               "dexador"
+               "usocket"
                "cl-harness-next/src/main")
   :in-order-to ((test-op (test-op "cl-harness-next/tests"))))
 
@@ -43,7 +45,8 @@
                "cl-harness-next/tests/invariant-oracle-test"
                "cl-harness-next/tests/verification-oracle-test"
                "cl-harness-next/tests/review-oracle-test"
-               "cl-harness-next/tests/governor-test")
+               "cl-harness-next/tests/governor-test"
+               "cl-harness-next/tests/model-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
