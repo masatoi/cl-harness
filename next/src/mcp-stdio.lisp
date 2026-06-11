@@ -23,6 +23,8 @@
                 #:transport-close
                 #:make-mcp-client
                 #:+mcp-protocol-version+)
+  (:import-from #:cl-harness-next/src/json
+                #:parse-json)
   (:export #:stdio-mcp-transport
            #:make-stdio-mcp-transport
            #:make-stdio-mcp-client
@@ -79,7 +81,7 @@ response line arrives."))
 (defun %parse-id-from-body (body)
   "Return the JSON-RPC \"id\" field from a request BODY string, or NIL
 when BODY is a notification."
-  (let ((parsed (yason:parse body)))
+  (let ((parsed (parse-json body)))
     (and (hash-table-p parsed) (gethash "id" parsed))))
 
 (defun %route-response-line (transport line)
@@ -88,7 +90,7 @@ matching its id. Lines without an id and unmatched ids are dropped.
 Parse errors are logged on *ERROR-OUTPUT* and tolerated, so one
 malformed line does not break the reader thread."
   (handler-case
-      (let* ((parsed (yason:parse line))
+      (let* ((parsed (parse-json line))
              (id (and (hash-table-p parsed) (gethash "id" parsed))))
         (when id
           (with-lock-held ((stdio-lock transport))

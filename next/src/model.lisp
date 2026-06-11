@@ -18,6 +18,8 @@
                 #:timeout-error
                 #:connection-refused-error
                 #:socket-error)
+  (:import-from #:cl-harness-next/src/json
+                #:parse-json)
   (:export #:model-provider
            #:openai-compatible-provider
            #:make-openai-provider
@@ -196,7 +198,7 @@ underlying transport raised before producing a status."
      :malformed-response)
     (t
      (handler-case
-         (let ((parsed (yason:parse body)))
+         (let ((parsed (parse-json body)))
            (cond
              ((not (hash-table-p parsed)) :malformed-response)
              ;; OpenAI envelope: defer to chat-parse-response so the
@@ -309,7 +311,7 @@ so callers can intentionally replace, not just augment, defaults."
 
 Signals MODEL-ERROR on an OpenAI error envelope ({\"error\": {...}})."
   (check-type json-string string)
-  (let ((parsed (yason:parse json-string)))
+  (let ((parsed (parse-json json-string)))
     (let ((err (gethash "error" parsed)))
       (when err
         (error 'model-error

@@ -8,6 +8,8 @@
 
 (defpackage #:cl-harness-next/src/mcp-client
   (:use #:cl)
+  (:import-from #:cl-harness-next/src/json
+                #:parse-json)
   (:export #:+mcp-protocol-version+
            #:mcp-error
            #:mcp-error-code
@@ -114,7 +116,7 @@ can encode."
   "Parse a JSON-RPC 2.0 response string and return its RESULT object.
 Signals MCP-ERROR if the response carries an error envelope."
   (check-type json-string string)
-  (let ((parsed (yason:parse json-string)))
+  (let ((parsed (parse-json json-string)))
     (let ((err (gethash "error" parsed)))
       (when err
         (error 'mcp-error

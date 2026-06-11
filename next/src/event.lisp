@@ -8,6 +8,8 @@
 
 (defpackage #:cl-harness-next/src/event
   (:use #:cl)
+  (:import-from #:cl-harness-next/src/json
+                #:parse-json)
   (:export #:+event-types+
            #:unknown-event-type
            #:unknown-event-type-name
@@ -101,7 +103,7 @@ UNKNOWN-EVENT-TYPE when TYPE is not in +EVENT-TYPES+."
 (defun json-string->event (line)
   "Parse one JSONL LINE back into a HARNESS-EVENT. An empty payload
 object decodes as NIL. Signals UNKNOWN-EVENT-TYPE on unknown types."
-  (let ((object (yason:parse line)))
+  (let ((object (parse-json line)))
     (make-instance 'harness-event
                    :seq (gethash "seq" object)
                    :event-type (event-type-keyword (gethash "type" object))

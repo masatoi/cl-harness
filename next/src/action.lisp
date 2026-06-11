@@ -10,6 +10,8 @@
 
 (defpackage #:cl-harness-next/src/action
   (:use #:cl)
+  (:import-from #:cl-harness-next/src/json
+                #:parse-json)
   (:export #:agent-action
            #:agent-action-type
            #:agent-action-tool
@@ -110,7 +112,7 @@ declares an unknown TYPE, or is missing a required field for its variant."
   (check-type text string)
   (let* ((stripped (strip-code-fence text))
          (parsed
-          (handler-case (yason:parse stripped)
+          (handler-case (parse-json stripped)
             (error (c)
               (error 'action-parse-error
                      :message (format nil "JSON decode failed: ~A" c)
