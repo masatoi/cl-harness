@@ -27,7 +27,11 @@ environment — cl-mcp wrapped as a policy-restricted observation/action
 space (stdio subprocess per run) whose actions and observations are
 recorded into the event log; SP3 adds the L2 world model (projections
 with staleness and derived clean-verify state) and the token-budgeted
-context compiler. It does not affect the `cl-harness` CLI.
+context compiler; SP4 adds the L2 oracles
+(verification through the environment, AST invariants, pack-profiled
+LLM review with injected judge) and the governor with
+condition/restart interventions. It does not affect the `cl-harness`
+CLI.
 
 ## Quick start
 

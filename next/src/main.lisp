@@ -103,6 +103,48 @@
   (:import-from #:cl-harness-next/src/context-compiler
                 #:compile-context
                 #:estimate-tokens)
+  (:import-from #:cl-harness-next/src/projection
+                #:projection
+                #:apply-event
+                #:apply-interaction
+                #:result-error-p
+                #:interaction-succeeded-p)
+  (:import-from #:cl-harness-next/src/oracle
+                #:oracle
+                #:oracle-name
+                #:evaluate
+                #:consult
+                #:verdict
+                #:make-verdict
+                #:verdict-oracle
+                #:verdict-pass-p
+                #:verdict-reason)
+  (:import-from #:cl-harness-next/src/invariant-oracle
+                #:invariant-oracle
+                #:oracle-invariants)
+  (:import-from #:cl-harness-next/src/verification-oracle
+                #:verification-oracle
+                #:oracle-system
+                #:oracle-test-system
+                #:oracle-mode)
+  (:import-from #:cl-harness-next/src/review-oracle
+                #:review-oracle
+                #:oracle-profile
+                #:oracle-judge-fn)
+  (:import-from #:cl-harness-next/src/governor
+                #:governor
+                #:governor-action-count
+                #:governor-patch-count
+                #:governor-consecutive-failed-patches
+                #:governor-stalled-verify-cycles
+                #:governor-breaches
+                #:check-governor
+                #:governor-intervention
+                #:progress-stalled
+                #:budget-exhausted
+                #:oracle-conflict
+                #:intervention-governor
+                #:intervention-reason)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -198,7 +240,46 @@
            #:clean-verified-p
            ;; context-compiler
            #:compile-context
-           #:estimate-tokens))
+           #:estimate-tokens
+           ;; projection protocol (SP4 additions)
+           #:projection
+           #:apply-event
+           #:apply-interaction
+           #:result-error-p
+           #:interaction-succeeded-p
+           ;; oracles
+           #:oracle
+           #:oracle-name
+           #:evaluate
+           #:consult
+           #:verdict
+           #:make-verdict
+           #:verdict-oracle
+           #:verdict-pass-p
+           #:verdict-reason
+           #:invariant-oracle
+           #:oracle-invariants
+           #:verification-oracle
+           #:oracle-system
+           #:oracle-test-system
+           #:oracle-mode
+           #:review-oracle
+           #:oracle-profile
+           #:oracle-judge-fn
+           ;; governor
+           #:governor
+           #:governor-action-count
+           #:governor-patch-count
+           #:governor-consecutive-failed-patches
+           #:governor-stalled-verify-cycles
+           #:governor-breaches
+           #:check-governor
+           #:governor-intervention
+           #:progress-stalled
+           #:budget-exhausted
+           #:oracle-conflict
+           #:intervention-governor
+           #:intervention-reason))
 
 (in-package #:cl-harness-next/src/main)
 
