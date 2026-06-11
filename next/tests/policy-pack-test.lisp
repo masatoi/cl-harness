@@ -13,7 +13,12 @@
                 #:policy-pack-invalid
                 #:pack-name
                 #:pack-version
-                #:pack-prompts))
+                #:pack-prompts
+                #:pack-prompt
+                #:pack-budget
+                #:pack-oracle-profile
+                #:pack-dial-rule
+                #:pack-fingerprint))
 
 (in-package #:cl-harness-next/tests/policy-pack-test)
 
@@ -103,3 +108,41 @@
   ;; UNBOUND-SLOT from inside the :report lambda.
   (ok (stringp (princ-to-string
                 (make-condition 'policy-pack-invalid :path "/tmp/x")))))
+
+(deftest accessors-find-entries-by-id
+  (with-pack-file (path *valid-pack-text*)
+    (let ((pack (load-policy-pack path)))
+      (ok (equal "You are the agent." (pack-prompt pack :agent-system)))
+      (ok (= 20 (pack-budget pack :max-turns)))
+      (ok (eq :strict (getf (pack-oracle-profile pack :review-tests)
+                            :strictness)))
+      (ok (eq :scripted (getf (pack-dial-rule pack :default-dial) :value)))
+      (ok (null (pack-prompt pack :no-such-prompt)))
+      (ok (null (pack-budget pack :no-such-budget))))))
+
+(deftest fingerprint-is-sha256-hex
+  (with-pack-file (path *valid-pack-text*)
+    (let ((fingerprint (pack-fingerprint (load-policy-pack path))))
+      (ok (= 64 (length fingerprint)))
+      (ok (every (lambda (c) (digit-char-p c 16)) fingerprint)))))
+
+(deftest fingerprint-stable-across-files
+  (with-pack-file (path-a *valid-pack-text*)
+    (uiop:with-temporary-file (:pathname path-b :type "sexp")
+      (write-pack-file path-b *valid-pack-text*)
+      (ok (equal (pack-fingerprint (load-policy-pack path-a))
+                 (pack-fingerprint (load-policy-pack path-b)))))))
+
+(deftest fingerprint-tracks-content
+  (with-pack-file (path-a *valid-pack-text*)
+    (uiop:with-temporary-file (:pathname path-b :type "sexp")
+      (write-pack-file
+       path-b
+       "(:name \"default\"
+         :version \"0.1.0\"
+         :prompts ((:id :agent-system :text \"You are the agent.\"))
+         :budgets ((:id :max-turns :value 21))
+         :oracle-profiles ((:id :review-tests :strictness :strict))
+         :dial-rules ((:id :default-dial :value :scripted)))")
+      (ok (not (equal (pack-fingerprint (load-policy-pack path-a))
+                      (pack-fingerprint (load-policy-pack path-b))))))))

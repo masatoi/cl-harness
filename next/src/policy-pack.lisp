@@ -128,10 +128,17 @@ rejected to catch typos early."
     form))
 
 (defun %fingerprint (form)
-  "Placeholder until Task 8: canonical-print FORM without hashing."
-  (with-standard-io-syntax
-    (let ((*print-pretty* nil))
-      (prin1-to-string form))))
+  "SHA-256 hex digest of FORM's canonical printed representation.
+Canonical means WITH-STANDARD-IO-SYNTAX, no pretty printing — the
+same parsed content always prints, and therefore hashes, identically.
+SBCL-only via SB-EXT:STRING-TO-OCTETS (project targets SBCL, PRD §9.4)."
+  (let ((canonical (with-standard-io-syntax
+                     (let ((*print-pretty* nil))
+                       (prin1-to-string form)))))
+    (ironclad:byte-array-to-hex-string
+     (ironclad:digest-sequence
+      :sha256
+      (sb-ext:string-to-octets canonical :external-format :utf-8)))))
 
 (defun load-policy-pack (path)
   "Load, validate, and fingerprint the policy pack at PATH. Returns a
@@ -146,3 +153,22 @@ POLICY-PACK. Signals POLICY-PACK-INVALID on read or schema failure."
                    :dial-rules (getf form :dial-rules)
                    :source-path (pathname path)
                    :fingerprint (%fingerprint form))))
+
+(defun %section-entry (entries id)
+  (find id entries :key (lambda (entry) (getf entry :id))))
+
+(defun pack-prompt (pack id)
+  "Return the :text of prompt ID in PACK, or NIL when absent."
+  (getf (%section-entry (pack-prompts pack) id) :text))
+
+(defun pack-budget (pack id)
+  "Return the :value of budget ID in PACK, or NIL when absent."
+  (getf (%section-entry (pack-budgets pack) id) :value))
+
+(defun pack-oracle-profile (pack id)
+  "Return the full plist of oracle profile ID in PACK, or NIL."
+  (%section-entry (pack-oracle-profiles pack) id))
+
+(defun pack-dial-rule (pack id)
+  "Return the full plist of dial rule ID in PACK, or NIL."
+  (%section-entry (pack-dial-rules pack) id))
