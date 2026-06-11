@@ -27,7 +27,9 @@
            #:pack-prompt
            #:pack-budget
            #:pack-oracle-profile
-           #:pack-dial-rule))
+           #:pack-dial-rule
+           #:pack-tool-policies
+           #:pack-tool-policy))
 
 (in-package #:cl-harness-next/src/policy-pack)
 
@@ -55,7 +57,7 @@ what digits allow. Signals an ERROR on anything else."
         finally (return nil)))
 
 (alexandria:define-constant +section-keys+
-    '(:prompts :budgets :oracle-profiles :dial-rules)
+    '(:prompts :budgets :oracle-profiles :dial-rules :tool-policies)
   :test #'equal
   :documentation "Optional pack sections; each is a list of plists
 carrying a keyword :id.")
@@ -80,6 +82,8 @@ schema-violating pack files."))
    (oracle-profiles :initarg :oracle-profiles :initform nil
                     :reader pack-oracle-profiles)
    (dial-rules :initarg :dial-rules :initform nil :reader pack-dial-rules)
+   (tool-policies :initarg :tool-policies :initform nil
+                  :reader pack-tool-policies)
    (source-path :initarg :source-path :initform nil
                 :reader pack-source-path)
    (fingerprint :initarg :fingerprint :reader pack-fingerprint
@@ -159,6 +163,7 @@ POLICY-PACK. Signals POLICY-PACK-INVALID on read or schema failure."
                    :budgets (getf form :budgets)
                    :oracle-profiles (getf form :oracle-profiles)
                    :dial-rules (getf form :dial-rules)
+                   :tool-policies (getf form :tool-policies)
                    :source-path (pathname path)
                    :fingerprint (%fingerprint form))))
 
@@ -180,3 +185,7 @@ POLICY-PACK. Signals POLICY-PACK-INVALID on read or schema failure."
 (defun pack-dial-rule (pack id)
   "Return the full plist of dial rule ID in PACK, or NIL."
   (%section-entry (pack-dial-rules pack) id))
+
+(defun pack-tool-policy (pack id)
+  "Return the full plist of tool policy ID in PACK, or NIL."
+  (%section-entry (pack-tool-policies pack) id))

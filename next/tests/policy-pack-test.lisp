@@ -18,7 +18,8 @@
                 #:pack-budget
                 #:pack-oracle-profile
                 #:pack-dial-rule
-                #:pack-fingerprint))
+                #:pack-fingerprint
+                #:pack-tool-policy))
 
 (in-package #:cl-harness-next/tests/policy-pack-test)
 
@@ -146,3 +147,18 @@
          :dial-rules ((:id :default-dial :value :scripted)))")
       (ok (not (equal (pack-fingerprint (load-policy-pack path-a))
                       (pack-fingerprint (load-policy-pack path-b))))))))
+
+(deftest tool-policies-section-loads
+  (with-pack-file (path "(:name \"x\" :version \"0.1.0\"
+                          :tool-policies ((:id :runtime-native
+                                           :rules (\"fs-*\" \"run-tests\"))))")
+    (let ((pack (load-policy-pack path)))
+      (ok (equal '("fs-*" "run-tests")
+                 (getf (pack-tool-policy pack :runtime-native) :rules)))
+      (ok (null (pack-tool-policy pack :no-such-policy))))))
+
+(deftest tool-policies-entry-needs-id
+  (with-pack-file (path "(:name \"x\" :version \"0.1.0\"
+                          :tool-policies ((:rules (\"fs-*\"))))")
+    (ok (handler-case (progn (load-policy-pack path) nil)
+          (policy-pack-invalid () t)))))
