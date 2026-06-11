@@ -16,6 +16,15 @@ Public CLI surface (`fix` / `bench` / `develop` / `scaffold`) is
 stable. Versioned changes live in `docs/release-notes/`; per-run
 benchmark effect measurements live in `docs/benchmarks/`.
 
+### next/ — autonomous-harness redesign (experimental)
+
+`cl-harness-next` (sources under `next/`) is the greenfield redesign
+substrate from
+`docs/superpowers/specs/2026-06-11-autonomous-harness-redesign-design.md`.
+SP1 ships the L0 event log (JSONL event sourcing) and policy pack
+(versioned, fingerprinted prompt/config bundles). It does not affect
+the `cl-harness` CLI.
+
 ## Quick start
 
 ### Prerequisites

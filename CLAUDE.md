@@ -76,6 +76,7 @@ mallet src/*.lisp
 ```
 cl-harness.asd    ASDF system (package-inferred-system) + tests system
 src/              Implementation (Phase 0: main, config, log, cli)
+next/             Greenfield redesign (system cl-harness-next; spec 2026-06-11)
 tests/            Rove test suites (mirrored naming: *-test.lisp)
 docs/             PRD and design notes (cl-harness-prd.md, ...)
 prompts/          System prompts for AI agents
