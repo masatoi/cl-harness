@@ -26,7 +26,8 @@
                "cl-harness-next/tests/main-test"
                "cl-harness-next/tests/event-test"
                "cl-harness-next/tests/event-log-test"
-               "cl-harness-next/tests/policy-pack-test")
+               "cl-harness-next/tests/policy-pack-test"
+               "cl-harness-next/tests/mcp-client-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
