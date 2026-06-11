@@ -86,8 +86,8 @@ delivered via APPLY-EVENT. Returns WORLD-MODEL."
          (let ((interaction (make-interaction pending event)))
            (%each-projection world-model
                              (lambda (projection)
-                               (apply-interaction projection interaction))))
-         (setf (%pending-action world-model) nil)))))
+                               (apply-interaction projection interaction)))))
+       (setf (%pending-action world-model) nil))))
   (%each-projection world-model
                     (lambda (projection) (apply-event projection event)))
   world-model)

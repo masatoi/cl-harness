@@ -104,3 +104,19 @@
       (ok (= 1 (length (findings (world-model-projection world-model
                                                          :exploration)))))
       (ok (= 4 (world-model-last-seq world-model))))))
+
+(deftest mismatched-observation-clears-pending
+  ;; Final-review fix: a mismatched observation must not leave a stale
+  ;; pending action that pairs with a later same-tool observation.
+  (let* ((counter (make-instance 'counting-projection))
+         (world-model (make-world-model :projections (list :count counter))))
+    (update-world-model world-model
+                        (make-harness-event
+                         :action (%hash "tool" "repl-eval") :seq 1))
+    (update-world-model world-model
+                        (make-harness-event
+                         :observation (%hash "tool" "other") :seq 2))
+    (update-world-model world-model
+                        (make-harness-event
+                         :observation (%hash "tool" "repl-eval") :seq 3))
+    (ok (zerop (counted-interactions counter)))))

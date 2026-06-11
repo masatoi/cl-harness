@@ -2196,3 +2196,11 @@ git commit -m "feat(next): facade exports + SP3 world-model/context acceptance t
   "risk" convention when SP5 needs it.
 - Live incremental wiring of environment → world model (the kernel's
   loop, SP5) — SP3 ships `update-world-model` for it.
+- Findings/Decisions render oldest-first and uncapped, so budget
+  pressure drops the NEWEST entries first (final review Minor #3) —
+  revisit with the role/dial view profiles (SP5/SP6).
+- Within one green run, resolved failures keep active-list order
+  (newest-resolved-first only holds across runs) — cosmetic.
+- Patch entries carry no 変更理由/diff要約 (doc §3.8 fields); add a
+  payload convention (e.g. patch arguments "reason") when SP5's
+  policies start emitting one.

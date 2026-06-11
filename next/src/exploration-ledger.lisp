@@ -58,7 +58,7 @@
            :documentation "PROBE structs, newest first.")
    (invalidation-seq :initform nil :accessor %invalidation-seq
                      :documentation "Seq of the latest successful
-patch or reload; probes before it are stale (§9)."))
+patch, reload, or worker reset; probes before it are stale (§9)."))
   (:documentation "Exploration context (§3.6) with staleness (§9)."))
 
 (defmethod apply-event ((ledger exploration-ledger) event)
@@ -108,12 +108,14 @@ legacy-proven Phase-H heuristic. Idempotent."
         ((member tool +patch-tool-names+ :test #'string=)
          (setf (%invalidation-seq ledger) seq)
          (%promote-matching-findings ledger interaction))
-        ((string= tool "load-system")
+        ((or (string= tool "load-system")
+             (string= tool "pool-kill-worker"))
          (setf (%invalidation-seq ledger) seq)))))
   ledger)
 
 (defun probe-stale-p (probe ledger)
-  "True when PROBE predates the latest successful patch or reload —
+  "True when PROBE predates the latest successful patch, reload, or
+worker reset —
 runtime observations invalidated per §9. Render-time predicate
 (annotate, don't filter)."
   (let ((invalidation (%invalidation-seq ledger)))

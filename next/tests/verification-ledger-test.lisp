@@ -117,3 +117,11 @@
     (ok (null (test-run-passed (last-test ledger))))
     (ok (null (active-failures ledger)))
     (ok (not (clean-verified-p ledger)))))
+
+(deftest unnamed-failures-deduplicate-by-reason
+  ;; Final-review fix: consecutive unstructured red runs must not
+  ;; accumulate one record each.
+  (let ((ledger (make-instance 'verification-ledger)))
+    (%feed ledger "run-tests" 3 :result (%hash "passed" 4 "failed" 2))
+    (%feed ledger "run-tests" 5 :result (%hash "passed" 4 "failed" 2))
+    (ok (= 1 (length (active-failures ledger))))))

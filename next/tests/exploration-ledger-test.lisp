@@ -117,3 +117,12 @@
                           :error "form not found"
                           :observation-seq 6))
     (ok (not (finding-promoted-p (first (findings ledger)))))))
+
+(deftest worker-reset-invalidates-earlier-probes
+  ;; Final-review fix: a fresh worker has none of the probed state, so
+  ;; pool-kill-worker invalidates like a reload does.
+  (let ((ledger (make-instance 'exploration-ledger)))
+    (apply-interaction ledger (%interaction "repl-eval" :observation-seq 3))
+    (apply-interaction ledger (%interaction "pool-kill-worker"
+                                            :observation-seq 4))
+    (ok (probe-stale-p (first (probes ledger)) ledger))))

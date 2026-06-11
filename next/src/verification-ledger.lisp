@@ -79,15 +79,22 @@ successful patch since the load."
       (when (and present-p (integerp value)) value))))
 
 (defun %note-failure (ledger test-name reason seq)
-  "Push an active failure unless the same test name is already active."
-  (unless (and test-name
-               (find test-name (active-failures ledger)
-                     :key #'failure-record-test-name :test #'equal))
-    (push (make-failure-record :test-name test-name
-                               :reason reason
-                               :seq seq
-                               :patch-seq (%patch-seq ledger))
-          (active-failures ledger))))
+  "Push an active failure unless an equivalent one is already active —
+same test name, or same reason for unnamed (unstructured) failures."
+  (let ((duplicate
+          (if test-name
+              (find test-name (active-failures ledger)
+                    :key #'failure-record-test-name :test #'equal)
+              (find-if (lambda (failure)
+                         (and (null (failure-record-test-name failure))
+                              (equal reason (failure-record-reason failure))))
+                       (active-failures ledger)))))
+    (unless duplicate
+      (push (make-failure-record :test-name test-name
+                                 :reason reason
+                                 :seq seq
+                                 :patch-seq (%patch-seq ledger))
+            (active-failures ledger)))))
 
 (defun %resolve-all-failures (ledger seq)
   (dolist (failure (active-failures ledger))
