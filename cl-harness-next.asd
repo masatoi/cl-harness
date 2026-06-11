@@ -46,7 +46,8 @@
                "cl-harness-next/tests/verification-oracle-test"
                "cl-harness-next/tests/review-oracle-test"
                "cl-harness-next/tests/governor-test"
-               "cl-harness-next/tests/model-test")
+               "cl-harness-next/tests/model-test"
+               "cl-harness-next/tests/action-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
