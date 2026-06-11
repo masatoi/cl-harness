@@ -30,8 +30,9 @@ with staleness and derived clean-verify state) and the token-budgeted
 context compiler; SP4 adds the L2 oracles
 (verification through the environment, AST invariants, pack-profiled
 LLM review with injected judge) and the governor with
-condition/restart interventions. It does not affect the `cl-harness`
-CLI.
+condition/restart interventions; SP5a adds LLM connectivity
+(OpenAI-compatible provider, action parser, judge bridge). It does not
+affect the `cl-harness` CLI.
 
 ## Quick start
 

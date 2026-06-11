@@ -328,7 +328,8 @@ Signals MODEL-ERROR on an OpenAI error envelope ({\"error\": {...}})."
         (unless (and (stringp content) (plusp (length content)))
           (error 'model-error
                  :kind :empty-content
-                 :message (format nil "chat response content is empty (finish_reason=~S, total_tokens=~A)"
+                 :message (format nil "chat response content is empty ~
+                                       (finish_reason=~S, total_tokens=~A)"
                                   finish
                                   (let ((usage (gethash "usage" parsed)))
                                     (and usage (gethash "total_tokens" usage))))

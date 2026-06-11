@@ -191,3 +191,45 @@ test (facade symbols only)."))
                                    (declare (ignore condition))
                                    (invoke-restart :ask-human))))
                   (cl-harness-next:check-governor governor))))))))
+
+(deftest sp5a-provider-to-verdict-acceptance
+  ;; SP5a acceptance: a stub LLM provider drives the review oracle to
+  ;; a rejection verdict through the facade alone.
+  (let* ((provider (cl-harness-next:make-openai-provider
+                    :base-url "http://x/v1" :api-key "k" :model "m"
+                    :transport
+                    (lambda (url headers body)
+                      (declare (ignore url headers body))
+                      (values (concatenate
+                               'string
+                               "{\"choices\":[{\"message\":{\"role\":"
+                               "\"assistant\",\"content\":"
+                               "\"REJECT: thin tests\"},"
+                               "\"finish_reason\":\"stop\"}]}")
+                              200 (make-hash-table :test #'equal)))))
+         (judge (cl-harness-next:make-judge-fn provider))
+         (verdict (cl-harness-next:evaluate
+                   (make-instance 'cl-harness-next:review-oracle
+                                  :profile '(:id :review-tests
+                                             :strictness :strict)
+                                  :judge-fn judge)
+                   "the tests")))
+    (ok (not (cl-harness-next:verdict-pass-p verdict)))
+    (ok (search "thin tests" (cl-harness-next:verdict-reason verdict)))))
+
+(deftest real-llm-smoke
+  ;; Opt-in (costs tokens): requires CL_HARNESS_LLM_SMOKE=1 plus the
+  ;; CL_HARNESS_LLM_* endpoint variables.
+  (let ((smoke (uiop:getenv "CL_HARNESS_LLM_SMOKE"))
+        (base-url (uiop:getenv "CL_HARNESS_LLM_BASE_URL"))
+        (api-key (uiop:getenv "CL_HARNESS_LLM_API_KEY"))
+        (model (uiop:getenv "CL_HARNESS_LLM_MODEL")))
+    (if (and (equal smoke "1") base-url api-key model)
+        (let ((response (cl-harness-next:complete-chat
+                         (cl-harness-next:make-openai-provider
+                          :base-url base-url :api-key api-key
+                          :model model :default-max-tokens 32)
+                         (list (cl-harness-next:make-chat-message
+                                "user" "Reply with exactly: PONG")))))
+          (ok (stringp (cl-harness-next:chat-response-content response))))
+        (ok t "skipped real-LLM smoke (set CL_HARNESS_LLM_SMOKE=1 + LLM env vars)"))))

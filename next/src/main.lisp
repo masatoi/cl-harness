@@ -97,7 +97,8 @@
                 #:world-model-projection
                 #:world-model-last-seq
                 #:update-world-model
-                #:build-world-model)
+                #:build-world-model
+                #:refresh-world-model)
   (:import-from #:cl-harness-next/src/verification-ledger
                 #:clean-verified-p)
   (:import-from #:cl-harness-next/src/context-compiler
@@ -145,6 +146,35 @@
                 #:oracle-conflict
                 #:intervention-governor
                 #:intervention-reason)
+  (:import-from #:cl-harness-next/src/model
+                #:model-provider
+                #:openai-compatible-provider
+                #:make-openai-provider
+                #:make-chat-message
+                #:complete-chat
+                #:chat-response
+                #:chat-response-content
+                #:chat-response-role
+                #:chat-response-finish-reason
+                #:chat-response-prompt-tokens
+                #:chat-response-completion-tokens
+                #:chat-response-total-tokens
+                #:model-error
+                #:model-error-message
+                #:model-error-type)
+  (:import-from #:cl-harness-next/src/action
+                #:parse-action
+                #:agent-action
+                #:agent-action-type
+                #:agent-action-tool
+                #:agent-action-arguments
+                #:agent-action-status
+                #:agent-action-summary
+                #:agent-action-thought
+                #:action-parse-error
+                #:action-parse-error-message)
+  (:import-from #:cl-harness-next/src/judge
+                #:make-judge-fn)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -237,6 +267,7 @@
            #:world-model-last-seq
            #:update-world-model
            #:build-world-model
+           #:refresh-world-model
            #:clean-verified-p
            ;; context-compiler
            #:compile-context
@@ -279,7 +310,36 @@
            #:budget-exhausted
            #:oracle-conflict
            #:intervention-governor
-           #:intervention-reason))
+           #:intervention-reason
+           ;; model
+           #:model-provider
+           #:openai-compatible-provider
+           #:make-openai-provider
+           #:make-chat-message
+           #:complete-chat
+           #:chat-response
+           #:chat-response-content
+           #:chat-response-role
+           #:chat-response-finish-reason
+           #:chat-response-prompt-tokens
+           #:chat-response-completion-tokens
+           #:chat-response-total-tokens
+           #:model-error
+           #:model-error-message
+           #:model-error-type
+           ;; action
+           #:parse-action
+           #:agent-action
+           #:agent-action-type
+           #:agent-action-tool
+           #:agent-action-arguments
+           #:agent-action-status
+           #:agent-action-summary
+           #:agent-action-thought
+           #:action-parse-error
+           #:action-parse-error-message
+           ;; judge
+           #:make-judge-fn))
 
 (in-package #:cl-harness-next/src/main)
 
