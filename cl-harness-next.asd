@@ -15,6 +15,7 @@
                "yason"
                "local-time"
                "ironclad"
+               "bordeaux-threads"
                "cl-harness-next/src/main")
   :in-order-to ((test-op (test-op "cl-harness-next/tests"))))
 
@@ -27,7 +28,8 @@
                "cl-harness-next/tests/event-test"
                "cl-harness-next/tests/event-log-test"
                "cl-harness-next/tests/policy-pack-test"
-               "cl-harness-next/tests/mcp-client-test")
+               "cl-harness-next/tests/mcp-client-test"
+               "cl-harness-next/tests/mcp-stdio-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
