@@ -35,3 +35,47 @@
           (ok (equal (cl-harness-next:pack-fingerprint pack)
                      (gethash "pack_fingerprint"
                               (cl-harness-next:event-payload event)))))))))
+
+(defclass %facade-scripted-transport (cl-harness-next:mcp-transport)
+  ()
+  (:documentation "Minimal canned transport for the facade acceptance
+test; lives here because the test must only use facade symbols."))
+
+(defmethod cl-harness-next:transport-send-request
+    ((transport %facade-scripted-transport) body)
+  (let* ((parsed (yason:parse body))
+         (id (gethash "id" parsed))
+         (method (gethash "method" parsed)))
+    (cond
+      ((null id) "")
+      ((equal method "initialize")
+       (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{}}" id))
+      ((equal method "tools/list")
+       (format nil
+               "{\"jsonrpc\":\"2.0\",\"id\":~A,~A}"
+               id
+               "\"result\":{\"tools\":[{\"name\":\"run-tests\"}]}"))
+      ((equal method "tools/call")
+       (format nil
+               "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{\"content\":[]}}"
+               id))
+      (t (error "unexpected method ~S" method)))))
+
+(deftest facade-environment-records-events
+  ;; SP2 acceptance: through the facade alone, wrap an MCP client as a
+  ;; policy-restricted environment and observe the action/observation
+  ;; events land in the L0 log (spec §5 + 原則3).
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((log (cl-harness-next:open-event-log log-path))
+           (env (cl-harness-next:make-cl-mcp-environment
+                 :client (cl-harness-next:make-mcp-client
+                          (make-instance '%facade-scripted-transport))
+                 :condition :file-only
+                 :event-log log)))
+      (cl-harness-next:perform-action env "run-tests"
+                                      (make-hash-table :test #'equal))
+      (cl-harness-next:environment-close env)
+      (ok (equal '(:action :observation)
+                 (mapcar #'cl-harness-next:event-type
+                         (cl-harness-next:read-events log-path)))))))

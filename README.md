@@ -22,8 +22,10 @@ benchmark effect measurements live in `docs/benchmarks/`.
 substrate from
 `docs/superpowers/specs/2026-06-11-autonomous-harness-redesign-design.md`.
 SP1 ships the L0 event log (JSONL event sourcing) and policy pack
-(versioned, fingerprinted prompt/config bundles). It does not affect
-the `cl-harness` CLI.
+(versioned, fingerprinted prompt/config bundles); SP2 adds the L1
+environment — cl-mcp wrapped as a policy-restricted observation/action
+space (stdio subprocess per run) whose actions and observations are
+recorded into the event log. It does not affect the `cl-harness` CLI.
 
 ## Quick start
 

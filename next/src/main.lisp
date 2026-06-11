@@ -51,7 +51,45 @@
                 #:pack-prompt
                 #:pack-budget
                 #:pack-oracle-profile
-                #:pack-dial-rule)
+                #:pack-dial-rule
+                #:pack-tool-policies
+                #:pack-tool-policy)
+  (:import-from #:cl-harness-next/src/mcp-client
+                #:mcp-transport
+                #:transport-send-request
+                #:transport-close
+                #:mcp-client
+                #:make-mcp-client
+                #:mcp-error
+                #:mcp-error-code
+                #:mcp-error-message
+                #:mcp-error-data
+                #:initialize-mcp
+                #:list-tools
+                #:call-tool
+                #:close-mcp-client)
+  (:import-from #:cl-harness-next/src/mcp-stdio
+                #:make-stdio-mcp-client
+                #:stdio-mcp-error
+                #:stdio-mcp-error-message
+                #:*default-stdio-command*)
+  (:import-from #:cl-harness-next/src/action-space
+                #:action-space
+                #:make-action-space
+                #:action-space-mode
+                #:allowed-tools
+                #:action-allowed-p)
+  (:import-from #:cl-harness-next/src/environment
+                #:action-not-allowed
+                #:action-not-allowed-tool
+                #:action-not-allowed-mode
+                #:environment
+                #:environment-action-space
+                #:perform-action
+                #:environment-close
+                #:cl-mcp-environment
+                #:make-cl-mcp-environment
+                #:environment-event-log)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -97,7 +135,45 @@
            #:pack-prompt
            #:pack-budget
            #:pack-oracle-profile
-           #:pack-dial-rule))
+           #:pack-dial-rule
+           ;; mcp
+           #:mcp-transport
+           #:transport-send-request
+           #:transport-close
+           #:mcp-client
+           #:make-mcp-client
+           #:mcp-error
+           #:mcp-error-code
+           #:mcp-error-message
+           #:mcp-error-data
+           #:initialize-mcp
+           #:list-tools
+           #:call-tool
+           #:close-mcp-client
+           #:make-stdio-mcp-client
+           #:stdio-mcp-error
+           #:stdio-mcp-error-message
+           #:*default-stdio-command*
+           ;; action-space
+           #:action-space
+           #:make-action-space
+           #:action-space-mode
+           #:allowed-tools
+           #:action-allowed-p
+           ;; environment
+           #:action-not-allowed
+           #:action-not-allowed-tool
+           #:action-not-allowed-mode
+           #:environment
+           #:environment-action-space
+           #:perform-action
+           #:environment-close
+           #:cl-mcp-environment
+           #:make-cl-mcp-environment
+           #:environment-event-log
+           ;; policy-pack (SP2 additions)
+           #:pack-tool-policies
+           #:pack-tool-policy))
 
 (in-package #:cl-harness-next/src/main)
 
