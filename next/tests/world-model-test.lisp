@@ -25,7 +25,8 @@
                 #:world-model-projection
                 #:world-model-last-seq
                 #:update-world-model
-                #:build-world-model))
+                #:build-world-model
+                #:refresh-world-model))
 
 (in-package #:cl-harness-next/tests/world-model-test)
 
@@ -120,3 +121,33 @@
                         (make-harness-event
                          :observation (%hash "tool" "repl-eval") :seq 3))
     (ok (zerop (counted-interactions counter)))))
+
+(deftest refresh-applies-only-new-events
+  (uiop:with-temporary-file (:pathname path :type "jsonl")
+    (uiop:delete-file-if-exists path)
+    (let ((log (open-event-log path))
+          (counter (make-instance 'counting-projection)))
+      (emit-event log :note nil)
+      (emit-event log :note nil)
+      (let ((world-model (build-world-model
+                          path
+                          :world-model (make-world-model
+                                        :projections (list :count counter)))))
+        (ok (= 2 (counted-events counter)))
+        (emit-event log :note nil)
+        (refresh-world-model world-model path)
+        (ok (= 3 (counted-events counter)))
+        ;; Idempotent: nothing new → nothing re-applied.
+        (refresh-world-model world-model path)
+        (ok (= 3 (counted-events counter)))))))
+
+(deftest refresh-from-scratch-equals-build
+  (uiop:with-temporary-file (:pathname path :type "jsonl")
+    (uiop:delete-file-if-exists path)
+    (let ((log (open-event-log path))
+          (counter (make-instance 'counting-projection)))
+      (emit-event log :note nil)
+      (let ((world-model (make-world-model
+                          :projections (list :count counter))))
+        (refresh-world-model world-model path)
+        (ok (= 1 (counted-events counter)))))))

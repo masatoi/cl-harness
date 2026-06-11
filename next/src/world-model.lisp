@@ -12,6 +12,7 @@
                 #:event-seq
                 #:event-payload)
   (:import-from #:cl-harness-next/src/event-log
+                #:read-events
                 #:replay-events)
   (:import-from #:cl-harness-next/src/projection
                 #:apply-event
@@ -31,7 +32,8 @@
            #:world-model-projection
            #:world-model-last-seq
            #:update-world-model
-           #:build-world-model))
+           #:build-world-model
+           #:refresh-world-model))
 
 (in-package #:cl-harness-next/src/world-model)
 
@@ -99,3 +101,12 @@ delivered via APPLY-EVENT. Returns WORLD-MODEL."
                  (lambda (accumulator event)
                    (update-world-model accumulator event))
                  world-model))
+
+(defun refresh-world-model (world-model log-path)
+  "Fold any events at LOG-PATH newer than WORLD-MODEL's last seen seq.
+This is the kernel's per-step sync: the environment writes to the log,
+the world model catches up from it — the log stays the single source
+of truth (spec §8.1). Returns WORLD-MODEL."
+  (dolist (event (read-events log-path) world-model)
+    (when (> (event-seq event) (world-model-last-seq world-model))
+      (update-world-model world-model event))))
