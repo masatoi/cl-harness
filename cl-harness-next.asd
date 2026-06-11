@@ -35,7 +35,8 @@
                "cl-harness-next/tests/projection-test"
                "cl-harness-next/tests/goal-projection-test"
                "cl-harness-next/tests/exploration-ledger-test"
-               "cl-harness-next/tests/change-ledger-test")
+               "cl-harness-next/tests/change-ledger-test"
+               "cl-harness-next/tests/verification-ledger-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
