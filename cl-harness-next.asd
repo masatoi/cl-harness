@@ -55,7 +55,8 @@
                "cl-harness-next/tests/llm-policies-test"
                "cl-harness-next/tests/adaptive-policy-test"
                "cl-harness-next/tests/mission-test"
-               "cl-harness-next/tests/mission-runner-test")
+               "cl-harness-next/tests/mission-runner-test"
+               "cl-harness-next/tests/bench-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
