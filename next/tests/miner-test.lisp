@@ -15,7 +15,11 @@
                 #:failure-report-tool-errors
                 #:failure-report-dial-demotions
                 #:failure-report-clean-verified-p
-                #:rank-failure-modes))
+                #:failure-report-error-samples
+                #:failure-report-error-argument-samples
+                #:failure-report-give-up-reason
+                #:rank-failure-modes
+                #:summarize-failure-evidence))
 
 (in-package #:cl-harness-next/tests/miner-test)
 
@@ -88,3 +92,55 @@
     (ok (= 4 (cdr (second modes))))
     ;; Zero-count modes are omitted.
     (ok (null (assoc :dial-demotions modes)))))
+
+(deftest mine-collects-diagnose-layer-evidence
+  (let ((report
+          (with-mined-log (report)
+            ;; Two wrong-args failures sharing one error text, one
+            ;; distinct transport error, then the kernel's give-up line.
+            (%emit-interaction log "lisp-patch-form"
+                               :arguments (%hash "file" "src/main.lisp"
+                                                 "patch" "(+ a b)")
+                               :error "file_path is required")
+            (%emit-interaction log "lisp-patch-form"
+                               :arguments (%hash "path" "src/main.lisp")
+                               :error "file_path is required")
+            (%emit-interaction log "repl-eval" :error "boom")
+            (emit-event log :decision
+                        (%hash "kind" "step"
+                               "text" "give-up — diagnose call failed: empty content")))))
+    (ok (equal '(("file_path is required" . 2) ("boom" . 1))
+               (failure-report-error-samples report)))
+    ;; Argument samples capture what the model actually produced.
+    (let ((samples (failure-report-error-argument-samples report)))
+      (ok (= 3 (length samples)))
+      (ok (some (lambda (sample) (search "\"file\"" sample)) samples))
+      (ok (some (lambda (sample) (search "\"path\"" sample)) samples)))
+    (ok (equal "diagnose call failed: empty content"
+               (failure-report-give-up-reason report)))
+    ;; Give-ups surface as a ranked failure mode.
+    (ok (= 1 (cdr (assoc :give-ups
+                         (rank-failure-modes (list report))))))))
+
+(deftest summarize-failure-evidence-renders-and-stays-silent
+  (let ((failing
+          (with-mined-log (report)
+            (%emit-interaction log "lisp-patch-form"
+                               :arguments (%hash "file" "src/main.lisp")
+                               :error "file_path is required")
+            (emit-event log :decision
+                        (%hash "kind" "step"
+                               "text" "give-up — diagnose call failed: empty content"))))
+        (clean
+          (with-mined-log (report)
+            (%emit-interaction log "pool-kill-worker")
+            (%emit-interaction log "load-system")
+            (%emit-interaction log "run-tests"
+                               :result (%hash "passed" 1 "failed" 0)))))
+    (let ((text (summarize-failure-evidence (list failing clean))))
+      (ok (search "file_path is required" text))
+      (ok (search "diagnose call failed: empty content" text))
+      ;; The offending arguments appear as JSON.
+      (ok (search "\"file\"" text)))
+    ;; No evidence → NIL, so callers can skip the prompt section.
+    (ok (null (summarize-failure-evidence (list clean))))))
