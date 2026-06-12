@@ -701,3 +701,12 @@ git commit -m "feat(next): facade exports + SP5a LLM-connectivity acceptance"
   accounting, SP5b+).
 - The legacy test-change-request action variant (returns only if a
   scripted develop policy needs it).
+
+## Final-review minors (recorded 2026-06-12, non-blocking — next touch / SP5b+)
+
+- `%classify-llm-failure` is exported but unused by next/tests (adapt-copy fidelity); drop or test directly.
+- Facade lacks the :finding payload readers (hypothesis/probe/finding/decision); SP5b extends.
+- Dead `(vectorp choices)` branch in `%classify-llm-failure` post parse-json pinning.
+- `refresh-world-model` re-reads the whole log per call — O(n²) per run once the kernel syncs per step; backlog.
+- `verification-oracle` `%result-text` still uses `consp`/`first` (safe via pinning; normalize to one convention).
+- `complete-chat` retry has no backoff even for 429 (legacy fidelity).
