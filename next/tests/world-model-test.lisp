@@ -151,3 +151,10 @@
                           :projections (list :count counter))))
         (refresh-world-model world-model path)
         (ok (= 1 (counted-events counter)))))))
+
+(deftest standard-world-model-accepts-extra-projections
+  (let* ((counter (make-instance 'counting-projection))
+         (world-model (make-standard-world-model
+                       :extra-projections (list :count counter))))
+    (ok (eq counter (world-model-projection world-model :count)))
+    (ok (world-model-projection world-model :goal))))

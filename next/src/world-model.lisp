@@ -49,14 +49,18 @@
   "Build a WORLD-MODEL over PROJECTIONS (a plist of key → projection)."
   (make-instance 'world-model :projections projections))
 
-(defun make-standard-world-model ()
-  "World model with the four standard SP3 projections:
-:goal, :exploration, :changes, :verification."
+(defun make-standard-world-model (&key extra-projections)
+  "World model with the four standard SP3 projections (:goal,
+:exploration, :changes, :verification). EXTRA-PROJECTIONS, a plist of
+key → projection, is prepended — e.g. (:governor g) so the governor's
+counters are folded from the same replayed events."
   (make-world-model
-   :projections (list :goal (make-instance 'goal-projection)
-                      :exploration (make-instance 'exploration-ledger)
-                      :changes (make-instance 'change-ledger)
-                      :verification (make-instance 'verification-ledger))))
+   :projections
+   (append extra-projections
+           (list :goal (make-instance 'goal-projection)
+                 :exploration (make-instance 'exploration-ledger)
+                 :changes (make-instance 'change-ledger)
+                 :verification (make-instance 'verification-ledger)))))
 
 (defun world-model-projection (world-model key)
   "Return the projection registered under KEY, or NIL."
