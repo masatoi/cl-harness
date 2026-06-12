@@ -151,6 +151,11 @@ event and proceed; anything else halts. True when halted."
                               "text" "demoted one dial level")
                         :test #'equal))
            nil)
+          ((:park-mission :ask-human)
+           (setf (kernel-status kernel) :parked
+                 (kernel-reason kernel)
+                 (format nil "governor intervention: ~A" outcome))
+           t)
           (t
            (setf (kernel-status kernel) :given-up
                  (kernel-reason kernel)
@@ -199,7 +204,9 @@ event and proceed; anything else halts. True when halted."
 
 (defun run-kernel (kernel &key (max-steps 50))
   "Drive KERNEL until the policy finishes or gives up, the governor
-intervenes, or MAX-STEPS is exhausted. Returns (values status reason)."
+intervenes (parking on :park-mission/:ask-human), or MAX-STEPS is
+exhausted. Returns (values status reason); status is :done, :parked,
+or :given-up."
   (loop while (and (eq :running (kernel-status kernel))
                    (< (kernel-step-count kernel) max-steps))
         do (kernel-step kernel))

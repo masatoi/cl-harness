@@ -283,7 +283,7 @@ and its observation are recorded into the event log."))
   (declare (ignore condition))
   :park-mission)
 
-(deftest unknown-restart-choice-halts
+(deftest park-restart-parks-the-kernel
   (with-log (log path)
     (declare (ignorable path))
     (let* ((governor (make-instance 'governor
@@ -299,5 +299,31 @@ and its observation are recorded into the event log."))
                                                   :reason "never"))))))
       (apply-interaction governor (%stall-interaction))
       (multiple-value-bind (status reason) (run-kernel kernel)
-        (ok (eq :given-up status))
+        (ok (eq :parked status))
         (ok (search "PARK-MISSION" reason))))))
+
+(defclass replanning-policy (script-policy) ())
+
+(defmethod cl-harness-next/src/kernel:handle-intervention
+    ((policy replanning-policy) condition)
+  (declare (ignore condition))
+  :replan)
+
+(deftest kernel-unhandled-restart-halts
+  (with-log (log path)
+    (declare (ignorable path))
+    (let* ((governor (make-instance 'governor
+                                    :max-stalled-verify-cycles 1))
+           (kernel (make-kernel
+                    :environment (make-instance 'fake-environment :log log)
+                    :event-log log
+                    :governor governor
+                    :policy (make-instance
+                             'replanning-policy
+                             :decisions
+                             (list (make-decision :kind :finish
+                                                  :reason "never"))))))
+      (apply-interaction governor (%stall-interaction))
+      (multiple-value-bind (status reason) (run-kernel kernel)
+        (ok (eq :given-up status))
+        (ok (search "REPLAN" reason))))))

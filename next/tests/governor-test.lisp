@@ -8,8 +8,11 @@
 (defpackage #:cl-harness-next/tests/governor-test
   (:use #:cl #:rove)
   (:import-from #:cl-harness-next/src/projection
+                #:apply-event
                 #:apply-interaction
                 #:interaction)
+  (:import-from #:cl-harness-next/src/event
+                #:make-harness-event)
   (:import-from #:cl-harness-next/src/oracle
                 #:evaluate
                 #:verdict-pass-p
@@ -139,3 +142,17 @@
     (ok (zerop (governor-stalled-verify-cycles governor)))
     (ok (= 2 (governor-action-count governor)))
     (ok (= 1 (governor-patch-count governor)))))
+
+(deftest dial-events-reset-stalls-on-fold
+  ;; SP7 replay coherence (SP6 final-review deferred item): a logged
+  ;; dial demotion grants the fresh stall allowance on replay too.
+  (let ((governor (make-instance 'governor)))
+    (apply-interaction governor (%interaction "run-tests" :seq 1
+                                              :result (%hash "failed" 1)))
+    (ok (= 1 (governor-stalled-verify-cycles governor)))
+    (apply-event governor
+                 (make-harness-event :decision
+                                     (%hash "kind" "dial"
+                                            "text" "demoted")
+                                     :seq 2))
+    (ok (zerop (governor-stalled-verify-cycles governor)))))

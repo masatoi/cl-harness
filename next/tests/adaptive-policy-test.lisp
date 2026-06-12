@@ -12,12 +12,18 @@
                 #:make-cl-mcp-environment)
   (:import-from #:cl-harness-next/src/event-log
                 #:open-event-log
+                #:emit-event
                 #:read-events)
   (:import-from #:cl-harness-next/src/event
                 #:event-type
-                #:event-payload)
+                #:event-payload
+                #:make-harness-event)
+  (:import-from #:cl-harness-next/src/projection
+                #:apply-event)
   (:import-from #:cl-harness-next/src/world-model
-                #:world-model-projection)
+                #:world-model-projection
+                #:make-world-model
+                #:build-world-model)
   (:import-from #:cl-harness-next/src/verification-ledger
                 #:clean-verified-p)
   (:import-from #:cl-harness-next/src/governor
@@ -171,3 +177,41 @@
                           (equal "dial" (gethash "kind"
                                                  (event-payload event)))))
                    (read-events log-path))))))
+
+(defun %dial-event (seq)
+  (make-harness-event :decision
+                      (alexandria:plist-hash-table
+                       (list "kind" "dial" "text" "demoted")
+                       :test #'equal)
+                      :seq seq))
+
+(deftest replay-restores-the-dial-level
+  ;; SP7 resume coherence: a cold rebuild over a log with two dial
+  ;; demotions puts a fresh adaptive policy at level 2.
+  (uiop:with-temporary-file (:pathname path :type "jsonl")
+    (uiop:delete-file-if-exists path)
+    (let ((log (open-event-log path)))
+      (emit-event log :decision
+                  (alexandria:plist-hash-table
+                   (list "kind" "dial" "text" "demoted") :test #'equal))
+      (emit-event log :decision
+                  (alexandria:plist-hash-table
+                   (list "kind" "dial" "text" "demoted") :test #'equal)))
+    (let ((adaptive (make-instance 'adaptive-policy
+                                   :levels (%levels :a :b :c))))
+      (build-world-model path
+                         :world-model (make-world-model
+                                       :projections (list :policy adaptive)))
+      (ok (= 2 (policy-level-index adaptive))))))
+
+(deftest live-demotion-does-not-double-count
+  ;; The imperative demote-time update and the later event fold must
+  ;; agree (absolute derivation, not double increment).
+  (let ((adaptive (make-instance 'adaptive-policy
+                                 :levels (%levels :a :b :c))))
+    (ok (eq :demote-dial
+            (handle-intervention adaptive
+                                 (make-condition 'progress-stalled))))
+    (ok (= 1 (policy-level-index adaptive)))
+    (apply-event adaptive (%dial-event 5))
+    (ok (= 1 (policy-level-index adaptive)))))

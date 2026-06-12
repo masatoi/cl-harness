@@ -13,11 +13,15 @@
   (:use #:cl)
   (:import-from #:cl-harness-next/src/projection
                 #:projection
+                #:apply-event
                 #:apply-interaction
                 #:interaction-tool
                 #:interaction-succeeded-p
                 #:interaction-result
                 #:+patch-tool-names+)
+  (:import-from #:cl-harness-next/src/event
+                #:event-type
+                #:event-payload)
   (:import-from #:cl-harness-next/src/oracle
                 #:oracle
                 #:oracle-name
@@ -187,4 +191,16 @@ already spent stay spent (spec §6.1)."
   (setf (governor-consecutive-failed-patches governor) 0
         (governor-stalled-verify-cycles governor) 0
         (%patched-since-last-verify governor) nil)
+  governor)
+
+(defmethod apply-event ((governor governor) event)
+  "A logged dial demotion grants the next level a fresh stall
+allowance on replay too (SP7 resume coherence). Live runs reset twice
+— imperatively at demote time and again when the dial event folds —
+which is idempotent."
+  (let ((payload (event-payload event)))
+    (when (and (eq :decision (event-type event))
+               (hash-table-p payload)
+               (equal "dial" (gethash "kind" payload)))
+      (reset-governor-progress governor)))
   governor)
