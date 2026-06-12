@@ -7,15 +7,24 @@
 (defpackage #:cl-harness-next/tests/kernel-test
   (:use #:cl #:rove)
   (:import-from #:cl-harness-next/src/event
-                #:event-type)
+                #:event-type
+                #:event-payload)
   (:import-from #:cl-harness-next/src/event-log
                 #:open-event-log
                 #:emit-event
                 #:read-events)
+  (:import-from #:cl-harness-next/src/projection
+                #:apply-interaction
+                #:interaction)
   (:import-from #:cl-harness-next/src/environment
                 #:environment
                 #:perform-action
                 #:environment-close)
+  (:import-from #:cl-harness-next/src/world-model
+                #:world-model-projection)
+  (:import-from #:cl-harness-next/src/exploration-ledger
+                #:findings
+                #:finding-hypothesis)
   (:import-from #:cl-harness-next/src/oracle
                 #:oracle
                 #:oracle-name
@@ -27,8 +36,10 @@
   (:import-from #:cl-harness-next/src/kernel
                 #:control-policy
                 #:decide
+                #:handle-intervention
                 #:make-decision
                 #:make-kernel
+                #:kernel-world-model
                 #:kernel-step-count
                 #:kernel-last-verdict
                 #:kernel-last-result
@@ -203,3 +214,90 @@ and its observation are recorded into the event log."))
       ;; Every step's decision is on the record.
       (ok (= 3 (count :decision (mapcar #'event-type
                                         (read-events path))))))))
+
+(defun %stall-interaction ()
+  (make-instance 'interaction
+                 :tool "run-tests"
+                 :result (%hash "failed" 1)
+                 :action-seq 1 :observation-seq 2))
+
+(deftest record-decision-feeds-the-ledger
+  (with-log (log path)
+    (declare (ignorable path))
+    (let ((kernel (make-kernel
+                   :environment (make-instance 'fake-environment :log log)
+                   :event-log log
+                   :policy (make-instance
+                            'script-policy
+                            :decisions
+                            (list (make-decision
+                                   :kind :record
+                                   :payload (%hash "kind" "finding"
+                                                   "hypothesis" "h"
+                                                   "probe" "p"
+                                                   "finding" "f"
+                                                   "decision" "d")
+                                   :reason "note insight")
+                                  (make-decision :kind :finish
+                                                 :reason "ok"))))))
+      (ok (eq :done (run-kernel kernel)))
+      (let ((ledger (world-model-projection (kernel-world-model kernel)
+                                            :exploration)))
+        (ok (= 1 (length (findings ledger))))
+        (ok (equal "h" (finding-hypothesis (first (findings ledger)))))))))
+
+(defclass demoting-policy (script-policy) ())
+
+(defmethod cl-harness-next/src/kernel:handle-intervention
+    ((policy demoting-policy) condition)
+  (declare (ignore condition))
+  :demote-dial)
+
+(deftest demote-intervention-continues-and-is-recorded
+  (with-log (log path)
+    (let* ((governor (make-instance 'governor
+                                    :max-stalled-verify-cycles 1))
+           (kernel (make-kernel
+                    :environment (make-instance 'fake-environment :log log)
+                    :event-log log
+                    :governor governor
+                    :policy (make-instance
+                             'demoting-policy
+                             :decisions
+                             (list (make-decision :kind :finish
+                                                  :reason "after demote"))))))
+      (apply-interaction governor (%stall-interaction))
+      (multiple-value-bind (status reason) (run-kernel kernel)
+        (ok (eq :done status))
+        (ok (equal "after demote" reason)))
+      (ok (find-if (lambda (event)
+                     (and (eq :decision (event-type event))
+                          (equal "dial" (gethash "kind"
+                                                 (event-payload event)))))
+                   (read-events path))))))
+
+(defclass parking-policy (script-policy) ())
+
+(defmethod cl-harness-next/src/kernel:handle-intervention
+    ((policy parking-policy) condition)
+  (declare (ignore condition))
+  :park-mission)
+
+(deftest unknown-restart-choice-halts
+  (with-log (log path)
+    (declare (ignorable path))
+    (let* ((governor (make-instance 'governor
+                                    :max-stalled-verify-cycles 1))
+           (kernel (make-kernel
+                    :environment (make-instance 'fake-environment :log log)
+                    :event-log log
+                    :governor governor
+                    :policy (make-instance
+                             'parking-policy
+                             :decisions
+                             (list (make-decision :kind :finish
+                                                  :reason "never"))))))
+      (apply-interaction governor (%stall-interaction))
+      (multiple-value-bind (status reason) (run-kernel kernel)
+        (ok (eq :given-up status))
+        (ok (search "PARK-MISSION" reason))))))

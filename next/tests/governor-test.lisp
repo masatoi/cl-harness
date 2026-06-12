@@ -21,6 +21,7 @@
                 #:governor-consecutive-failed-patches
                 #:governor-stalled-verify-cycles
                 #:check-governor
+                #:reset-governor-progress
                 #:progress-stalled
                 #:budget-exhausted
                 #:oracle-conflict
@@ -126,3 +127,15 @@
   (dolist (type '(governor-intervention progress-stalled
                   budget-exhausted oracle-conflict))
     (ok (stringp (princ-to-string (make-condition type))))))
+
+(deftest reset-clears-stalls-but-not-budgets
+  (let ((governor (make-instance 'governor)))
+    (apply-interaction governor (%interaction "lisp-edit-form" :seq 1
+                                              :result (%hash "isError" t)))
+    (apply-interaction governor (%interaction "run-tests" :seq 2
+                                              :result (%hash "failed" 1)))
+    (reset-governor-progress governor)
+    (ok (zerop (governor-consecutive-failed-patches governor)))
+    (ok (zerop (governor-stalled-verify-cycles governor)))
+    (ok (= 2 (governor-action-count governor)))
+    (ok (= 1 (governor-patch-count governor)))))

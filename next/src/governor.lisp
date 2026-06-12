@@ -30,6 +30,7 @@
            #:governor-stalled-verify-cycles
            #:governor-breaches
            #:check-governor
+           #:reset-governor-progress
            #:governor-intervention
            #:progress-stalled
            #:budget-exhausted
@@ -178,3 +179,12 @@ nothing breached or no handler chose a restart."
                 (:abort-run () :abort-run))))
         (unless (eq :continue outcome)
           (return-from check-governor outcome))))))
+
+(defun reset-governor-progress (governor)
+  "Zero the stall counters — NOT the spent budgets. A dial demotion
+grants the new policy a fresh stall allowance; actions and patches
+already spent stay spent (spec §6.1)."
+  (setf (governor-consecutive-failed-patches governor) 0
+        (governor-stalled-verify-cycles governor) 0
+        (%patched-since-last-verify governor) nil)
+  governor)

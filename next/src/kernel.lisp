@@ -23,6 +23,7 @@
                 #:check-governor)
   (:export #:control-policy
            #:decide
+           #:handle-intervention
            #:decision
            #:make-decision
            #:decision-kind
@@ -30,6 +31,7 @@
            #:decision-arguments
            #:decision-oracle
            #:decision-subject
+           #:decision-payload
            #:decision-reason
            #:kernel
            #:make-kernel
@@ -60,13 +62,23 @@ kernel never branches on which one it runs."))
 kernel state (world model, last verdict/result/error) and keep their
 own internal state."))
 
+(defgeneric handle-intervention (policy condition)
+  (:documentation "Choose the restart keyword for a governor
+intervention (spec §11). The CONTROL-POLICY default is the strictest
+stance — abort the run. The adaptive dial overrides this to demote on
+progress stalls.")
+  (:method ((policy control-policy) condition)
+    (declare (ignore condition))
+    :abort-run))
+
 (defstruct (decision (:conc-name decision-))
-  kind        ; :act | :consult | :finish | :give-up
+  kind        ; :act | :consult | :record | :finish | :give-up
   tool        ; for :act — cl-mcp tool name string
   arguments   ; for :act — hash-table or NIL
   oracle      ; for :consult — an oracle instance
   subject     ; for :consult — defaults to the kernel's environment
-  reason)     ; human-readable rationale (recorded; reason on finish/give-up)
+  payload     ; for :record — hash-table for the :decision event
+  reason)     ; human-readable rationale (reason on finish/give-up)
 
 (defclass kernel ()
   ((environment :initarg :environment :reader kernel-environment)
@@ -116,54 +128,71 @@ counters then rebuild from the same log on resume)."
                                     (decision-reason decision)))
                :test #'equal)))
 
-(defun %governor-halt-p (kernel)
-  "Run CHECK-GOVERNOR under the kernel's default stance: any
-intervention invokes :abort-run. True when the run was halted."
+(defun %governor-gate (kernel)
+  "Run CHECK-GOVERNOR, letting the policy choose the restart via
+HANDLE-INTERVENTION. :continue → proceed; :demote-dial → record a dial
+event and proceed; anything else halts. True when halted."
   (let ((governor (kernel-governor kernel)))
     (when governor
-      (let ((outcome (handler-bind ((governor-intervention
-                                      (lambda (condition)
-                                        (declare (ignore condition))
-                                        (invoke-restart :abort-run))))
-                       (check-governor governor))))
-        (unless (eq :continue outcome)
-          (setf (kernel-status kernel) :given-up
-                (kernel-reason kernel)
-                (format nil "governor intervention: ~A" outcome))
-          t)))))
+      (let ((outcome
+              (handler-bind ((governor-intervention
+                               (lambda (condition)
+                                 (invoke-restart
+                                  (handle-intervention
+                                   (kernel-policy kernel)
+                                   condition)))))
+                (check-governor governor))))
+        (case outcome
+          (:continue nil)
+          (:demote-dial
+           (emit-event (kernel-event-log kernel) :decision
+                       (alexandria:plist-hash-table
+                        (list "kind" "dial"
+                              "text" "demoted one dial level")
+                        :test #'equal))
+           nil)
+          (t
+           (setf (kernel-status kernel) :given-up
+                 (kernel-reason kernel)
+                 (format nil "governor intervention: ~A" outcome))
+           t))))))
 
 (defun kernel-step (kernel)
   "One observe → decide → act → record iteration. Returns the status."
   (%refresh kernel)
-  (when (%governor-halt-p kernel)
+  (when (%governor-gate kernel)
     (return-from kernel-step (kernel-status kernel)))
   (let ((decision (decide (kernel-policy kernel) kernel)))
-    (%emit-decision kernel decision)
-    (ecase (decision-kind decision)
-      (:act
-       (setf (kernel-last-action-error kernel) nil)
-       (handler-case
-           (setf (kernel-last-result kernel)
-                 (perform-action (kernel-environment kernel)
-                                 (decision-tool decision)
-                                 (or (decision-arguments decision)
-                                     (make-hash-table :test #'equal))))
-         (error (condition)
-           (setf (kernel-last-result kernel) nil
-                 (kernel-last-action-error kernel)
-                 (format nil "~A" condition)))))
-      (:consult
-       (setf (kernel-last-verdict kernel)
-             (consult (decision-oracle decision)
-                      (or (decision-subject decision)
-                          (kernel-environment kernel))
-                      :event-log (kernel-event-log kernel))))
-      (:finish
-       (setf (kernel-status kernel) :done
-             (kernel-reason kernel) (decision-reason decision)))
-      (:give-up
-       (setf (kernel-status kernel) :given-up
-             (kernel-reason kernel) (decision-reason decision)))))
+    (if (eq :record (decision-kind decision))
+        (emit-event (kernel-event-log kernel) :decision
+                    (decision-payload decision))
+        (progn
+          (%emit-decision kernel decision)
+          (ecase (decision-kind decision)
+            (:act
+             (setf (kernel-last-action-error kernel) nil)
+             (handler-case
+                 (setf (kernel-last-result kernel)
+                       (perform-action (kernel-environment kernel)
+                                       (decision-tool decision)
+                                       (or (decision-arguments decision)
+                                           (make-hash-table :test #'equal))))
+               (error (condition)
+                 (setf (kernel-last-result kernel) nil
+                       (kernel-last-action-error kernel)
+                       (format nil "~A" condition)))))
+            (:consult
+             (setf (kernel-last-verdict kernel)
+                   (consult (decision-oracle decision)
+                            (or (decision-subject decision)
+                                (kernel-environment kernel))
+                            :event-log (kernel-event-log kernel))))
+            (:finish
+             (setf (kernel-status kernel) :done
+                   (kernel-reason kernel) (decision-reason decision)))
+            (:give-up
+             (setf (kernel-status kernel) :given-up
+                   (kernel-reason kernel) (decision-reason decision)))))))
   (incf (kernel-step-count kernel))
   (%refresh kernel)
   (kernel-status kernel))
