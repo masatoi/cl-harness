@@ -107,11 +107,19 @@ envelope on resume (spent budgets replay as spent). Only :created and
                     :governor governor
                     :world-model world-model)))
       (mission-transition mission :running)
-      (multiple-value-bind (status reason)
-          (run-kernel kernel :max-steps max-steps)
-        (ecase status
-          (:done (mission-transition mission :done :reason reason))
-          (:parked (mission-transition mission :parked :reason reason))
-          (:given-up (mission-transition mission :failed
-                                         :reason reason)))
-        (values (mission-status mission) reason)))))
+      (unwind-protect
+           (multiple-value-bind (status reason)
+               (run-kernel kernel :max-steps max-steps)
+             (ecase status
+               (:done (mission-transition mission :done :reason reason))
+               (:parked (mission-transition mission :parked
+                                            :reason reason))
+               (:given-up (mission-transition mission :failed
+                                              :reason reason)))
+             (values (mission-status mission) reason))
+        ;; A non-local exit (an error escaping the kernel, e.g. a
+        ;; policy bug) must not wedge the mission at :running — mark
+        ;; it failed and let the condition propagate.
+        (when (eq :running (mission-status mission))
+          (mission-transition mission :failed
+                              :reason "unhandled error during run"))))))

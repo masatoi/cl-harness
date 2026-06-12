@@ -1032,3 +1032,15 @@ git commit -m "feat(next): facade exports + SP7 mission-queue acceptance"
 - :ask-human as a distinct flow from :park-mission (today both park;
   differentiate when the human port grows a UI).
 - Pack-driven mission construction (budgets/dial from a policy pack).
+
+## Final-review notes (recorded 2026-06-12, non-blocking)
+
+- Fixed pre-merge: run-mission wraps the kernel in unwind-protect — a
+  policy error no longer wedges the mission at :running (it fails
+  loudly and consistently).
+- Repeated futile resumes queue duplicate human requests; dedupe
+  belongs with the deferred :ask-human UI work.
+- Budget gate fires at step start, so envelopes overshoot by one
+  step's actions (documented governor semantics).
+- mission-queue-missions / pending-human-requests return shared list
+  structure (v1 idiom).

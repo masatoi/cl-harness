@@ -19,6 +19,9 @@
                 #:read-events)
   (:import-from #:cl-harness-next/src/governor
                 #:governor)
+  (:import-from #:cl-harness-next/src/kernel
+                #:control-policy
+                #:decide)
   (:import-from #:cl-harness-next/src/scripted-policy
                 #:scripted-fix-policy)
   (:import-from #:cl-harness-next/src/mission
@@ -173,3 +176,25 @@
                                 :policy-factory #'%policy-factory)
                    nil)
           (error () t)))))
+
+(defclass exploding-policy (control-policy) ())
+
+(defmethod decide ((policy exploding-policy) kernel)
+  (declare (ignore kernel))
+  (error "policy bug"))
+
+(deftest policy-errors-fail-the-mission-loudly
+  ;; Final-review fix: a non-local exit must not wedge the mission at
+  ;; :running; the condition still propagates.
+  (with-mission (mission queue)
+    (ok (handler-case
+            (progn (run-mission mission queue
+                                :environment-factory
+                                #'%environment-factory
+                                :policy-factory
+                                (lambda (m)
+                                  (declare (ignore m))
+                                  (make-instance 'exploding-policy)))
+                   nil)
+          (error () t)))
+    (ok (eq :failed (mission-status mission)))))
