@@ -400,8 +400,12 @@ counters then rebuild from the same log on resume)."
                       (when governor (list :governor governor))))))
 
 (defun %refresh (kernel)
-  (refresh-world-model (kernel-world-model kernel)
-                       (event-log-path (kernel-event-log kernel))))
+  ;; The log file is created lazily on first emit; before that there
+  ;; is simply nothing to fold (READ-EVENTS would error on a missing
+  ;; file).
+  (let ((path (event-log-path (kernel-event-log kernel))))
+    (when (probe-file path)
+      (refresh-world-model (kernel-world-model kernel) path))))
 
 (defun %emit-decision (kernel decision)
   (emit-event (kernel-event-log kernel) :decision
