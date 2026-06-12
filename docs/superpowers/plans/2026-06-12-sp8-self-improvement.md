@@ -1259,3 +1259,20 @@ git commit -m "feat(next): facade exports + SP8 self-improvement acceptance"
 - Oracle-profile / dial-rule / tool-policy variant kinds (the pack
   sections exist; extend +promotable-kinds+ and apply-variant when
   evidence calls for them).
+
+## Final-review notes (recorded 2026-06-12, non-blocking)
+
+- Fixed pre-merge: parse-json now also pins yason:*parse-object-key-fn*
+  (the one interning-relevant decoder knob) + hostile-key-fn regression
+  test.
+- Challenger pack files are keyed name-version, not fingerprint —
+  rejected challengers can overwrite; fingerprint-suffix the filename
+  with the dossier-filing work.
+- improve-once should assert audit-log up front for promotable variants
+  (today a missing log errors after trials complete).
+- Unknown-target proposals error loudly out of improve-once (correct);
+  the deferred multi-cycle driver must wrap it.
+- Defaults trials=3 / min-net-wins=2 admit noisy promotions on flaky
+  fixtures — raise :trials for live use until sequential testing lands.
+- mine-transcript double-reads the log; %dial-event-p assumes all dial
+  events are demotions (true today).

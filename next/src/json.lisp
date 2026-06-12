@@ -18,5 +18,7 @@
 arrays, t/nil booleans — immune to ambient yason globals."
   (let ((yason:*parse-json-arrays-as-vectors* nil)
         (yason:*parse-json-booleans-as-symbols* nil)
-        (yason:*parse-object-as* :hash-table))
+        (yason:*parse-object-as* :hash-table)
+        ;; The one interning-relevant decoder knob: keys stay strings.
+        (yason:*parse-object-key-fn* #'identity))
     (yason:parse input)))

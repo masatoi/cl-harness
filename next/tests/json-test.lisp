@@ -43,3 +43,12 @@
                                 "{\"type\":\"tool_call\",\"tool\":\"run-tests\","
                                 "\"arguments\":{\"tests\":[\"t1\",\"t2\"]}}"))))
       (ok (listp (gethash "tests" (agent-action-arguments action)))))))
+
+(deftest object-keys-stay-strings-under-hostile-key-fn
+  ;; SP8 final-review hardening: the one interning-relevant decoder
+  ;; knob is pinned too — an ambient key-fn cannot intern wire keys.
+  (let ((yason:*parse-object-key-fn*
+          (lambda (key) (intern (string-upcase key) :keyword))))
+    (let ((parsed (parse-json "{\"some_wire_key\":1}")))
+      (ok (equal '("some_wire_key")
+                 (alexandria:hash-table-keys parsed))))))
