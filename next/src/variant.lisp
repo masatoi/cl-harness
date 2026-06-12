@@ -153,17 +153,22 @@ variants are applicable; :code variants become human dossiers."
                               (symbol-name (getf entry :id)))
                              (getf entry :value)))))
 
-(defun propose-variant (pack failure-modes propose-fn)
+(defun propose-variant (pack failure-modes propose-fn &key evidence)
   "Ask PROPOSE-FN (prompt → response; build one from a provider with
 MAKE-JUDGE-FN) for ONE pack mutation targeting FAILURE-MODES (the
-miner's ranked alist). Returns a VARIANT or NIL (fail closed)."
+miner's ranked alist). EVIDENCE, when supplied, is the miner's
+SUMMARIZE-FAILURE-EVIDENCE block — concrete error texts and offending
+arguments the ranked counts alone cannot convey. Returns a VARIANT or
+NIL (fail closed)."
   (parse-variant
    (handler-case
        (funcall propose-fn
                 (format nil
                         "You improve a coding-harness policy pack. ~
 Current pack:~%~A~%~%Observed failure modes (count, descending):~%~
-~{- ~A: ~A~%~}~%Respond with EXACTLY one JSON object proposing ~
+~{- ~A: ~A~%~}~
+~@[~%Evidence from the transcripts:~%~A~]~
+~%Respond with EXACTLY one JSON object proposing ~
 exactly ONE change:~%~
 {\"kind\":\"prompt\"|\"budget\",\"target\":\"<entry id>\",~
 \"value\":...,\"hypothesis\":\"...\"}~%~
@@ -173,5 +178,6 @@ code change would help (it will be routed to a human)."
                         (loop for (mode . count) in failure-modes
                               append (list (string-downcase
                                             (symbol-name mode))
-                                           count))))
+                                           count))
+                        evidence))
      (error () (return-from propose-variant nil)))))

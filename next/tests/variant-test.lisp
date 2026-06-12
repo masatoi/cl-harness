@@ -128,3 +128,17 @@
         (ok (search "tool-errors" prompt))
         (ok (search "max-patches" prompt))
         (ok (search "exactly ONE" prompt))))))
+
+(deftest propose-variant-threads-evidence-into-the-prompt
+  (with-pack (pack)
+    (let ((seen nil))
+      (propose-variant pack '((:tool-errors . 3))
+                       (lambda (prompt) (setf seen prompt) "not json")
+                       :evidence "EVIDENCE-MARKER-42")
+      (ok (search "EVIDENCE-MARKER-42" seen))
+      (ok (search "Evidence from the transcripts" seen))
+      ;; Without evidence the section is omitted entirely.
+      (propose-variant pack '((:tool-errors . 3))
+                       (lambda (prompt) (setf seen prompt) "not json"))
+      (ok (not (search "EVIDENCE-MARKER-42" seen)))
+      (ok (not (search "Evidence from the transcripts" seen))))))

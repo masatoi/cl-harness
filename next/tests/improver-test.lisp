@@ -152,3 +152,18 @@
         (ok (search "needs a new oracle" detail))
         ;; The authority boundary: no trials were run for code changes.
         (ok (null (car calls)))))))
+
+(deftest improve-once-feeds-mined-evidence-to-the-proposer
+  (with-improver-fixtures (champion transcript audit-log pack-directory)
+    (let ((seen nil))
+      (improve-once :champion champion
+                    :transcripts (list transcript)
+                    :propose-fn (lambda (prompt)
+                                  (setf seen prompt)
+                                  "no idea")
+                    :trial-fn (%trial-fn '(t) '(t))
+                    :pack-directory pack-directory
+                    :audit-log audit-log)
+      ;; The fixture transcript carries one isError patch failure;
+      ;; its miner-v2 evidence must reach the proposal prompt.
+      (ok (search "(tool reported isError)" seen)))))

@@ -16,7 +16,8 @@
                 #:pack-fingerprint)
   (:import-from #:cl-harness-next/src/miner
                 #:mine-transcript
-                #:rank-failure-modes)
+                #:rank-failure-modes
+                #:summarize-failure-evidence)
   (:import-from #:cl-harness-next/src/variant
                 #:variant-kind
                 #:variant-hypothesis
@@ -86,7 +87,9 @@ PACK-DIRECTORY. Returns (values outcome detail):
 :no-variant + a note (unparseable or absent proposal)."
   (let* ((reports (mapcar #'mine-transcript transcripts))
          (failure-modes (rank-failure-modes reports))
-         (variant (propose-variant champion failure-modes propose-fn)))
+         (variant (propose-variant champion failure-modes propose-fn
+                                   :evidence (summarize-failure-evidence
+                                              reports))))
     (cond
       ((null variant)
        (values :no-variant "proposal was absent or unparseable"))
