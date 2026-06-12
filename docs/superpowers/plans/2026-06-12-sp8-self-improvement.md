@@ -723,9 +723,13 @@ variants are applicable; :code variants become human dossiers."
     (with-standard-io-syntax
       ;; Keywords must keep their ':' prefix on disk (the default
       ;; *package* under standard io syntax guarantees it); pack forms
-      ;; contain only keywords, strings, and numbers.
+      ;; contain only keywords, strings, and numbers. *PRINT-READABLY*
+      ;; must be NIL: under standard io syntax it is T, and SBCL then
+      ;; prints base-strings as #A((5) base-char . "...") which the
+      ;; pack reader rejects.
       (let ((*print-pretty* t)
-            (*print-case* :downcase))
+            (*print-case* :downcase)
+            (*print-readably* nil))
         (prin1 form out))))
   path)
 
