@@ -27,7 +27,8 @@
                 #:kernel-world-model
                 #:run-kernel)
   (:import-from #:cl-harness-next/src/llm-policies
-                #:guided-policy))
+                #:guided-policy
+                #:self-directed-policy))
 
 (in-package #:cl-harness-next/tests/llm-policies-test)
 
@@ -199,3 +200,31 @@
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :given-up status))
       (ok (search "unparseable" reason)))))
+
+(deftest self-directed-happy-path
+  (with-dial-kernel (kernel :policy-class 'self-directed-policy
+                            :responses (list *edit-json* *run-tests-json*
+                                             *finish-json*))
+    (multiple-value-bind (status reason) (run-kernel kernel)
+      (ok (eq :done status))
+      (ok (search "clean" reason)))
+    (ok (clean-verified-p
+         (world-model-projection (kernel-world-model kernel)
+                                 :verification)))))
+
+(deftest self-directed-prompt-has-no-scaffolding
+  (let ((prompts (list nil)))
+    (with-dial-kernel (kernel :policy-class 'self-directed-policy
+                              :responses (list *give-up-json*)
+                              :prompts-box prompts)
+      (ok (eq :given-up (run-kernel kernel)))
+      (let ((prompt (first (car prompts))))
+        (ok (not (search "## Agenda" prompt)))
+        (ok (not (search "## Invariants" prompt)))))))
+
+(deftest self-directed-give-up-passthrough
+  (with-dial-kernel (kernel :policy-class 'self-directed-policy
+                            :responses (list *give-up-json*))
+    (multiple-value-bind (status reason) (run-kernel kernel)
+      (ok (eq :given-up status))
+      (ok (search "stuck" reason)))))

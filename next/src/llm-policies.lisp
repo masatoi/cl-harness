@@ -250,3 +250,16 @@ agenda and invariants; the agent chooses each step."))
                               (subgoal-label subgoal)))
                     (policy-agenda policy))
             (policy-invariants policy))))
+
+;; --- Self-directed dial -----------------------------------------------------
+
+(defclass self-directed-policy (llm-step-policy)
+  ()
+  (:documentation "The self-directed dial (spec §6): the agent owns
+plan and loop; the harness provides only resources, oracles, and
+recording. The clean gate on finish still applies — it is universal."))
+
+(defmethod policy-prompt-sections ((policy self-directed-policy)
+                                   kernel)
+  (declare (ignore kernel))
+  nil)
