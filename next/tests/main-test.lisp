@@ -228,7 +228,7 @@ test (facade symbols only)."))
         (let ((response (cl-harness-next:complete-chat
                          (cl-harness-next:make-openai-provider
                           :base-url base-url :api-key api-key
-                          :model model :default-max-tokens 32)
+                          :model model :max-tokens 32)
                          (list (cl-harness-next:make-chat-message
                                 "user" "Reply with exactly: PONG")))))
           (ok (stringp (cl-harness-next:chat-response-content response))))

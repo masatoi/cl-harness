@@ -1027,3 +1027,16 @@ git commit -m "feat(next): facade exports + SP5b scripted-loop acceptance"
 - Token-usage accounting from chat-response into governor budgets.
 - Oracle-conflict detection now that the kernel sees multiple verdicts
   (SP4 deferred; wire when guided policies consult review oracles).
+
+## Final-review notes (recorded 2026-06-12, non-blocking)
+
+- I1 (fixed pre-merge): SP5a's gated real-llm-smoke used :default-max-tokens
+  (unknown &key, runtime error when enabled) → :max-tokens.
+- M2: non-tool-call rejections report "got NIL"; include the action type.
+- M3: +patch-tool-names+ admits fs-write-file patches though the scripted
+  prompt only offers lisp-edit-form/lisp-patch-form — align in SP6.
+- M4: a "finish/fixed" claim maps to give-up indistinguishably; consider a
+  distinct reason tag.
+- M5: ungoverned stall costs ~17 LLM calls before max-steps(50); production
+  callers should always pass a governor; kernel-step lacks a terminal-status
+  no-op guard.
