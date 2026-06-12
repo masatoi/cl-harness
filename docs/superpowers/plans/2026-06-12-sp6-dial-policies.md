@@ -822,7 +822,7 @@ Extend the test package's llm-policies `:import-from` with
 
 ```lisp
 (deftest self-directed-happy-path
-  (with-dial-kernel (kernel :policy-class ''self-directed-policy
+  (with-dial-kernel (kernel :policy-class 'self-directed-policy
                             :responses (list *edit-json* *run-tests-json*
                                              *finish-json*))
     (multiple-value-bind (status reason) (run-kernel kernel)
@@ -834,7 +834,7 @@ Extend the test package's llm-policies `:import-from` with
 
 (deftest self-directed-prompt-has-no-scaffolding
   (let ((prompts (list nil)))
-    (with-dial-kernel (kernel :policy-class ''self-directed-policy
+    (with-dial-kernel (kernel :policy-class 'self-directed-policy
                               :responses (list *give-up-json*)
                               :prompts-box prompts)
       (ok (eq :given-up (run-kernel kernel)))
@@ -843,7 +843,7 @@ Extend the test package's llm-policies `:import-from` with
         (ok (not (search "## Invariants" prompt)))))))
 
 (deftest self-directed-give-up-passthrough
-  (with-dial-kernel (kernel :policy-class ''self-directed-policy
+  (with-dial-kernel (kernel :policy-class 'self-directed-policy
                             :responses (list *give-up-json*))
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :given-up status))
