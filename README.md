@@ -35,7 +35,9 @@ condition/restart interventions; SP5a adds LLM connectivity
 the L3 kernel (observe→decide→act→record with swappable control
 policies) and the scripted fix policy — the first dial level; SP6
 completes the dial (guided agenda + self-directed + adaptive demotion
-on stalls). It does not affect the `cl-harness` CLI.
+on stalls); SP7 adds the L4 mission layer (queue, suspend/resume from
+the log, async human escalation). It does not affect the `cl-harness`
+CLI.
 
 ## Quick start
 

@@ -226,6 +226,28 @@
                 #:adaptive-policy
                 #:policy-levels
                 #:policy-level-index)
+  (:import-from #:cl-harness-next/src/mission
+                #:mission
+                #:mission-id
+                #:mission-goal
+                #:mission-acceptance-criteria
+                #:mission-non-goals
+                #:mission-log-path
+                #:mission-status
+                #:mission-reason
+                #:mission-queue
+                #:enqueue-mission
+                #:mission-queue-missions
+                #:next-runnable-mission
+                #:pending-human-requests
+                #:resolve-human-request
+                #:human-request
+                #:human-request-mission
+                #:human-request-reason
+                #:human-request-resolved-p
+                #:human-request-response)
+  (:import-from #:cl-harness-next/src/mission-runner
+                #:run-mission)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -442,7 +464,29 @@
            ;; kernel/governor SP6 additions
            #:decision-payload
            #:handle-intervention
-           #:reset-governor-progress))
+           #:reset-governor-progress
+           ;; mission
+           #:mission
+           #:mission-id
+           #:mission-goal
+           #:mission-acceptance-criteria
+           #:mission-non-goals
+           #:mission-log-path
+           #:mission-status
+           #:mission-reason
+           #:mission-queue
+           #:enqueue-mission
+           #:mission-queue-missions
+           #:next-runnable-mission
+           #:pending-human-requests
+           #:resolve-human-request
+           #:human-request
+           #:human-request-mission
+           #:human-request-reason
+           #:human-request-resolved-p
+           #:human-request-response
+           ;; mission-runner
+           #:run-mission))
 
 (in-package #:cl-harness-next/src/main)
 

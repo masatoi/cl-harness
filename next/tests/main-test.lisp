@@ -418,3 +418,73 @@ test (facade symbols only)."))
            (cl-harness-next:world-model-projection
             (cl-harness-next:kernel-world-model kernel)
             :verification))))))
+
+(deftest sp7-mission-queue-acceptance
+  ;; SP7 capstone: two missions in a queue — one completes, one parks
+  ;; on budget exhaustion with a human request; the human resolves and
+  ;; resumes it with a raised envelope; both end :done. All through
+  ;; the facade; resume rebuilds everything from the mission's log.
+  (uiop:with-temporary-file (:pathname log-1 :type "jsonl")
+    (uiop:with-temporary-file (:pathname log-2 :type "jsonl")
+      (uiop:delete-file-if-exists log-1)
+      (uiop:delete-file-if-exists log-2)
+      (let* ((patch-json
+               (concatenate 'string
+                            "{\"type\":\"tool_call\","
+                            "\"tool\":\"lisp-edit-form\","
+                            "\"arguments\":{\"file_path\":\"a.lisp\","
+                            "\"content\":\"fix\"}}"))
+             (environment-factory
+               (lambda (mission log)
+                 (declare (ignore mission))
+                 (cl-harness-next:make-cl-mcp-environment
+                  :client (cl-harness-next:make-mcp-client
+                           (make-instance '%sp5b-fix-transport))
+                  :condition :runtime-native
+                  :event-log log)))
+             (policy-factory
+               (lambda (mission)
+                 (declare (ignore mission))
+                 (make-instance 'cl-harness-next:scripted-fix-policy
+                                :system "s" :test-system "s/tests"
+                                :diagnose-fn (lambda (view)
+                                               (declare (ignore view))
+                                               patch-json))))
+             (queue (make-instance 'cl-harness-next:mission-queue))
+             (m1 (make-instance 'cl-harness-next:mission
+                                :id "m1" :goal "fix one"
+                                :log-path log-1))
+             (m2 (make-instance 'cl-harness-next:mission
+                                :id "m2" :goal "fix two"
+                                :log-path log-2)))
+        (cl-harness-next:enqueue-mission queue m1)
+        (cl-harness-next:enqueue-mission queue m2)
+        (ok (eq :done (cl-harness-next:run-mission
+                       m1 queue
+                       :environment-factory environment-factory
+                       :policy-factory policy-factory)))
+        (ok (eq :parked (cl-harness-next:run-mission
+                         m2 queue
+                         :environment-factory environment-factory
+                         :policy-factory policy-factory
+                         :governor-factory
+                         (lambda (mission)
+                           (declare (ignore mission))
+                           (make-instance 'cl-harness-next:governor
+                                          :max-actions 2)))))
+        (let ((request (first (cl-harness-next:pending-human-requests
+                               queue))))
+          (ok request)
+          (cl-harness-next:resolve-human-request queue request
+                                                 :response "raise"))
+        (ok (eq :done (cl-harness-next:run-mission
+                       m2 queue
+                       :environment-factory environment-factory
+                       :policy-factory policy-factory
+                       :governor-factory
+                       (lambda (mission)
+                         (declare (ignore mission))
+                         (make-instance 'cl-harness-next:governor
+                                        :max-actions 50)))))
+        (ok (eq :done (cl-harness-next:mission-status m2)))
+        (ok (null (cl-harness-next:pending-human-requests queue)))))))
