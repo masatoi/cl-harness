@@ -51,7 +51,8 @@
                "cl-harness-next/tests/judge-test"
                "cl-harness-next/tests/json-test"
                "cl-harness-next/tests/kernel-test"
-               "cl-harness-next/tests/scripted-policy-test")
+               "cl-harness-next/tests/scripted-policy-test"
+               "cl-harness-next/tests/llm-policies-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
