@@ -248,6 +248,42 @@
                 #:human-request-response)
   (:import-from #:cl-harness-next/src/mission-runner
                 #:run-mission)
+  (:import-from #:cl-harness-next/src/bench
+                #:trial
+                #:trial-index
+                #:trial-pack-fingerprint
+                #:trial-success-p
+                #:trial-actions
+                #:trial-reason
+                #:run-paired-trials
+                #:judge-trials)
+  (:import-from #:cl-harness-next/src/miner
+                #:failure-report
+                #:mine-transcript
+                #:failure-report-total-actions
+                #:failure-report-failed-patches
+                #:failure-report-tool-errors
+                #:failure-report-stalled-cycles
+                #:failure-report-dial-demotions
+                #:failure-report-clean-verified-p
+                #:rank-failure-modes)
+  (:import-from #:cl-harness-next/src/variant
+                #:variant
+                #:variant-kind
+                #:variant-target
+                #:variant-value
+                #:variant-hypothesis
+                #:parse-variant
+                #:pack-form
+                #:apply-variant
+                #:write-pack-form
+                #:propose-variant)
+  (:import-from #:cl-harness-next/src/improver
+                #:+promotable-kinds+
+                #:promotable-p
+                #:record-promotion
+                #:format-proposal-dossier
+                #:improve-once)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -486,7 +522,43 @@
            #:human-request-resolved-p
            #:human-request-response
            ;; mission-runner
-           #:run-mission))
+           #:run-mission
+           ;; bench
+           #:trial
+           #:trial-index
+           #:trial-pack-fingerprint
+           #:trial-success-p
+           #:trial-actions
+           #:trial-reason
+           #:run-paired-trials
+           #:judge-trials
+           ;; miner
+           #:failure-report
+           #:mine-transcript
+           #:failure-report-total-actions
+           #:failure-report-failed-patches
+           #:failure-report-tool-errors
+           #:failure-report-stalled-cycles
+           #:failure-report-dial-demotions
+           #:failure-report-clean-verified-p
+           #:rank-failure-modes
+           ;; variant
+           #:variant
+           #:variant-kind
+           #:variant-target
+           #:variant-value
+           #:variant-hypothesis
+           #:parse-variant
+           #:pack-form
+           #:apply-variant
+           #:write-pack-form
+           #:propose-variant
+           ;; improver
+           #:+promotable-kinds+
+           #:promotable-p
+           #:record-promotion
+           #:format-proposal-dossier
+           #:improve-once))
 
 (in-package #:cl-harness-next/src/main)
 

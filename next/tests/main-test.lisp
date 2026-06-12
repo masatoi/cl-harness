@@ -488,3 +488,68 @@ test (facade symbols only)."))
                                         :max-actions 50)))))
         (ok (eq :done (cl-harness-next:mission-status m2)))
         (ok (null (cl-harness-next:pending-human-requests queue)))))))
+
+(deftest sp8-self-improvement-acceptance
+  ;; SP8 capstone: one full improve-once cycle through the facade —
+  ;; mine a real transcript, accept a (canned) LLM budget variant,
+  ;; win the paired trials, promote with an audit event.
+  (uiop:with-temporary-file (:pathname pack-path :type "sexp")
+    (uiop:with-temporary-file (:pathname transcript-path :type "jsonl")
+      (uiop:with-temporary-file (:pathname audit-path :type "jsonl")
+        (uiop:delete-file-if-exists transcript-path)
+        (uiop:delete-file-if-exists audit-path)
+        (with-open-file (out pack-path :direction :output
+                                       :if-exists :supersede
+                                       :external-format :utf-8)
+          (write-string
+           "(:name \"active\" :version \"1.0.0\"
+             :budgets ((:id :max-actions :value 10)))"
+           out))
+        (let ((log (cl-harness-next:open-event-log transcript-path))
+              (champion (cl-harness-next:load-policy-pack pack-path)))
+          (cl-harness-next:emit-event
+           log :action (alexandria:plist-hash-table
+                        (list "tool" "lisp-edit-form") :test #'equal))
+          (cl-harness-next:emit-event
+           log :observation
+           (alexandria:plist-hash-table
+            (list "tool" "lisp-edit-form"
+                  "error" "form not found")
+            :test #'equal))
+          (multiple-value-bind (outcome challenger)
+              (cl-harness-next:improve-once
+               :champion champion
+               :transcripts (list transcript-path)
+               :propose-fn
+               (lambda (prompt)
+                 (declare (ignore prompt))
+                 (concatenate 'string
+                              "{\"kind\":\"budget\","
+                              "\"target\":\"max-actions\","
+                              "\"value\":30,"
+                              "\"hypothesis\":\"verify costs 3\"}"))
+               :trial-fn
+               (lambda (pack index)
+                 (cl-harness-next/src/bench:make-trial
+                  :index index
+                  :pack-fingerprint
+                  (cl-harness-next:pack-fingerprint pack)
+                  :success-p (= 30 (cl-harness-next:pack-budget
+                                    pack :max-actions))
+                  :actions 9))
+               :pack-directory (uiop:pathname-directory-pathname
+                                pack-path)
+               :audit-log (cl-harness-next:open-event-log audit-path)
+               :trials 3)
+            (ok (eq :promoted outcome))
+            (ok (= 30 (cl-harness-next:pack-budget challenger
+                                                   :max-actions)))
+            (ok (find-if
+                 (lambda (event)
+                   (and (eq :decision (cl-harness-next:event-type
+                                       event))
+                        (equal "promotion"
+                               (gethash "kind"
+                                        (cl-harness-next:event-payload
+                                         event)))))
+                 (cl-harness-next:read-events audit-path)))))))))
