@@ -58,7 +58,8 @@
                "cl-harness-next/tests/mission-runner-test"
                "cl-harness-next/tests/bench-test"
                "cl-harness-next/tests/miner-test"
-               "cl-harness-next/tests/variant-test")
+               "cl-harness-next/tests/variant-test"
+               "cl-harness-next/tests/improver-test")
   :perform (test-op (o c)
                     (declare (ignore o))
                     (let ((test-packages
