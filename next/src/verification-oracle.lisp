@@ -19,7 +19,8 @@
   (:export #:verification-oracle
            #:oracle-system
            #:oracle-test-system
-           #:oracle-mode))
+           #:oracle-mode
+           #:oracle-clear-fasls-p))
 
 (in-package #:cl-harness-next/src/verification-oracle)
 
@@ -29,7 +30,15 @@
    (mode :initarg :mode :initform :incremental :reader oracle-mode
          :documentation ":incremental (load+test) or :clean
 (kill+load+test). The subject of EVALUATE is an L1 environment whose
-action space must permit these tools (:runtime-native)."))
+action space must permit these tools (:runtime-native).")
+   (clear-fasls-p :initarg :clear-fasls :initform nil
+                  :reader oracle-clear-fasls-p
+                  :documentation "When true, load-system is asked to
+recompile from source (clear_fasls). Defeats the second-granularity
+file-write-date comparison that lets a same-second source rewrite
+reuse a stale fasl — paired bench trials and zero-latency canned
+policies both hit it. Costs a full recompile per verify; keep it off
+for big systems unless trials demand it."))
   (:documentation "Load/test verification through the L1 environment."))
 
 (defmethod oracle-name ((oracle verification-oracle))
@@ -73,7 +82,9 @@ action space must permit these tools (:runtime-native)."))
                                                   "(no detail)")))))))
         (let ((load-result
                 (perform-action environment "load-system"
-                                (%args "system" (oracle-system oracle)))))
+                                (apply #'%args "system" (oracle-system oracle)
+                                       (when (oracle-clear-fasls-p oracle)
+                                         (list "clear_fasls" t))))))
           (when (%result-error-p load-result)
             (return-from evaluate
               (make-verdict :oracle (oracle-name oracle) :pass-p nil

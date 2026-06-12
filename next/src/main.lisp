@@ -127,7 +127,8 @@
                 #:verification-oracle
                 #:oracle-system
                 #:oracle-test-system
-                #:oracle-mode)
+                #:oracle-mode
+                #:oracle-clear-fasls-p)
   (:import-from #:cl-harness-next/src/review-oracle
                 #:review-oracle
                 #:oracle-profile
@@ -403,6 +404,7 @@
            #:oracle-system
            #:oracle-test-system
            #:oracle-mode
+           #:oracle-clear-fasls-p
            #:review-oracle
            #:oracle-profile
            #:oracle-judge-fn

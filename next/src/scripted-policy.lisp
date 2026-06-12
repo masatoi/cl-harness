@@ -58,28 +58,31 @@ MAKE-JUDGE-FN to build a :diagnose-fn from a provider.")
 
 (defclass scripted-fix-policy (control-policy)
   ((diagnose-fn :initarg :diagnose-fn :reader policy-diagnose-fn
-                :documentation "Function (failure-analysis view string)
+    :documentation "Function (failure-analysis view string)
 → raw LLM response string.")
    (system :initarg :system :reader policy-system)
    (test-system :initarg :test-system :reader policy-test-system)
+   (clear-fasls-p :initarg :clear-fasls :initform nil
+    :reader %clear-fasls-p
+    :documentation "Threaded into both verification oracles — see
+ORACLE-CLEAR-FASLS-P.")
    (state :initform :init :accessor policy-state)
    (incremental-oracle :accessor %incremental-oracle)
    (clean-oracle :accessor %clean-oracle))
   (:documentation "Scripted fix loop (PRD §11.2 distilled): the FSM
 owns WHAT happens next; the LLM only proposes patch content."))
 
-(defmethod initialize-instance :after ((policy scripted-fix-policy)
-                                       &key)
+(defmethod initialize-instance :after ((policy scripted-fix-policy) &key)
   (setf (%incremental-oracle policy)
-        (make-instance 'verification-oracle
-                       :system (policy-system policy)
-                       :test-system (policy-test-system policy)
-                       :mode :incremental)
+          (make-instance 'verification-oracle :system (policy-system policy)
+                         :test-system (policy-test-system policy)
+                         :mode :incremental
+                         :clear-fasls (%clear-fasls-p policy))
         (%clean-oracle policy)
-        (make-instance 'verification-oracle
-                       :system (policy-system policy)
-                       :test-system (policy-test-system policy)
-                       :mode :clean)))
+          (make-instance 'verification-oracle :system (policy-system policy)
+                         :test-system (policy-test-system policy)
+                         :mode :clean
+                         :clear-fasls (%clear-fasls-p policy))))
 
 (defun %give-up (control &rest arguments)
   (make-decision :kind :give-up

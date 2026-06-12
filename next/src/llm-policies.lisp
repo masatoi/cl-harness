@@ -116,6 +116,10 @@ response. Build from a provider with MAKE-JUDGE-FN + the dial's
 system prompt; tests inject canned functions.")
    (system :initarg :system :reader policy-system)
    (test-system :initarg :test-system :reader policy-test-system)
+   (clear-fasls-p :initarg :clear-fasls :initform nil
+                  :reader %clear-fasls-p
+                  :documentation "Threaded into the clean oracle — see
+ORACLE-CLEAR-FASLS-P.")
    (state :initform :stepping :accessor %policy-state)
    (clean-oracle :accessor %clean-oracle))
   (:documentation "Shared LLM-per-step loop for the guided and
@@ -126,7 +130,8 @@ self-directed dials, with the mandatory clean gate on finish."))
         (make-instance 'verification-oracle
                        :system (policy-system policy)
                        :test-system (policy-test-system policy)
-                       :mode :clean)))
+                       :mode :clean
+                       :clear-fasls (%clear-fasls-p policy))))
 
 (defgeneric policy-prompt-sections (policy kernel)
   (:documentation "Dial-specific prompt sections rendered above the

@@ -27,7 +27,11 @@
                 #:kernel-world-model
                 #:run-kernel)
   (:import-from #:cl-harness-next/src/scripted-policy
-                #:scripted-fix-policy))
+                #:scripted-fix-policy
+                #:%incremental-oracle
+                #:%clean-oracle)
+  (:import-from #:cl-harness-next/src/verification-oracle
+                #:oracle-clear-fasls-p))
 
 (in-package #:cl-harness-next/tests/scripted-policy-test)
 
@@ -155,3 +159,14 @@ green (stall scenarios).")
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :given-up status))
       (ok (search "governor" reason)))))
+
+(deftest clear-fasls-threads-to-both-oracles
+  (let ((policy (make-instance 'scripted-fix-policy
+                               :system "s" :test-system "s/tests"
+                               :clear-fasls t)))
+    (ok (oracle-clear-fasls-p (%incremental-oracle policy)))
+    (ok (oracle-clear-fasls-p (%clean-oracle policy))))
+  ;; Default stays off.
+  (let ((policy (make-instance 'scripted-fix-policy
+                               :system "s" :test-system "s/tests")))
+    (ok (not (oracle-clear-fasls-p (%incremental-oracle policy))))))

@@ -39,7 +39,10 @@
 (defclass tool-scripted-transport (mcp-transport)
   ((responses :initarg :responses :reader tool-responses
               :documentation "Alist tool-name → result JSON object text.")
-   (calls :initform nil :accessor tool-calls)))
+   (calls :initform nil :accessor tool-calls)
+   (call-arguments :initform nil :accessor tool-call-arguments
+                   :documentation "Alist tool-name → arguments hash,
+push-down order (most recent first).")))
 
 (defmethod transport-send-request ((transport tool-scripted-transport)
                                    body)
@@ -60,6 +63,8 @@
               (entry (assoc tool (tool-responses transport)
                             :test #'string=)))
          (push tool (tool-calls transport))
+         (push (cons tool (gethash "arguments" (gethash "params" parsed)))
+               (tool-call-arguments transport))
          (unless entry (error "no canned response for tool ~S" tool))
          (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":~A}"
                  id (cdr entry))))
@@ -156,3 +161,37 @@
       (ok (not (clean-verified-p
                 (world-model-projection (build-world-model path)
                                         :verification)))))))
+
+(deftest clear-fasls-flag-reaches-load-system
+  ;; The permanent fix for the second-granularity stale-fasl artifacts
+  ;; seen in the live bench (forever-red / free-green): :clear-fasls
+  ;; forces full recompilation on every oracle load.
+  (let* ((transport (make-instance 'tool-scripted-transport
+                                   :responses *green-responses*))
+         (environment (make-cl-mcp-environment
+                       :client (make-mcp-client transport)
+                       :condition :runtime-native))
+         (verdict (evaluate (make-instance 'verification-oracle
+                                           :system "s"
+                                           :test-system "s/tests"
+                                           :mode :clean
+                                           :clear-fasls t)
+                            environment)))
+    (ok (verdict-pass-p verdict))
+    (let ((load-arguments (cdr (assoc "load-system"
+                                      (tool-call-arguments transport)
+                                      :test #'string=))))
+      (ok (gethash "clear_fasls" load-arguments)))))
+
+(deftest clear-fasls-defaults-off
+  (let* ((transport (make-instance 'tool-scripted-transport
+                                   :responses *green-responses*))
+         (environment (make-cl-mcp-environment
+                       :client (make-mcp-client transport)
+                       :condition :runtime-native)))
+    (evaluate (%oracle) environment)
+    (let ((load-arguments (cdr (assoc "load-system"
+                                      (tool-call-arguments transport)
+                                      :test #'string=))))
+      ;; The key must be absent, not false — wire compatibility.
+      (ok (null (nth-value 1 (gethash "clear_fasls" load-arguments)))))))

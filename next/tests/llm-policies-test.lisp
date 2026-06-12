@@ -28,7 +28,10 @@
                 #:run-kernel)
   (:import-from #:cl-harness-next/src/llm-policies
                 #:guided-policy
-                #:self-directed-policy))
+                #:self-directed-policy
+                #:%clean-oracle)
+  (:import-from #:cl-harness-next/src/verification-oracle
+                #:oracle-clear-fasls-p))
 
 (in-package #:cl-harness-next/tests/llm-policies-test)
 
@@ -241,3 +244,15 @@
     (ok (equal "s/tests"
                (cl-harness-next/src/scripted-policy:policy-test-system
                 policy)))))
+
+(deftest clear-fasls-threads-to-the-clean-oracle
+  (let ((policy (make-instance 'guided-policy
+                               :system "s" :test-system "s/tests"
+                               :step-fn (constantly "")
+                               :clear-fasls t)))
+    (ok (oracle-clear-fasls-p (%clean-oracle policy))))
+  ;; Default stays off.
+  (let ((policy (make-instance 'self-directed-policy
+                               :system "s" :test-system "s/tests"
+                               :step-fn (constantly ""))))
+    (ok (not (oracle-clear-fasls-p (%clean-oracle policy))))))
