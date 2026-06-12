@@ -228,3 +228,16 @@
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :given-up status))
       (ok (search "stuck" reason)))))
+
+(deftest shared-policy-readers-dispatch-across-dials
+  ;; Final-review fix: policy-system/policy-test-system are ONE
+  ;; generic shared with scripted-policy (facade symbol identity),
+  ;; so the facade reader works on every dial level.
+  (let ((policy (make-instance 'guided-policy
+                               :system "s" :test-system "s/tests"
+                               :step-fn (constantly ""))))
+    (ok (equal "s" (cl-harness-next/src/scripted-policy:policy-system
+                    policy)))
+    (ok (equal "s/tests"
+               (cl-harness-next/src/scripted-policy:policy-test-system
+                policy)))))

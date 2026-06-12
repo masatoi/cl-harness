@@ -1354,3 +1354,21 @@ git commit -m "feat(next): facade exports + SP6 adaptive-dial acceptance"
 - Oracle advisory-vs-blocking wiring per dial beyond the universal
   clean gate (review oracles consulted by guided policies) — wire when
   a consumer needs it.
+
+## Final-review notes (recorded 2026-06-12, non-blocking)
+
+- Fixed pre-merge: llm-policies now imports policy-system/policy-test-system
+  from scripted-policy (one shared generic; facade readers dispatch on all
+  dials).
+- Deferred to SP7 (resume semantics): reset-governor-progress and the
+  adaptive level-index are imperative, not log-derived — a cold
+  build-world-model over an adaptive run reconstructs breached counters and
+  level 0. Natural fix: governor consumes the logged "dial" decision events
+  in apply-event; level-index derived from their count.
+- Dial events carry no from/to level identity — add for §6.2 ablation
+  analysis when L5 mines transcripts.
+- Prompt-construction errors are reported as "step call failed" —
+  misattributes harness-author predicate bugs to the LLM; split the reason.
+- Cosmetics: unknown-restart-choice-halts test name (kernel-unhandled, not
+  unknown); %give-up duplicated across policy files; garbled comment in
+  adaptive-policy-test.

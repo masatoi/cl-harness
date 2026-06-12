@@ -18,6 +18,9 @@
                 #:kernel-last-verdict
                 #:kernel-last-action-error
                 #:kernel-world-model)
+  (:import-from #:cl-harness-next/src/scripted-policy
+                #:policy-system
+                #:policy-test-system)
   (:import-from #:cl-harness-next/src/oracle
                 #:verdict-pass-p)
   (:import-from #:cl-harness-next/src/verification-oracle
