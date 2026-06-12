@@ -145,7 +145,8 @@
                 #:budget-exhausted
                 #:oracle-conflict
                 #:intervention-governor
-                #:intervention-reason)
+                #:intervention-reason
+                #:reset-governor-progress)
   (:import-from #:cl-harness-next/src/model
                 #:model-provider
                 #:openai-compatible-provider
@@ -185,6 +186,7 @@
                 #:decision-arguments
                 #:decision-oracle
                 #:decision-subject
+                #:decision-payload
                 #:decision-reason
                 #:kernel
                 #:make-kernel
@@ -200,13 +202,30 @@
                 #:kernel-last-result
                 #:kernel-last-action-error
                 #:kernel-step
-                #:run-kernel)
+                #:run-kernel
+                #:handle-intervention)
   (:import-from #:cl-harness-next/src/scripted-policy
                 #:scripted-fix-policy
                 #:policy-state
                 #:policy-system
                 #:policy-test-system
                 #:+scripted-fix-system-prompt+)
+  (:import-from #:cl-harness-next/src/llm-policies
+                #:llm-step-policy
+                #:guided-policy
+                #:self-directed-policy
+                #:policy-agenda
+                #:policy-invariants
+                #:make-subgoal
+                #:subgoal-label
+                #:subgoal-predicate
+                #:default-fix-agenda
+                #:+guided-system-prompt+
+                #:+self-directed-system-prompt+)
+  (:import-from #:cl-harness-next/src/adaptive-policy
+                #:adaptive-policy
+                #:policy-levels
+                #:policy-level-index)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -403,7 +422,27 @@
            #:policy-state
            #:policy-system
            #:policy-test-system
-           #:+scripted-fix-system-prompt+))
+           #:+scripted-fix-system-prompt+
+           ;; llm-policies
+           #:llm-step-policy
+           #:guided-policy
+           #:self-directed-policy
+           #:policy-agenda
+           #:policy-invariants
+           #:make-subgoal
+           #:subgoal-label
+           #:subgoal-predicate
+           #:default-fix-agenda
+           #:+guided-system-prompt+
+           #:+self-directed-system-prompt+
+           ;; adaptive
+           #:adaptive-policy
+           #:policy-levels
+           #:policy-level-index
+           ;; kernel/governor SP6 additions
+           #:decision-payload
+           #:handle-intervention
+           #:reset-governor-progress))
 
 (in-package #:cl-harness-next/src/main)
 

@@ -326,3 +326,95 @@ test (facade symbols only)."))
            (cl-harness-next:world-model-projection
             (cl-harness-next:kernel-world-model kernel)
             :verification))))))
+
+(defclass %sp6-stall-transport (cl-harness-next:mcp-transport)
+  ((fixed-p :initform nil :accessor %sp6-fixed-p)))
+
+(defmethod cl-harness-next:transport-send-request
+    ((transport %sp6-stall-transport) body)
+  (let* ((parsed (yason:parse body))
+         (id (gethash "id" parsed))
+         (method (gethash "method" parsed)))
+    (cond
+      ((null id) "")
+      ((equal method "initialize")
+       (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{}}" id))
+      ((equal method "tools/list")
+       (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,~A}" id
+               (concatenate 'string
+                            "\"result\":{\"tools\":["
+                            "{\"name\":\"pool-kill-worker\"},"
+                            "{\"name\":\"load-system\"},"
+                            "{\"name\":\"run-tests\"},"
+                            "{\"name\":\"lisp-edit-form\"},"
+                            "{\"name\":\"lisp-patch-form\"}]}")))
+      ((equal method "tools/call")
+       (let ((tool (gethash "name" (gethash "params" parsed))))
+         (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":~A}" id
+                 (cond
+                   ((equal tool "lisp-edit-form")
+                    "{\"isError\":true,\"content\":[]}")
+                   ((equal tool "lisp-patch-form")
+                    (setf (%sp6-fixed-p transport) t)
+                    "{\"content\":[]}")
+                   ((equal tool "run-tests")
+                    (if (%sp6-fixed-p transport)
+                        "{\"passed\":3,\"failed\":0}"
+                        "{\"passed\":2,\"failed\":1}"))
+                   (t "{\"content\":[]}")))))
+      (t (error "unexpected method ~S" method)))))
+
+(deftest sp6-adaptive-dial-acceptance
+  ;; SP6 capstone: a self-directed level stalls on failing patches,
+  ;; the adaptive dial demotes to scripted (same world model), which
+  ;; fixes and clean-verifies — entirely through the facade.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((edit-json
+             (concatenate 'string
+                          "{\"type\":\"tool_call\","
+                          "\"tool\":\"lisp-edit-form\","
+                          "\"arguments\":{\"file_path\":\"a.lisp\","
+                          "\"content\":\"x\"}}"))
+           (patch-json
+             (concatenate 'string
+                          "{\"type\":\"tool_call\","
+                          "\"tool\":\"lisp-patch-form\","
+                          "\"arguments\":{\"file_path\":\"a.lisp\","
+                          "\"old_text\":\"a\",\"new_text\":\"b\"}}"))
+           (log (cl-harness-next:open-event-log log-path))
+           (environment (cl-harness-next:make-cl-mcp-environment
+                         :client (cl-harness-next:make-mcp-client
+                                  (make-instance '%sp6-stall-transport))
+                         :condition :runtime-native
+                         :event-log log))
+           (kernel (cl-harness-next:make-kernel
+                    :environment environment
+                    :event-log log
+                    :governor (make-instance
+                               'cl-harness-next:governor
+                               :max-consecutive-failed-patches 2)
+                    :policy (make-instance
+                             'cl-harness-next:adaptive-policy
+                             :levels
+                             (list (make-instance
+                                    'cl-harness-next:self-directed-policy
+                                    :system "s" :test-system "s/tests"
+                                    :step-fn (lambda (prompt)
+                                               (declare (ignore prompt))
+                                               edit-json))
+                                   (make-instance
+                                    'cl-harness-next:scripted-fix-policy
+                                    :system "s" :test-system "s/tests"
+                                    :diagnose-fn
+                                    (lambda (view)
+                                      (declare (ignore view))
+                                      patch-json)))))))
+      (multiple-value-bind (status reason)
+          (cl-harness-next:run-kernel kernel)
+        (ok (eq :done status))
+        (ok (search "clean" reason)))
+      (ok (cl-harness-next:clean-verified-p
+           (cl-harness-next:world-model-projection
+            (cl-harness-next:kernel-world-model kernel)
+            :verification))))))
