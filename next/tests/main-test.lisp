@@ -233,3 +233,96 @@ test (facade symbols only)."))
                                 "user" "Reply with exactly: PONG")))))
           (ok (stringp (cl-harness-next:chat-response-content response))))
         (ok t "skipped real-LLM smoke (set CL_HARNESS_LLM_SMOKE=1 + LLM env vars)"))))
+
+(defclass %sp5b-fix-transport (cl-harness-next:mcp-transport)
+  ((fixed-p :initform nil :accessor %sp5b-fixed-p)))
+
+(defmethod cl-harness-next:transport-send-request
+    ((transport %sp5b-fix-transport) body)
+  (let* ((parsed (yason:parse body))
+         (id (gethash "id" parsed))
+         (method (gethash "method" parsed)))
+    (cond
+      ((null id) "")
+      ((equal method "initialize")
+       (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":{}}" id))
+      ((equal method "tools/list")
+       (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,~A}" id
+               (concatenate 'string
+                            "\"result\":{\"tools\":["
+                            "{\"name\":\"pool-kill-worker\"},"
+                            "{\"name\":\"load-system\"},"
+                            "{\"name\":\"run-tests\"},"
+                            "{\"name\":\"lisp-edit-form\"}]}")))
+      ((equal method "tools/call")
+       (let ((tool (gethash "name" (gethash "params" parsed))))
+         (format nil "{\"jsonrpc\":\"2.0\",\"id\":~A,\"result\":~A}" id
+                 (cond
+                   ((equal tool "lisp-edit-form")
+                    (setf (%sp5b-fixed-p transport) t)
+                    "{\"content\":[]}")
+                   ((equal tool "run-tests")
+                    (if (%sp5b-fixed-p transport)
+                        "{\"passed\":3,\"failed\":0}"
+                        "{\"passed\":2,\"failed\":1}"))
+                   (t "{\"content\":[]}")))))
+      (t (error "unexpected method ~S" method)))))
+
+(deftest sp5b-scripted-loop-acceptance
+  ;; SP5 capstone: a (stub) LLM provider drives the scripted policy
+  ;; through the kernel over a real environment — red, one patch,
+  ;; green, clean-verified — entirely through the facade.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((patch-json
+             (concatenate 'string
+                          "{\"type\":\"tool_call\","
+                          "\"tool\":\"lisp-edit-form\","
+                          "\"arguments\":{\"file_path\":\"a.lisp\","
+                          "\"content\":\"(defun f () 1)\"}}"))
+           (provider
+             (cl-harness-next:make-openai-provider
+              :base-url "http://x/v1" :api-key "k" :model "m"
+              :transport
+              (lambda (url headers body)
+                (declare (ignore url headers body))
+                (values (with-output-to-string (out)
+                          (yason:encode
+                           (alexandria:plist-hash-table
+                            (list "choices"
+                                  (list (alexandria:plist-hash-table
+                                         (list "message"
+                                               (alexandria:plist-hash-table
+                                                (list "role" "assistant"
+                                                      "content" patch-json)
+                                                :test #'equal)
+                                               "finish_reason" "stop")
+                                         :test #'equal)))
+                            :test #'equal)
+                           out))
+                        200 (make-hash-table :test #'equal)))))
+           (log (cl-harness-next:open-event-log log-path))
+           (environment (cl-harness-next:make-cl-mcp-environment
+                         :client (cl-harness-next:make-mcp-client
+                                  (make-instance '%sp5b-fix-transport))
+                         :condition :runtime-native
+                         :event-log log))
+           (kernel (cl-harness-next:make-kernel
+                    :environment environment
+                    :event-log log
+                    :policy (make-instance
+                             'cl-harness-next:scripted-fix-policy
+                             :system "s" :test-system "s/tests"
+                             :diagnose-fn
+                             (cl-harness-next:make-judge-fn
+                              provider
+                              :system-prompt
+                              cl-harness-next:+scripted-fix-system-prompt+)))))
+      (multiple-value-bind (status reason)
+          (cl-harness-next:run-kernel kernel)
+        (ok (eq :done status))
+        (ok (search "clean" reason)))
+      (ok (cl-harness-next:clean-verified-p
+           (cl-harness-next:world-model-projection
+            (cl-harness-next:kernel-world-model kernel)
+            :verification))))))

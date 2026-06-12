@@ -175,6 +175,38 @@
                 #:action-parse-error-message)
   (:import-from #:cl-harness-next/src/judge
                 #:make-judge-fn)
+  (:import-from #:cl-harness-next/src/kernel
+                #:control-policy
+                #:decide
+                #:decision
+                #:make-decision
+                #:decision-kind
+                #:decision-tool
+                #:decision-arguments
+                #:decision-oracle
+                #:decision-subject
+                #:decision-reason
+                #:kernel
+                #:make-kernel
+                #:kernel-environment
+                #:kernel-event-log
+                #:kernel-world-model
+                #:kernel-policy
+                #:kernel-governor
+                #:kernel-status
+                #:kernel-reason
+                #:kernel-step-count
+                #:kernel-last-verdict
+                #:kernel-last-result
+                #:kernel-last-action-error
+                #:kernel-step
+                #:run-kernel)
+  (:import-from #:cl-harness-next/src/scripted-policy
+                #:scripted-fix-policy
+                #:policy-state
+                #:policy-system
+                #:policy-test-system
+                #:+scripted-fix-system-prompt+)
   (:export #:substrate-version
            ;; event
            #:+event-types+
@@ -339,7 +371,39 @@
            #:action-parse-error
            #:action-parse-error-message
            ;; judge
-           #:make-judge-fn))
+           #:make-judge-fn
+           ;; kernel
+           #:control-policy
+           #:decide
+           #:decision
+           #:make-decision
+           #:decision-kind
+           #:decision-tool
+           #:decision-arguments
+           #:decision-oracle
+           #:decision-subject
+           #:decision-reason
+           #:kernel
+           #:make-kernel
+           #:kernel-environment
+           #:kernel-event-log
+           #:kernel-world-model
+           #:kernel-policy
+           #:kernel-governor
+           #:kernel-status
+           #:kernel-reason
+           #:kernel-step-count
+           #:kernel-last-verdict
+           #:kernel-last-result
+           #:kernel-last-action-error
+           #:kernel-step
+           #:run-kernel
+           ;; scripted-policy
+           #:scripted-fix-policy
+           #:policy-state
+           #:policy-system
+           #:policy-test-system
+           #:+scripted-fix-system-prompt+))
 
 (in-package #:cl-harness-next/src/main)
 

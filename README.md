@@ -31,8 +31,10 @@ context compiler; SP4 adds the L2 oracles
 (verification through the environment, AST invariants, pack-profiled
 LLM review with injected judge) and the governor with
 condition/restart interventions; SP5a adds LLM connectivity
-(OpenAI-compatible provider, action parser, judge bridge). It does not
-affect the `cl-harness` CLI.
+(OpenAI-compatible provider, action parser, judge bridge); SP5b adds
+the L3 kernel (observe→decide→act→record with swappable control
+policies) and the scripted fix policy — the first dial level. It does
+not affect the `cl-harness` CLI.
 
 ## Quick start
 

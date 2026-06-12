@@ -140,8 +140,10 @@ green (stall scenarios).")
       (ok (search "stuck" reason)))))
 
 (deftest non-patch-tool-is-a-policy-violation
-  (with-fix-kernel (kernel :diagnose
-                           "{\"type\":\"tool_call\",\"tool\":\"repl-eval\",\"arguments\":{\"code\":\"1\"}}")
+  (with-fix-kernel
+      (kernel
+       :diagnose
+       "{\"type\":\"tool_call\",\"tool\":\"repl-eval\",\"arguments\":{\"code\":\"1\"}}")
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :given-up status))
       (ok (search "patch tools" reason)))))
