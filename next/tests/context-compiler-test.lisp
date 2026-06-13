@@ -178,6 +178,36 @@
       (ok (not (search "(- a b)" view)))
       (ok (search "re-read" view)))))
 
+(deftest superseded-stale-facts-drop-from-the-view
+  ;; Run 5's loop: the agent re-read after the patch as hinted, but
+  ;; the stale entry (and its standing \"re-read to refresh\" hint)
+  ;; stayed in the view — so it re-read forever. Once a newer read of
+  ;; the same file exists, the superseded stale fact must not render.
+  (let ((*seq* 0)
+        (world-model (make-standard-world-model)))
+    (%feed world-model :run-start
+           "goal" "g" "acceptance_criteria" (list "a"))
+    (%feed-interaction world-model "lisp-read-file"
+                       :arguments (%hash "path" "src/main.lisp")
+                       :result (%hash "content"
+                                      (list (%hash "type" "text"
+                                                   "text" "(- a b)"))))
+    (%feed-interaction world-model "lisp-edit-form"
+                       :arguments (%hash "file_path" "src/main.lisp"
+                                         "form_type" "defun"
+                                         "form_name" "add"
+                                         "operation" "replace"
+                                         "content" "(+ a b)"))
+    (%feed-interaction world-model "lisp-read-file"
+                       :arguments (%hash "path" "src/main.lisp")
+                       :result (%hash "content"
+                                      (list (%hash "type" "text"
+                                                   "text" "(+ a b)"))))
+    (let ((view (compile-context world-model)))
+      (ok (search "(+ a b)" view))
+      (ok (not (search "re-read to refresh" view)))
+      (ok (not (search "[STALE]" view))))))
+
 (deftest pre-patch-verification-is-annotated
   ;; Run 3's loop: source fixed, but the failure record and the red
   ;; run-tests line predate the patch — the model read them as "still

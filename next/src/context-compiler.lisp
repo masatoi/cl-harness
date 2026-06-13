@@ -43,6 +43,7 @@
                 #:source-fact-file
                 #:source-fact-detail
                 #:source-fact-content
+                #:source-fact-seq
                 #:source-fact-stale-p)
   (:import-from #:cl-harness-next/src/verification-ledger
                 #:last-load
@@ -198,19 +199,38 @@ source instead of re-running the tests (guided live run 3,
                         (or (probe-summary probe) "?")))
               (%take +recent-limit+ selected)))))
 
+(defun %superseded-p (fact facts)
+  "True when a newer fact in FACTS reads the same file as FACT."
+  (let ((file (source-fact-file fact)))
+    (and file
+         (some (lambda (other)
+                 (and (equal file (source-fact-file other))
+                      (> (source-fact-seq other)
+                         (source-fact-seq fact))))
+               facts)
+         t)))
+
 (defun %source-fact-lines (changes)
   "Recent source facts WITH their content excerpts — the agent must
 see what a read returned, not just that it happened (guided live run,
 2026-06-13). Identical repeated reads render once."
   (when changes
-    (let ((facts (remove-duplicates
-                  (%take +recent-limit+ (source-facts changes))
-                  :key (lambda (fact)
-                         (list (source-fact-file fact)
-                               (source-fact-detail fact)
-                               (source-fact-content fact)))
-                  :test #'equal
-                  :from-end t)))
+    (let* ((all (source-facts changes))
+           (facts (remove-duplicates
+                   ;; A stale fact that a NEWER read of the same file
+                   ;; supersedes adds nothing but a standing
+                   ;; \"re-read\" instruction the agent obeys forever
+                   ;; (guided live run 5) — drop it from the view.
+                   (remove-if (lambda (fact)
+                                (and (source-fact-stale-p fact changes)
+                                     (%superseded-p fact all)))
+                              (%take +recent-limit+ all))
+                   :key (lambda (fact)
+                          (list (source-fact-file fact)
+                                (source-fact-detail fact)
+                                (source-fact-content fact)))
+                   :test #'equal
+                   :from-end t)))
       (loop for fact in facts
             append
             (let ((stale-p (source-fact-stale-p fact changes)))
