@@ -8,7 +8,13 @@
   (:import-from #:cl-harness-next/src/template-policy
                 #:extract-method-body
                 #:template-fix-policy
-                #:make-fix-target)
+                #:make-fix-target
+                #:discover-targets
+                #:target-symbol
+                #:target-form-type
+                #:target-form-name
+                #:target-head
+                #:target-contract)
   (:import-from #:cl-harness-next/src/mcp-client
                 #:mcp-transport
                 #:transport-send-request
@@ -84,6 +90,36 @@
   (ok (eq :malformed (nth-value 1 (extract-method-body "(incf (gethash key"
                                                        :head "observe ((h histogram) key)")))))
 
+(deftest discover-finds-stub-defmethods
+  ;; Stub defmethods (constant / declare+constant body) are discovered from
+  ;; source; real methods and defuns are not; the class + package + contract
+  ;; are captured.
+  (let* ((lines (list
+                 "(defpackage #:demo/main (:use #:cl) (:export #:observe #:total))"
+                 "(in-package #:demo/main)"
+                 "(defclass histogram () ((table :initform (make-hash-table :test 'eql) :accessor histogram-table)))"
+                 "(defgeneric observe (h key) (:documentation \"Increment KEY count and return it.\"))"
+                 "(defmethod observe ((h histogram) key) (declare (ignore key)) 0)"
+                 "(defgeneric total (h) (:documentation \"Sum of counts.\"))"
+                 "(defmethod total ((h histogram)) 0)"
+                 "(defmethod done-method ((h histogram)) (hash-table-count (histogram-table h)))"
+                 "(defun helper (x) x)"))
+         (source (format nil "~{~A~%~}" lines)))
+    (multiple-value-bind (targets class-text pkg)
+        (discover-targets source "src/main.lisp")
+      (ok (= 2 (length targets)))
+      (ok (equal "DEMO/MAIN" pkg))
+      (ok (search "defclass histogram" class-text))
+      (let ((obs (find "OBSERVE" targets :key #'target-symbol :test #'equal)))
+        (ok obs)
+        (ok (equal "defmethod" (target-form-type obs)))
+        (ok (equal "observe ((h histogram) key)" (target-form-name obs)))
+        (ok (equal "observe ((h histogram) key)" (target-head obs)))
+        (ok (and (target-contract obs) (search "Increment" (target-contract obs)))))
+      (ok (find "TOTAL" targets :key #'target-symbol :test #'equal))
+      (ok (not (find "DONE-METHOD" targets :key #'target-symbol :test #'equal)))
+      (ok (not (find "HELPER" targets :key #'target-symbol :test #'equal))))))
+
 ;;; --- FSM full-loop tests over a canned cl-mcp transport -------------------
 ;;; The transport tracks which form_names have been patched correctly (a
 ;;; patch is "correct" unless its content contains the marker BAD) and
@@ -91,6 +127,7 @@
 
 (defclass template-transport (mcp-transport)
   ((symbols :initarg :symbols :initform nil :reader tt-symbols)
+   (source :initarg :source :initform nil :reader tt-source)
    (resolved :initform (make-hash-table :test 'equal) :reader tt-resolved)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
@@ -137,7 +174,7 @@
                             (alexandria:plist-hash-table (list "name" n) :test 'equal))
                           '("lisp-edit-form" "lisp-patch-form" "load-system"
                             "run-tests" "pool-kill-worker" "lisp-read-file"
-                            "clgrep-search")))
+                            "fs-read-file" "clgrep-search")))
             :test 'equal)))
       ((equal method "tools/call")
        (let* ((params (gethash "params" parsed))
@@ -156,17 +193,26 @@
             (%tt-encode id (%tt-ok)))
            ((equal tool "run-tests")
             (%tt-encode id (%tt-run-tests-result transport)))
+           ((equal tool "fs-read-file")
+            (%tt-encode
+             id (alexandria:plist-hash-table
+                 (list "content"
+                       (list (alexandria:plist-hash-table
+                              (list "type" "text" "text" (or (tt-source transport) ""))
+                              :test 'equal)))
+                 :test 'equal)))
            (t (%tt-encode id (%tt-ok))))))
       (t (error "unexpected method ~S" method)))))
 
 (defmacro with-template-kernel ((kernel &key targets class-text snippet-fn
-                                        (sut-package "CL-USER") symbols
+                                        (sut-package "CL-USER") symbols source
                                         transport-var (k 3))
                                 &body body)
   (let ((transport (or transport-var (gensym "TR"))))
     `(uiop:with-temporary-file (:pathname log-path :type "jsonl")
        (uiop:delete-file-if-exists log-path)
-       (let* ((,transport (make-instance 'template-transport :symbols ,symbols))
+       (let* ((,transport (make-instance 'template-transport
+                                         :symbols ,symbols :source ,source))
               (log (open-event-log log-path))
               (environment (make-cl-mcp-environment
                             :client (make-mcp-client ,transport)
@@ -220,6 +266,22 @@
           when (search sym prompt :test #'char-equal)
             return body)))
 
+(defparameter *hist-source*
+  (format nil "~{~A~%~}"
+          (list "(defpackage #:clh-histogram/src/main (:use #:cl) (:export #:observe #:count-of #:total #:distinct #:top-key))"
+                "(in-package #:clh-histogram/src/main)"
+                "(defclass histogram () ((table :initform (make-hash-table :test 'eql) :accessor histogram-table)))"
+                "(defgeneric observe (h key) (:documentation \"Increment KEY count and return it.\"))"
+                "(defmethod observe ((h histogram) key) (declare (ignore key)) 0)"
+                "(defgeneric count-of (h key) (:documentation \"Count of KEY (0 if unseen).\"))"
+                "(defmethod count-of ((h histogram) key) (declare (ignore key)) 0)"
+                "(defgeneric total (h) (:documentation \"Sum of counts.\"))"
+                "(defmethod total ((h histogram)) 0)"
+                "(defgeneric distinct (h) (:documentation \"Number of distinct keys.\"))"
+                "(defmethod distinct ((h histogram)) 0)"
+                "(defgeneric top-key (h) (:documentation \"Key with the highest count.\"))"
+                "(defmethod top-key ((h histogram)) nil)")))
+
 (deftest template-happy-path-canned-oracle-drives-to-done
   (with-template-kernel (kernel :targets (%hist-targets)
                                 :class-text *hist-class*
@@ -268,3 +330,18 @@
       ;; the four easy forms did get patched (resolved in the transport)
       (ok (= 4 (loop for (fn . sym) in *hist-symbols*
                      count (gethash fn (tt-resolved tr))))))))
+
+(deftest template-discovery-drives-to-done
+  ;; No injected :targets — the FSM reads the source (fs-read-file),
+  ;; discovers the 5 stub defmethods + the class, and drives to :done.
+  (with-template-kernel (kernel :class-text ""
+                                :source *hist-source*
+                                :symbols *hist-symbols*
+                                :snippet-fn (%snippet *hist-bodies*)
+                                :transport-var tr)
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 120)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))
+    (ok (= 1 (tt-kill-count tr)))
+    (ok (= 5 (loop for (fn . sym) in *hist-symbols*
+                   count (gethash fn (tt-resolved tr)))))))

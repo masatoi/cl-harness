@@ -25,6 +25,14 @@
            #:template-fix-policy
            #:fix-target
            #:make-fix-target
+           #:target-symbol
+           #:target-file
+           #:target-form-type
+           #:target-form-name
+           #:target-head
+           #:target-contract
+           #:target-original-body
+           #:discover-targets
            #:policy-state
            #:policy-system
            #:policy-test-system
@@ -81,15 +89,16 @@ means TEXT was unbalanced/unreadable."
     (rest rest)))
 
 (defun %degenerate-body-p (forms)
-  "True when FORMS is a stub-equivalent body (constant / declare-only)."
-  (or (null forms)
-      (and (= 1 (length forms))
-           (let ((f (first forms)))
-             (or (null f) (eq f t) (eql f 0))))
-      (every (lambda (f)
-               (and (consp f) (symbolp (first f))
-                    (string= (symbol-name (first f)) "DECLARE")))
-             forms)))
+  "True when FORMS is a stub-equivalent body: after dropping leading
+declarations, nothing remains or a single literal constant remains."
+  (let ((rest (remove-if (lambda (f)
+                           (and (consp f) (symbolp (first f))
+                                (string= (symbol-name (first f)) "DECLARE")))
+                         forms)))
+    (or (null rest)
+        (and (= 1 (length rest))
+             (let ((f (first rest)))
+               (or (null f) (eq f t) (keywordp f) (numberp f) (stringp f)))))))
 
 (defun extract-method-body (raw &key head (form-type "defmethod")
                                      (package (find-package :cl-user)))
@@ -171,19 +180,100 @@ lisp-edit-form matcher, HEAD the text re-wrapped around the body
 ORIGINAL-BODY the stub text (revert payload)."
   symbol file (form-type "defmethod") form-name head contract original-body)
 
+(defun %read-spans (text package)
+  "Read top-level forms from TEXT in PACKAGE (*read-eval* nil), returning
+a list of (form start end) character spans. (values spans error-p msg)."
+  (let ((*package* package) (*read-eval* nil) (spans '()))
+    (handler-case
+        (with-input-from-string (stream text)
+          (loop
+            (let ((start (file-position stream))
+                  (form (read stream nil stream)))
+              (when (eq form stream) (return))
+              (push (list form start (file-position stream)) spans))))
+      (error (condition)
+        (return-from %read-spans
+          (values (nreverse spans) t (princ-to-string condition)))))
+    (values (nreverse spans) nil nil)))
+
+(defun discover-targets (source file &key (package (find-package :cl-user)))
+  "Parse SOURCE (text of FILE) and return (values TARGETS CLASS-TEXT
+SUT-PACKAGE): the stub defmethod/defun forms as FIX-TARGETs, the
+concatenated defclass source, and the (in-package …) name string. Pure;
+the FSM feeds it the fs-read-file result. A stub is a form whose body is
+a constant / declare-only (reuses %DEGENERATE-BODY-P)."
+  (labels ((op-name (form) (and (consp form) (symbolp (first form))
+                                (symbol-name (first form))))
+           (op= (form name) (equal (op-name form) name))
+           (gf-doc (form)
+             (loop for opt in (cdddr form)
+                   when (and (consp opt) (symbolp (first opt))
+                             (string= (symbol-name (first opt)) "DOCUMENTATION"))
+                     return (second opt)))
+           (lambda-list-of (form)
+             (let ((rest (cddr form)))
+               (loop while (and rest (not (listp (first rest)))) do (pop rest))
+               (first rest)))
+           (head-text (form)
+             (let ((*print-case* :downcase) (*print-pretty* nil)
+                   (*package* package))
+               (format nil "~A ~A"
+                       (princ-to-string (second form))
+                       (prin1-to-string (lambda-list-of form))))))
+    (multiple-value-bind (spans err) (%read-spans source package)
+      (when err (return-from discover-targets (values nil "" nil)))
+      (let ((contracts (make-hash-table :test 'equal))
+            (class-parts '()) (sut-package nil) (targets '()))
+        (dolist (span spans)
+          (destructuring-bind (form start end) span
+            (cond
+              ((op= form "IN-PACKAGE")
+               (when (symbolp (second form))
+                 (setf sut-package (symbol-name (second form)))))
+              ((op= form "DEFCLASS")
+               (push (string-trim +whitespace+ (subseq source start end)) class-parts))
+              ((op= form "DEFGENERIC")
+               (let ((doc (gf-doc form)))
+                 (when (and doc (symbolp (second form)))
+                   (setf (gethash (symbol-name (second form)) contracts) doc)))))))
+        (dolist (span spans)
+          (let ((form (first span)))
+            (when (member (op-name form) '("DEFMETHOD" "DEFUN") :test #'equal)
+              (let ((body (if (string= (op-name form) "DEFMETHOD")
+                              (%extract-definition-body form)
+                              (cdddr form))))
+                (when (and (symbolp (second form)) (%degenerate-body-p body))
+                  (let ((sym (symbol-name (second form)))
+                        (ft (string-downcase (op-name form)))
+                        (head (head-text form)))
+                    (push (make-fix-target
+                           :symbol sym :file file :form-type ft
+                           :form-name (if (string= ft "defmethod") head sym)
+                           :head head :contract (gethash sym contracts))
+                          targets)))))))
+        (values (nreverse targets)
+                (format nil "~{~A~^~2%~}" (nreverse class-parts))
+                sut-package)))))
+
 (defclass template-fix-policy (control-policy)
   ((snippet-fn :initarg :snippet-fn :reader policy-snippet-fn
                :documentation "Function (prompt-string → raw-LLM-string).")
    (system :initarg :system :reader policy-system)
    (test-system :initarg :test-system :reader policy-test-system)
    (sut-package :initarg :sut-package :initform "CL-USER"
-                :reader policy-sut-package)
+                :accessor policy-sut-package)
    (clear-fasls-p :initarg :clear-fasls :initform t :reader %clear-fasls-p)
    (k :initarg :k :initform 3 :reader policy-k
       :documentation "Per-form attempt cap (malformed re-samples and
 clean-but-wrong retries).")
-   (targets :initarg :targets :initform nil :reader policy-targets)
-   (class-text :initarg :class-text :initform "" :reader policy-class-text)
+   (targets :initarg :targets :initform nil :accessor policy-targets
+            :documentation "When supplied, discovery is skipped (tests /
+explicit). When NIL, DISCOVER reads SOURCE-FILES and fills this.")
+   (class-text :initarg :class-text :initform "" :accessor policy-class-text)
+   (source-files :initarg :source-files :initform (list "src/main.lisp")
+                 :reader policy-source-files)
+   (disc-files :initform nil :accessor policy-disc-files)
+   (pending-file :initform nil :accessor policy-pending-file)
    (state :initform :init :accessor policy-state)
    (queue :initform nil :accessor policy-queue)
    (current :initform nil :accessor policy-current)
@@ -192,7 +282,8 @@ clean-but-wrong retries).")
    (parked :initform nil :accessor policy-parked)
    (clean-oracle :accessor %clean-oracle))
   (:documentation "The lowest dial rung: the FSM owns all agency; the
-LLM only fills a method body for the current injected target."))
+LLM only fills a method body. Targets are discovered from SOURCE-FILES
+(or injected via :targets)."))
 
 (defun %build-prompt (policy)
   "The per-form user prompt: class + method head with a hole + contract +
@@ -334,6 +425,57 @@ run-tests RESULT's failed_tests."
                          (or (mapcar #'car (policy-parked policy))
                              (list "suite still red")))))))
 
+(defun %result-text (result)
+  "The text payload of an MCP content-style tool RESULT, or NIL."
+  (when (hash-table-p result)
+    (let ((content (gethash "content" result)))
+      (when (and content (plusp (length content)))
+        (let ((entry (elt content 0)))
+          (when (hash-table-p entry) (gethash "text" entry)))))))
+
+(defun %finish-discovery (policy)
+  "After all source files are parsed, set up the work queue and start."
+  (setf (policy-queue policy) (copy-list (policy-targets policy))
+        (policy-current policy) (pop (policy-queue policy))
+        (policy-attempts policy) 0
+        (policy-feedback policy) nil)
+  (if (policy-current policy)
+      (%gen policy)
+      (%clean-consult policy)))
+
+(defun %disc-read-next (policy)
+  "Emit an fs-read-file :act for the next source file, or finish discovery."
+  (let ((file (pop (policy-disc-files policy))))
+    (if file
+        (progn
+          (setf (policy-state policy) :disc
+                (policy-pending-file policy) file)
+          (make-decision
+           :kind :act :tool "fs-read-file"
+           :arguments (alexandria:plist-hash-table (list "path" file) :test #'equal)
+           :reason (format nil "discover stubs in ~A" file)))
+        (%finish-discovery policy))))
+
+(defun %disc (policy kernel)
+  "Parse the fs-read-file result into targets, accumulate, then read the
+next file or finish discovery."
+  (let ((source (%result-text (kernel-last-result kernel)))
+        (file (policy-pending-file policy)))
+    (when (stringp source)
+      (multiple-value-bind (targets class-text pkg)
+          (discover-targets source file :package (find-package :cl-user))
+        (setf (policy-targets policy) (append (policy-targets policy) targets))
+        (when (and class-text (plusp (length class-text)))
+          (setf (policy-class-text policy)
+                (if (plusp (length (policy-class-text policy)))
+                    (concatenate 'string (policy-class-text policy)
+                                 (string #\Newline) class-text)
+                    class-text)))
+        (when pkg (setf (policy-sut-package policy) pkg)))))
+  (if (policy-disc-files policy)
+      (%disc-read-next policy)
+      (%finish-discovery policy)))
+
 (defun %init (policy)
   (setf (policy-queue policy) (copy-list (policy-targets policy))
         (policy-current policy) (pop (policy-queue policy))
@@ -342,10 +484,16 @@ run-tests RESULT's failed_tests."
 
 (defmethod decide ((policy template-fix-policy) kernel)
   (ecase (policy-state policy)
-    (:init (%init policy)
-           (if (policy-current policy)
-               (%gen policy)
-               (%clean-consult policy)))
+    (:init
+     (if (policy-targets policy)
+         (progn (%init policy)
+                (if (policy-current policy)
+                    (%gen policy)
+                    (%clean-consult policy)))
+         (progn (setf (policy-disc-files policy)
+                      (copy-list (policy-source-files policy)))
+                (%disc-read-next policy))))
+    (:disc (%disc policy kernel))
     (:await-edit (%await-edit policy kernel))
     (:verify (%verify policy))
     (:check (%check policy kernel))

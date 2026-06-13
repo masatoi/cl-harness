@@ -64,11 +64,19 @@
 
 (defun policy-factory (mission)
   (declare (ignore mission))
-  (make-instance 'cl-harness-next/src/template-policy:template-fix-policy
-                 :system "clh-histogram" :test-system "clh-histogram/tests"
-                 :sut-package "CLH-HISTOGRAM/SRC/MAIN"
-                 :snippet-fn *snippet-fn* :class-text *class-text*
-                 :targets (targets) :clear-fasls t :k 3))
+  (if (uiop:getenv "CLH_DISCOVER")
+      ;; B2: no injected targets — the FSM reads src/main.lisp and discovers
+      ;; the stubs + class + package itself.
+      (make-instance 'cl-harness-next/src/template-policy:template-fix-policy
+                     :system "clh-histogram" :test-system "clh-histogram/tests"
+                     :snippet-fn *snippet-fn*
+                     :source-files (list "src/main.lisp")
+                     :clear-fasls t :k 3)
+      (make-instance 'cl-harness-next/src/template-policy:template-fix-policy
+                     :system "clh-histogram" :test-system "clh-histogram/tests"
+                     :sut-package "CLH-HISTOGRAM/SRC/MAIN"
+                     :snippet-fn *snippet-fn* :class-text *class-text*
+                     :targets (targets) :clear-fasls t :k 3)))
 
 (defun governor-factory (mission)
   (declare (ignore mission))
@@ -86,8 +94,8 @@
                                  :log-path log-path))
          (queue (make-instance 'mission-queue)))
     (enqueue-mission queue mission)
-    (format t "~&;;; template log: ~A~%;;; targets: ~A~%"
-            log-path (mapcar #'cl-harness-next/src/template-policy::target-symbol (targets)))
+    (format t "~&;;; template log: ~A~%;;; mode: ~A~%"
+            log-path (if (uiop:getenv "CLH_DISCOVER") "discover-from-source" "injected-targets"))
     (finish-output)
     (multiple-value-bind (status reason)
         (run-mission mission queue
