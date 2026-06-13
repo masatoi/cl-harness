@@ -489,6 +489,13 @@ the patched body did not build cleanly."
   (or (not (hash-table-p result))
       (and (gethash "isError" result) t)))
 
+(defun %has-test-detail-p (result)
+  "True when the run-tests RESULT carries a non-empty failed_tests array — the
+per-test evidence a count comparison needs."
+  (and (hash-table-p result)
+       (let ((failed (gethash "failed_tests" result)))
+         (and failed (plusp (length failed))))))
+
 (defun %symbol-fail-count (result sym-name)
   "Number of failed_tests entries in the run-tests RESULT mentioning SYM-NAME."
   (if (hash-table-p result)
@@ -506,17 +513,32 @@ result — the baseline an overloaded symbol's done-detection compares against."
 
 (defun %overload-resolved-p (policy result)
   "Done-detection for an overloaded (shared-symbol) target. The shared operator
-symbol cannot single out one specializer, so resolution is judged by progress:
-the build must be clean (real test data, not a tool error) AND either the
-symbol is now wholly gone, or this patch strictly reduced the symbol's failure
-count versus the target's PRE-COUNT. A compiling-but-wrong body leaves the
-count unchanged and is therefore retried, not advanced."
+symbol cannot single out one specializer, so resolution needs POSITIVE
+evidence and is judged in two sound ways — never on a detail-less red run:
+
+  1. the symbol is genuinely gone (`%form-resolved-p`: suite green, or
+     failed_tests present and the symbol absent), or
+  2. run-tests returned per-test detail AND this patch strictly reduced the
+     symbol's failure count versus the target's PRE-COUNT.
+
+A tool error, a detail-less red run, or a compiling-but-wrong body (no count
+change) is NOT resolved and is retried.
+
+KNOWN LIMITATION (re-review): branch 2 accepts any decrease, so an overload
+with several failing assertions that the body only PARTIALLY fixes still
+advances; the residual is caught by the final clean oracle (a safe give-up,
+never a false :done). A precise per-overload check is impossible from the
+shared symbol's aggregate, and retrying re-patches the form — which would risk
+overwriting a *correct* sibling's body under a weak model. The overwrite-safe
+advance-on-progress is the deliberate trade-off; a group-level retry with body
+snapshot/revert is the path to full precision (tracked, docs/improvement-backlog)."
   (and (not (%run-tests-errored-p result))
-       (let ((now (%symbol-fail-count result
-                                      (target-symbol (policy-current policy))))
-             (pre (policy-pre-count policy)))
-         (or (zerop now)
-             (and pre (< now pre))))))
+       (or (%form-resolved-p policy result)
+           (and (policy-pre-count policy)
+                (%has-test-detail-p result)
+                (< (%symbol-fail-count result
+                                       (target-symbol (policy-current policy)))
+                   (policy-pre-count policy))))))
 
 (defun %check (policy kernel)
   (let ((result (kernel-last-result kernel)))

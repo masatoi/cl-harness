@@ -146,9 +146,27 @@ gate; the count-decrease test repairs that — a wrong body makes no progress an
 is retried within K. The pre-count is snapshotted at each target's start
 (`%snapshot-pre-count`) from the latest test result; to give the *first* target a
 pre-count, the **injected-targets path now also runs a baseline `load-system` +
-`run-tests`** (the cross-check filter is skipped for explicit targets). Locked by
-`template-overloaded-generic-resolves-each-method` (correct body, one edit each)
-and `template-overloaded-wrong-body-is-retried-not-advanced` (wrong body retried).
+`run-tests`** (the cross-check filter is skipped for explicit targets). A *fourth*
+review caught that the count comparison needs **positive evidence**: a
+detail-less red run (`{passed:0,failed:1}` with no `failed_tests`) made
+`%symbol-fail-count` return 0, so `now=0` read as "symbol gone" and advanced a
+still-red overload. `%overload-resolved-p` now requires either `%form-resolved-p`
+(green / symbol-absent-with-detail) or (per-test **detail present** AND a strict
+count decrease) — a tool error or detail-less red is not resolved. Locked by
+`template-overloaded-generic-resolves-each-method` (correct body, one edit each),
+`template-overloaded-wrong-body-is-retried-not-advanced` (wrong body retried),
+and `template-overload-detail-less-red-is-not-resolved` (no detail → retried).
+
+> **Known limitation** (re-review, *not* fixed): branch 2 accepts *any* count
+> decrease, so an overload with several failing assertions that the body only
+> **partially** fixes still advances; it then fails at the final clean oracle
+> ("suite still red") — a safe give-up, never a false `:done`. A precise
+> per-overload check is impossible from the shared symbol's aggregate, and any
+> *retry re-patches the form*, which would risk overwriting a **correct**
+> sibling's body under a weak model (exactly the audience template-fix serves).
+> Overwrite-safe advance-on-progress is the deliberate trade-off; the sound fix
+> is group-level retry with body snapshot/revert (tracked in
+> `docs/improvement-backlog.md`).
 
 **Failing-test cross-check** (`:disc-baseline-test` → `:disc-filter`): after
 discovering all source stubs, the FSM runs a baseline `load-system` + `run-tests`
@@ -327,7 +345,9 @@ compiling-but-wrong overload makes no progress vs the pre-count → retried with
 K, not advanced to a premature give-up),
 `template-load-failure-is-not-treated-as-resolved` (fourth review: a body that
 edits cleanly but fails `load-system` is fed back and retried, not silently
-followed by run-tests on the stale image).
+followed by run-tests on the stale image),
+`template-overload-detail-less-red-is-not-resolved` (fourth review B: a
+detail-less red run does not resolve an overloaded target).
 
 Adaptive: `give-up-demotes-to-the-next-rung-this-step`,
 `give-up-at-the-bottom-rung-escapes`,

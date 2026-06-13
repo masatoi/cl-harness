@@ -172,25 +172,31 @@
    (resolved :initform (make-hash-table :test 'equal) :reader tt-resolved)
    (bad-p :initform nil :accessor tt-bad-p)
    (load-fail-p :initform nil :accessor tt-load-fail-p)
+   (aggregate-only-p :initform nil :accessor tt-aggregate-only-p)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %tt-run-tests-result (transport)
   (let ((unresolved (loop for (fn . sym) in (tt-symbols transport)
                           unless (gethash fn (tt-resolved transport))
                             collect sym)))
-    (if unresolved
-        (alexandria:plist-hash-table
-         (list "passed" 0 "failed" 1
-               "failed_tests"
-               (mapcar (lambda (sym)
-                         (alexandria:plist-hash-table
-                          (list "test_name" "histogram-counts"
-                                "form" (format nil "(= 1 (~A H A))" sym)
-                                "reason" "stub")
-                          :test 'equal))
-                       unresolved))
-         :test 'equal)
-        (alexandria:plist-hash-table (list "passed" 1 "failed" 0) :test 'equal))))
+    (cond
+      ((null unresolved)
+       (alexandria:plist-hash-table (list "passed" 1 "failed" 0) :test 'equal))
+      ((tt-aggregate-only-p transport)
+       ;; red, but with no per-test detail (failed_tests omitted)
+       (alexandria:plist-hash-table (list "passed" 0 "failed" 1) :test 'equal))
+      (t
+       (alexandria:plist-hash-table
+        (list "passed" 0 "failed" 1
+              "failed_tests"
+              (mapcar (lambda (sym)
+                        (alexandria:plist-hash-table
+                         (list "test_name" "histogram-counts"
+                               "form" (format nil "(= 1 (~A H A))" sym)
+                               "reason" "stub")
+                         :test 'equal))
+                      unresolved))
+        :test 'equal)))))
 
 (defun %tt-encode (id result-hash)
   (with-output-to-string (s)
@@ -235,10 +241,12 @@
             (let ((fn (gethash "form_name" args))
                   (content (or (gethash "content" args) (gethash "new_text" args) "")))
               (setf (tt-bad-p transport) (and (search "NOCOMPILE" content) t)
-                    (tt-load-fail-p transport) (and (search "STALEGREEN" content) t))
+                    (tt-load-fail-p transport) (and (search "STALEGREEN" content) t)
+                    (tt-aggregate-only-p transport) (and (search "NODETAIL" content) t))
               (when fn
                 (setf (gethash fn (tt-resolved transport))
-                      (not (or (search "BAD" content) (search "NOCOMPILE" content))))))
+                      (not (or (search "BAD" content) (search "NOCOMPILE" content)
+                               (search "NODETAIL" content))))))
             (%tt-encode id (%tt-ok)))
            ((equal tool "pool-kill-worker")
             (incf (tt-kill-count transport))
@@ -554,3 +562,41 @@
         (ok (>= observe-calls 2))
         (ok (= 5 (loop for (fn . sym) in *hist-symbols*
                        count (gethash fn (tt-resolved tr)))))))))
+
+(deftest template-overload-detail-less-red-is-not-resolved
+  ;; Re-review: %symbol-fail-count returns 0 when failed_tests is missing, so a
+  ;; detail-less red run ({passed:0,failed:1}, no failed_tests) made the overload
+  ;; path read now=0 and advance as resolved despite a red suite. An overloaded
+  ;; target must require positive evidence too: NODETAIL keeps the form red with
+  ;; no per-test detail, so it must be retried, not advanced.
+  (let ((square-calls 0))
+    (flet ((snip (prompt)
+             (cond
+               ((search "SQUARE" prompt :test #'char-equal)
+                (incf square-calls)
+                (if (= square-calls 1) "(NODETAIL 0)" "(* 2 2)"))
+               (t "(* 3 3)"))))
+      (let ((targets (list (make-fix-target :symbol "AREA" :file "src/main.lisp"
+                                            :form-type "defmethod"
+                                            :form-name "area ((s square))"
+                                            :head "area ((s square))"
+                                            :contract "area of a square")
+                           (make-fix-target :symbol "AREA" :file "src/main.lisp"
+                                            :form-type "defmethod"
+                                            :form-name "area ((s circle))"
+                                            :head "area ((s circle))"
+                                            :contract "area of a circle")))
+            (symbols '(("area ((s square))" . "AREA")
+                       ("area ((s circle))" . "AREA"))))
+        (with-template-kernel (kernel :targets targets
+                                      :class-text "(defclass shape () ())"
+                                      :symbols symbols
+                                      :snippet-fn #'snip
+                                      :transport-var tr)
+          (multiple-value-bind (status reason) (run-kernel kernel :max-steps 120)
+            (ok (eq :done status))
+            (ok (and (stringp reason) (search "clean" reason))))
+          ;; the detail-less red attempt was retried, not advanced as resolved
+          (ok (>= square-calls 2))
+          (ok (= 2 (loop for (fn . sym) in symbols
+                         count (gethash fn (tt-resolved tr))))))))))

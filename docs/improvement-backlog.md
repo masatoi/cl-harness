@@ -2120,3 +2120,13 @@ discovery モード(`CLH_DISCOVER`)でも 5/5 `:done`(再現)。
 - 能力ベース開始の自動化(モデル×自律度 matrix / L5) — 規模大。
 - guided/self-directed の step-fn 用 free-var チェック(scope 追跡が要り false-positive
   しやすい。誤変数 body は load/test の再試行が既に拾うため低優先)。
+- **overload 部分修正の group-level retry (re-review B, 2026-06-13)**:
+  `%overload-resolved-p` の count-decrease 分岐は *任意の* 減少を進捗として advance する
+  ため、複数 assertion を持つ 1 overload を body が *一部だけ* 修正した場合も advance し、
+  最終 clean gate で "suite still red" の安全な give-up になる(false `:done` は無し)。
+  共有シンボルの集約からは overload 単位の full-fix と partial-fix を区別できず、retry は
+  form を re-patch するため弱モデルでは *正しい兄弟 body を上書き* するリスクがある
+  (template-fix が対象とする層でまさに危険)。よって overwrite-safe な advance-on-progress
+  を意図的に選択。完全な解は group 単位 retry + body snapshot/revert(overload 群をまとめて
+  patch→symbol green まで再試行し各 attempt の最良 body を保持)— 規模中、overload が稀なため
+  低優先。docstring/spec(§5 Known limitation)に記載。
