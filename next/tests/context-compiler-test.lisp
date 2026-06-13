@@ -177,3 +177,41 @@
       (ok (search "[STALE]" view))
       (ok (not (search "(- a b)" view)))
       (ok (search "re-read" view)))))
+
+(deftest pre-patch-verification-is-annotated
+  ;; Run 3's loop: source fixed, but the failure record and the red
+  ;; run-tests line predate the patch — the model read them as "still
+  ;; broken" and kept double-checking the source. Verification info
+  ;; older than the last successful patch must say so explicitly.
+  (let ((*seq* 0)
+        (world-model (make-standard-world-model)))
+    (%feed world-model :run-start
+           "goal" "g" "acceptance_criteria" (list "a"))
+    (%feed-interaction world-model "run-tests"
+                       :result (%hash "passed" 0 "failed" 1
+                                      "failed_tests"
+                                      (list (%hash "test_name" "ADD-ADDS"
+                                                   "description" "boom"))))
+    (%feed-interaction world-model "lisp-edit-form"
+                       :arguments (%hash "file_path" "src/main.lisp"
+                                         "form_type" "defun"
+                                         "form_name" "add"
+                                         "operation" "replace"
+                                         "content" "(+ a b)"))
+    (let ((view (compile-context world-model)))
+      (ok (search "re-run tests" view))))
+  ;; A test run after the patch clears the annotation.
+  (let ((*seq* 0)
+        (world-model (make-standard-world-model)))
+    (%feed world-model :run-start
+           "goal" "g" "acceptance_criteria" (list "a"))
+    (%feed-interaction world-model "lisp-edit-form"
+                       :arguments (%hash "file_path" "src/main.lisp"
+                                         "form_type" "defun"
+                                         "form_name" "add"
+                                         "operation" "replace"
+                                         "content" "(+ a b)"))
+    (%feed-interaction world-model "run-tests"
+                       :result (%hash "passed" 1 "failed" 0))
+    (let ((view (compile-context world-model)))
+      (ok (not (search "re-run tests" view))))))

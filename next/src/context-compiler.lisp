@@ -52,6 +52,7 @@
                 #:test-run-passed
                 #:test-run-failed
                 #:test-run-clean-p
+                #:test-run-seq
                 #:clean-verified-p
                 #:active-failures
                 #:resolved-failures
@@ -90,9 +91,27 @@
         (push (format nil "- non-goal: ~A" non-goal) lines))
       (nreverse lines))))
 
-(defun %verification-lines (verification)
+(defun %latest-successful-patch-seq (changes)
+  "Seq of the most recent successful patch, or NIL."
+  (when changes
+    (loop for patch in (patches changes)
+          when (patch-entry-ok-p patch)
+            maximize (patch-entry-seq patch) into latest
+          finally (return (and (plusp (or latest 0)) latest)))))
+
+(alexandria:define-constant +pre-patch-note+
+    " [predates the last patch — re-run tests]"
+  :test #'equal
+  :documentation "Annotation for verification info observed before the
+most recent successful patch. Without it an LLM policy reads a
+red-but-outdated run as \"still broken\" and loops re-checking the
+source instead of re-running the tests (guided live run 3,
+2026-06-13).")
+
+(defun %verification-lines (verification changes)
   (when verification
-    (let ((lines '()))
+    (let ((lines '())
+          (patch-seq (%latest-successful-patch-seq changes)))
       (let ((load (last-load verification)))
         (when load
           (push (format nil "load-system: ~A~@[ (~A)~]"
@@ -101,27 +120,35 @@
                 lines)))
       (let ((run (last-test verification)))
         (when run
-          (push (format nil "run-tests: passed ~A, failed ~A (~A)"
+          (push (format nil "run-tests: passed ~A, failed ~A (~A)~@[~A~]"
                         (or (test-run-passed run) "?")
                         (or (test-run-failed run) "?")
                         (if (test-run-clean-p run)
                             "clean image"
-                            "runtime state only"))
+                            "runtime state only")
+                        (when (and patch-seq
+                                   (< (test-run-seq run) patch-seq))
+                          +pre-patch-note+))
                 lines)))
       (push (format nil "clean-verified: ~A"
                     (if (clean-verified-p verification) "YES" "NO"))
             lines)
       (nreverse lines))))
 
-(defun %active-failure-lines (verification)
+(defun %active-failure-lines (verification changes)
   (when verification
-    (mapcar (lambda (failure)
-              (format nil "- ~A: ~A (seq ~A~@[, after patch seq ~A~])"
-                      (or (failure-record-test-name failure) "(unnamed)")
-                      (or (failure-record-reason failure) "?")
-                      (failure-record-seq failure)
-                      (failure-record-patch-seq failure)))
-            (active-failures verification))))
+    (let ((patch-seq (%latest-successful-patch-seq changes)))
+      (mapcar (lambda (failure)
+                (format nil "- ~A: ~A (seq ~A~@[, after patch seq ~A~])~@[~A~]"
+                        (or (failure-record-test-name failure) "(unnamed)")
+                        (or (failure-record-reason failure) "?")
+                        (failure-record-seq failure)
+                        (failure-record-patch-seq failure)
+                        (when (and patch-seq
+                                   (< (failure-record-seq failure)
+                                      patch-seq))
+                          +pre-patch-note+)))
+              (active-failures verification)))))
 
 (defun %decision-lines (goal)
   (when goal
@@ -223,8 +250,9 @@ see what a read returned, not just that it happened (guided live run,
         (changes (world-model-projection world-model :changes))
         (verification (world-model-projection world-model :verification)))
     (list (cons "Goal" (%goal-lines goal))
-          (cons "Verification" (%verification-lines verification))
-          (cons "Active failures" (%active-failure-lines verification))
+          (cons "Verification" (%verification-lines verification changes))
+          (cons "Active failures"
+                (%active-failure-lines verification changes))
           (cons "Decisions" (%decision-lines goal))
           (cons "Findings" (%finding-lines exploration))
           (cons "Recent patches" (%patch-lines changes))
@@ -241,9 +269,11 @@ patches; fresh probes only; explicit next-step guidance."
         (changes (world-model-projection world-model :changes))
         (verification (world-model-projection world-model :verification)))
     (list (cons "Goal" (%take 1 (%goal-lines goal)))
-          (cons "Active failures" (%active-failure-lines verification))
+          (cons "Active failures"
+                (%active-failure-lines verification changes))
           (cons "Recent patches" (%patch-lines changes))
-          (cons "Verification" (%verification-lines verification))
+          (cons "Verification"
+                (%verification-lines verification changes))
           (cons "Fresh runtime probes"
                 (%probe-lines exploration :fresh-only t))
           (cons "Findings" (%finding-lines exploration))
