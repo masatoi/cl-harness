@@ -241,10 +241,14 @@ skips the filter for `injected-p`. The baseline exists so the first target has a
 `%gen`: build the prompt (§8), call `snippet-fn`, `extract-method-body`; on a
 valid candidate emit a harness-built `lisp-edit-form` `:act`, state `:await-edit`;
 on ≤K malformed re-samples (feeding the reason back) failing, park and advance.
-`:await-edit` (tool error → retry/park; else emit `load-system` `:act`, state
-`:verify`) → `:verify` (emit `run-tests` `:act`, state `:check`) → `:check`
-(done? → advance; else `incf attempts`, retry `%gen` while `< K`, else park) →
-advance (next target → `%gen`; queue empty → `:final`). The done test is
+`:await-edit` (edit tool error → retry/park; else emit `load-system` `:act`,
+state `:verify`) → `:verify` (**load `isError` → feed the load error back and
+retry/park, NOT run-tests** — a third review caught that unconditionally running
+tests clears `kernel-last-action-error` before `%check` sees it, and run-tests on
+the stale image could mark a never-loaded form resolved; else emit `run-tests`
+`:act`, state `:check`) → `:check` (done? → advance; else `incf attempts`, retry
+`%gen` while `< K`, else park) → advance (next target → `%gen`; queue empty →
+`:final`). The done test is
 `%form-resolved-p` (positive evidence §3) for a unique symbol; for an
 **overloaded** symbol (`%symbol-shared-p`) it is `%overload-resolved-p` —
 *progress* against the `pre-count` (symbol gone, or its `failed_tests` count
@@ -320,7 +324,10 @@ errors the build → retried, not falsely advanced),
 patched once, no spurious park on the shared symbol),
 `template-overloaded-wrong-body-is-retried-not-advanced` (third review: a
 compiling-but-wrong overload makes no progress vs the pre-count → retried within
-K, not advanced to a premature give-up).
+K, not advanced to a premature give-up),
+`template-load-failure-is-not-treated-as-resolved` (fourth review: a body that
+edits cleanly but fails `load-system` is fed back and retried, not silently
+followed by run-tests on the stale image).
 
 Adaptive: `give-up-demotes-to-the-next-rung-this-step`,
 `give-up-at-the-bottom-rung-escapes`,

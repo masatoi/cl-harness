@@ -417,14 +417,31 @@ and emit the edit, or park the current form and advance."
                      :test #'equal)
          :reason "reload patched source"))))
 
-(defun %verify (policy)
-  (setf (policy-state policy) :check)
-  (make-decision
-   :kind :act :tool "run-tests"
-   :arguments (alexandria:plist-hash-table
-               (list "system" (policy-test-system policy))
-               :test #'equal)
-   :reason "verify the patched form"))
+(defun %verify (policy kernel)
+  "After the reload: if load-system errored, the patched body did not build —
+feed that back and retry/park. Running tests here would clear the load error
+(`kernel-last-action-error`) before `%check` sees it and could mark a form
+that never loaded as resolved (run-tests on the stale image). Only a clean
+load proceeds to run-tests."
+  (if (kernel-last-action-error kernel)
+      (progn
+        (setf (policy-feedback policy)
+              (format nil "the patched body did not load: ~A"
+                      (kernel-last-action-error kernel)))
+        (incf (policy-attempts policy))
+        (if (< (policy-attempts policy) (policy-k policy))
+            (%gen policy)
+            (progn
+              (%park-current policy "body kept failing to load")
+              (%advance policy))))
+      (progn
+        (setf (policy-state policy) :check)
+        (make-decision
+         :kind :act :tool "run-tests"
+         :arguments (alexandria:plist-hash-table
+                     (list "system" (policy-test-system policy))
+                     :test #'equal)
+         :reason "verify the patched form"))))
 
 (defun %mentions (sym-name text)
   (and (stringp text) (search sym-name text :test #'char-equal) t))
@@ -643,7 +660,7 @@ is skipped for explicit targets (see %disc-filter)."
     (:disc-baseline-test (%baseline-test policy))
     (:disc-filter (%disc-filter policy kernel))
     (:await-edit (%await-edit policy kernel))
-    (:verify (%verify policy))
+    (:verify (%verify policy kernel))
     (:check (%check policy kernel))
     (:final (%final policy kernel))))
 

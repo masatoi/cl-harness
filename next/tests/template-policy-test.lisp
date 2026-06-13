@@ -171,6 +171,7 @@
    (source :initarg :source :initform nil :reader tt-source)
    (resolved :initform (make-hash-table :test 'equal) :reader tt-resolved)
    (bad-p :initform nil :accessor tt-bad-p)
+   (load-fail-p :initform nil :accessor tt-load-fail-p)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %tt-run-tests-result (transport)
@@ -233,7 +234,8 @@
            ((member tool '("lisp-edit-form" "lisp-patch-form") :test #'equal)
             (let ((fn (gethash "form_name" args))
                   (content (or (gethash "content" args) (gethash "new_text" args) "")))
-              (setf (tt-bad-p transport) (and (search "NOCOMPILE" content) t))
+              (setf (tt-bad-p transport) (and (search "NOCOMPILE" content) t)
+                    (tt-load-fail-p transport) (and (search "STALEGREEN" content) t))
               (when fn
                 (setf (gethash fn (tt-resolved transport))
                       (not (or (search "BAD" content) (search "NOCOMPILE" content))))))
@@ -242,7 +244,9 @@
             (incf (tt-kill-count transport))
             (%tt-encode id (%tt-ok)))
            ((equal tool "load-system")
-            (if (tt-bad-p transport)
+            ;; NOCOMPILE breaks load AND tests; STALEGREEN breaks only the
+            ;; load (run-tests still reports the form passing — sub-case b).
+            (if (or (tt-bad-p transport) (tt-load-fail-p transport))
                 (%tt-encode id (%tt-error "compile error in source"))
                 (%tt-encode id (%tt-ok))))
            ((equal tool "run-tests")
@@ -520,3 +524,33 @@
                          count (gethash fn (tt-resolved tr)))))
           ;; the wrong square body was retried, not advanced on a clean build
           (ok (>= square-calls 2)))))))
+
+(deftest template-load-failure-is-not-treated-as-resolved
+  ;; A body that EDITS cleanly but makes load-system return isError must be
+  ;; fed back and retried — NOT silently followed by run-tests, which clears
+  ;; the load error. Even when run-tests would then report the symbol passing
+  ;; (a stale image — the load did not take), the form must not advance as
+  ;; resolved. STALEGREEN models exactly that: edit OK, load isError, but the
+  ;; form's symbol is marked resolved so run-tests would call it green.
+  (let ((observe-calls 0))
+    (flet ((snip (prompt)
+             (if (search "OBSERVE" prompt :test #'char-equal)
+                 (progn
+                   (incf observe-calls)
+                   (if (= observe-calls 1)
+                       "(STALEGREEN 0)"
+                       (funcall (%snippet *hist-bodies*) prompt)))
+                 (funcall (%snippet *hist-bodies*) prompt))))
+      (with-template-kernel (kernel :targets (%hist-targets)
+                                    :class-text *hist-class*
+                                    :symbols *hist-symbols*
+                                    :snippet-fn #'snip
+                                    :transport-var tr)
+        (multiple-value-bind (status reason) (run-kernel kernel :max-steps 120)
+          (ok (eq :done status))
+          (ok (and (stringp reason) (search "clean" reason))))
+        ;; the load failure was retried (≥2 OBSERVE calls), not advanced on
+        ;; the first attempt despite run-tests reporting it green
+        (ok (>= observe-calls 2))
+        (ok (= 5 (loop for (fn . sym) in *hist-symbols*
+                       count (gethash fn (tt-resolved tr)))))))))
