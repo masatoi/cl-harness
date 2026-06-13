@@ -273,3 +273,22 @@
     (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
       (dotimes (_ 12) (cl-harness-next/src/kernel::kernel-step kernel))
       (ok (eq :fix (policy-state policy))))))
+
+(deftest authoring-happy-path-reaches-done
+  (with-tdd-kernel (kernel :judge #'approve-judge
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :transport-var tr)
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))))
+
+(deftest fix-phase-never-edits-the-test-file
+  ;; Phase separation / oracle integrity: the gated tests are frozen — after
+  ;; the gate, the fix dial issues no test-file write. A first-try success
+  ;; makes exactly 2 test-file writes total: the defpackage skeleton + the one
+  ;; authored-tests write. The fake fix dial adds none.
+  (with-tdd-kernel (kernel :judge #'approve-judge
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :transport-var tr)
+    (run-kernel kernel :max-steps 60)
+    (ok (= 2 (tt-test-edits tr)))))
