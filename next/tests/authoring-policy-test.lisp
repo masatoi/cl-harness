@@ -68,3 +68,19 @@
 
 (deftest extract-deftest-rejects-unbalanced
   (ok (null (extract-deftest-forms "(deftest oops (ok (= 1 1))"))))
+
+(deftest author-prompt-includes-goal-and-surface
+  (let ((p (make-instance 'cl-harness-next/src/authoring-policy::authoring-policy
+                          :goal "add must return a+b"
+                          :system "s" :test-system "s/tests"
+                          :test-file "tests/main-test.lisp"
+                          :test-package "s/tests/main-test"
+                          :author-fn (lambda (x) (declare (ignore x)) "")
+                          :reviewer nil :fix-policy nil)))
+    (setf (cl-harness-next/src/authoring-policy::policy-sut-package p) "S/SRC/MAIN"
+          (cl-harness-next/src/authoring-policy::policy-sut-surface p)
+          "(defun add (a b) 0)")
+    (let ((prompt (cl-harness-next/src/authoring-policy::%author-prompt p)))
+      (ok (search "add must return a+b" prompt))
+      (ok (search "S/SRC/MAIN" prompt))
+      (ok (search "(defun add (a b) 0)" prompt)))))

@@ -76,3 +76,54 @@ deftest-name strings — or (values NIL REASON) for the regenerate loop."
          (values nil "reply must be ONLY rove deftest form(s), nothing else"))
         (t (values text
                    (mapcar (lambda (f) (symbol-name (second f))) forms)))))))
+
+(defparameter +test-author-system-prompt+
+  "You are a Common Lisp test author. Given a GOAL and the code under
+test, reply with ONLY one or more rove DEFTEST forms exercising the
+goal — no defpackage, no in-package, no prose, no markdown, no code
+fence. Shape: (deftest NAME (ok EXPR) (ok EXPR) ...). Reference the code
+under test by the symbols shown. The tests MUST fail against the current
+(unimplemented/stub) code and pass once the goal is met."
+  "System prompt for the test-author oracle; pair with MAKE-JUDGE-FN.")
+
+(defclass authoring-policy (control-policy)
+  ((mode :initarg :mode :initform :tdd :reader policy-mode)
+   (goal :initarg :goal :reader policy-goal)
+   (criteria :initarg :criteria :initform nil :reader policy-criteria)
+   (system :initarg :system :reader policy-system)
+   (test-system :initarg :test-system :reader policy-test-system)
+   (source-file :initarg :source-file :initform "src/main.lisp"
+                :reader policy-source-file)
+   (test-file :initarg :test-file :reader policy-test-file)
+   (test-package :initarg :test-package :reader policy-test-package)
+   (author-fn :initarg :author-fn :reader policy-author-fn)
+   (reviewer :initarg :reviewer :reader policy-reviewer)
+   (fix-policy :initarg :fix-policy :reader policy-fix-policy)
+   (clear-fasls-p :initarg :clear-fasls :initform t :reader %clear-fasls-p)
+   (k :initarg :k :initform 3 :reader policy-k)
+   (state :initform :init :accessor policy-state)
+   (attempts :initform 0 :accessor policy-attempts)
+   (feedback :initform nil :accessor policy-feedback)
+   (sut-package :initform "CL-USER" :accessor policy-sut-package)
+   (sut-surface :initform "" :accessor policy-sut-surface)
+   (base-content :initform nil :accessor policy-base-content)
+   (authored-names :initform nil :accessor policy-authored-names)
+   (last-attempt-text :initform "" :accessor %last-attempt-text))
+  (:documentation "Test-authoring dial (spec 2026-06-14). MVP mode :tdd:
+author failing tests, gate them (RED-first + review), then delegate the
+fix to FIX-POLICY. The fix dial patches src/ only, so it cannot weaken
+the gated tests."))
+
+(defun %author-prompt (policy)
+  "The per-attempt author prompt: goal + acceptance criteria + the SUT
+surface (package, class, stub signatures), plus feedback from a rejected
+attempt."
+  (format nil
+          "GOAL:~%~A~@[~2%ACCEPTANCE CRITERIA:~%~{- ~A~%~}~]~2%~
+CODE UNDER TEST (package ~A):~%~A~@[~2%PREVIOUS ATTEMPT REJECTED:~%~A~]~2%~
+Reply with ONLY rove deftest form(s)."
+          (policy-goal policy)
+          (policy-criteria policy)
+          (policy-sut-package policy)
+          (policy-sut-surface policy)
+          (policy-feedback policy)))
