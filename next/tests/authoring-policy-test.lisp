@@ -173,11 +173,16 @@
 
 (defparameter *tdd-test-package* "S/TESTS/MAIN-TEST")
 
-(defun approve-judge (prompt) (declare (ignore prompt)) "APPROVE: looks good")
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  ;; The default judges for WITH-TDD-KERNEL. The macro's &key default is the
+  ;; quoted form '#'approve-judge (not #'approve-judge), so it splices a
+  ;; function reference rather than dumping a live function into the fasl;
+  ;; the eval-when keeps both available at compile time for direct callers.
+  (defun approve-judge (prompt) (declare (ignore prompt)) "APPROVE: looks good")
 
-(defun reject-judge (prompt) (declare (ignore prompt)) "REJECT: too weak")
+  (defun reject-judge (prompt) (declare (ignore prompt)) "REJECT: too weak"))
 
-(defmacro with-tdd-kernel ((kernel &key author-fn (judge #'approve-judge)
+(defmacro with-tdd-kernel ((kernel &key author-fn (judge '#'approve-judge)
                                         (src "(defpackage #:s/src/main (:use #:cl) (:export #:add))
 (in-package #:s/src/main)
 (defun add (a b) (declare (ignore a b)) 0)")
@@ -212,3 +217,59 @@
 
 (defparameter *good-deftest*
   "(deftest add-adds (ok (= 5 (add 2 3))) (ok (= 0 (add 0 0))))")
+
+(deftest init-derives-sut-package-and-reaches-author
+  (with-tdd-kernel (kernel :author-fn (lambda (p) (declare (ignore p))
+                                         *good-deftest*)
+                           :transport-var tr)
+    (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
+      (dotimes (_ 6) (cl-harness-next/src/kernel::kernel-step kernel))
+      (ok (equal "S/SRC/MAIN"
+                 (cl-harness-next/src/authoring-policy::policy-sut-package policy)))
+      (ok (search "(in-package #:s/tests/main-test)" (tt-test-content tr)))
+      (ok (search "deftest add-adds" (tt-test-content tr))))))
+
+(deftest author-writes-validated-deftests-then-loads
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*)
+                      :transport-var tr)
+      (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
+        (dotimes (_ 9) (cl-harness-next/src/kernel::kernel-step kernel))
+        (ok (>= calls 1))
+        (ok (equal '("ADD-ADDS") (policy-authored-names policy)))
+        (ok (search "deftest add-adds" (tt-test-content tr)))
+        (ok (search "(in-package" (tt-test-content tr)))))))
+
+(deftest red-first-vacuous-test-is-regenerated
+  ;; The authored tests pass on the unfixed code (vacuous): RED-first must
+  ;; reject every attempt and the run gives up after K author calls — not
+  ;; advance to review/fix.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel :transport-var tr
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls)
+                                   (setf (tt-impl-done-p tr) t)
+                                   *good-deftest*))
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (ok (eq :given-up status))
+        (ok (and (stringp reason) (search "author" reason))))
+      (ok (>= calls 3)))))
+
+(deftest review-reject-regenerates-then-gives-up
+  (let ((calls 0))
+    (with-tdd-kernel (kernel :judge #'reject-judge
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*))
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (ok (eq :given-up status))
+        (ok (and (stringp reason) (search "author" reason))))
+      (ok (>= calls 3)))))
+
+(deftest review-approve-advances-to-fix
+  (with-tdd-kernel (kernel :judge #'approve-judge
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*))
+    (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
+      (dotimes (_ 12) (cl-harness-next/src/kernel::kernel-step kernel))
+      (ok (eq :fix (policy-state policy))))))

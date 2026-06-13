@@ -127,3 +127,195 @@ Reply with ONLY rove deftest form(s)."
           (policy-sut-package policy)
           (policy-sut-surface policy)
           (policy-feedback policy)))
+
+(defun %result-text (result)
+  "Text payload of an MCP content-style RESULT, or NIL."
+  (when (hash-table-p result)
+    (let ((content (gethash "content" result)))
+      (when (and content (plusp (length content)))
+        (let ((entry (elt content 0)))
+          (when (hash-table-p entry) (gethash "text" entry)))))))
+
+(defun %skeleton (policy)
+  "A fresh test file: defpackage (use cl + rove + the SUT package) + in-package.
+Package names are emitted lower-case so the file reads like hand-written source."
+  (let ((test-pkg (string-downcase (policy-test-package policy))))
+    (format nil "(defpackage #:~A~%  (:use #:cl #:rove #:~A))~%~%(in-package #:~A)~%"
+            test-pkg
+            (string-downcase (policy-sut-package policy))
+            test-pkg)))
+
+(defun %act (tool args reason)
+  "Build an :act decision for TOOL with ARGS (a plist) and a human REASON."
+  (make-decision :kind :act :tool tool
+                 :arguments (alexandria:plist-hash-table args :test #'equal)
+                 :reason reason))
+
+(defun %read-source (policy)
+  "Emit the read of the SUT source file; next state parses its surface."
+  (setf (policy-state policy) :parse-source)
+  (%act "fs-read-file" (list "path" (policy-source-file policy))
+        "read source for SUT surface"))
+
+(defun %parse-source (policy kernel)
+  "Derive the SUT package and surface from the source read, then emit the
+read of the test file to decide whether a skeleton is needed."
+  (let ((src (%result-text (kernel-last-result kernel))))
+    (when (stringp src)
+      (multiple-value-bind (targets class-text sut-package)
+          (discover-targets src (policy-source-file policy))
+        (when sut-package (setf (policy-sut-package policy) sut-package))
+        (setf (policy-sut-surface policy)
+              (format nil "~@[~A~2%~]~{~A~%~}"
+                      (when (plusp (length class-text)) class-text)
+                      (mapcar #'target-head targets))))))
+  (setf (policy-state policy) :ensure-skeleton)
+  (%act "fs-read-file" (list "path" (policy-test-file policy))
+        "read test file"))
+
+(defun %ensure-skeleton (policy kernel)
+  "If the test file already has an (in-package …), reuse it as the base
+content and author straight away; otherwise write a fresh skeleton first."
+  (let ((existing (or (%result-text (kernel-last-result kernel)) "")))
+    (if (search "(in-package" existing)
+        (progn (setf (policy-base-content policy) existing)
+               (%author policy))
+        (progn
+          (setf (policy-base-content policy) (%skeleton policy)
+                (policy-state policy) :author-skeleton-written)
+          (%act "fs-write-file"
+                (list "file_path" (policy-test-file policy)
+                      "content" (%skeleton policy))
+                "write test-file defpackage skeleton")))))
+
+(defun %regenerate (policy reason)
+  "Record feedback and re-author within K, else give up."
+  (incf (policy-attempts policy))
+  (setf (policy-feedback policy) reason)
+  (if (< (policy-attempts policy) (policy-k policy))
+      (%author policy)
+      (make-decision :kind :give-up
+                     :reason (format nil "could not author acceptable tests: ~A"
+                                     reason))))
+
+(defun %author (policy)
+  "Sample deftest form(s), validate, and emit the test-file write."
+  (let ((raw (handler-case (funcall (policy-author-fn policy)
+                                    (%author-prompt policy))
+               (error (c) (setf (policy-feedback policy)
+                                (format nil "author call error: ~A" c))
+                 nil))))
+    (if (null raw)
+        (%regenerate policy (policy-feedback policy))
+        ;; EXTRACT-DEFTEST-FORMS returns (values TEXT NAMES) on success and
+        ;; (values NIL REASON) on a bad reply — the second value is dual-use.
+        (multiple-value-bind (text names-or-reason) (extract-deftest-forms raw)
+          (if (null text)
+              (%regenerate policy names-or-reason)
+              (progn
+                (setf (policy-authored-names policy) names-or-reason
+                      (%last-attempt-text policy) text
+                      (policy-state policy) :author-written)
+                (%act "fs-write-file"
+                      (list "file_path" (policy-test-file policy)
+                            "content" (format nil "~A~%~%~A~%"
+                                              (policy-base-content policy) text))
+                      "write authored tests")))))))
+
+(defun %author-written (policy kernel)
+  "After writing the tests: on a write error regenerate; else load the
+authored test system."
+  (if (kernel-last-action-error kernel)
+      (%regenerate policy (format nil "writing tests failed: ~A"
+                                  (kernel-last-action-error kernel)))
+      (progn
+        (setf (policy-state policy) :author-loaded)
+        (%act "load-system"
+              (append (list "system" (policy-test-system policy))
+                      (when (%clear-fasls-p policy) (list "clear_fasls" t)))
+              "load the authored test system"))))
+
+(defun %author-loaded (policy kernel)
+  "After loading the authored tests: on a load error regenerate; else run
+them to confirm they fail (RED-first) against the unfixed code."
+  (if (kernel-last-action-error kernel)
+      (%regenerate policy (format nil "authored tests did not load: ~A"
+                                  (kernel-last-action-error kernel)))
+      (progn
+        (setf (policy-state policy) :author-verify)
+        (%act "run-tests" (list "system" (policy-test-system policy))
+              "RED-first: authored tests must fail"))))
+
+(defun %mentions (needle text)
+  "True when TEXT is a string containing NEEDLE (case-insensitive)."
+  (and (stringp text) (search needle text :test #'char-equal) t))
+
+(defun %name-in-failures-p (name failed)
+  "True when an authored test NAME appears in the FAILED entries' test_name."
+  (some (lambda (entry)
+          (and (hash-table-p entry)
+               (%mentions name (gethash "test_name" entry))))
+        (coerce (or failed #()) 'list)))
+
+(defun %authored-tests-red-p (policy result)
+  "True only on positive evidence the authored tests fail: a clean load
+gave a failed_tests array and EVERY authored name appears in it."
+  (and (hash-table-p result)
+       (not (gethash "isError" result))
+       (let ((failed (gethash "failed_tests" result)))
+         (and failed (plusp (length failed))
+              (every (lambda (n) (%name-in-failures-p n failed))
+                     (policy-authored-names policy))))))
+
+(defun %review-subject (policy)
+  "The review prompt: the goal, acceptance criteria, and the authored tests,
+asking the reviewer to reject tautologies / dodges."
+  (format nil "GOAL:~%~A~@[~2%ACCEPTANCE CRITERIA:~%~{- ~A~%~}~]~2%~
+Do these rove tests faithfully and non-trivially encode the goal? \
+Reject tautologies / empty tests / tests that dodge the goal.~2%~
+AUTHORED TESTS:~%~A"
+          (policy-goal policy) (policy-criteria policy)
+          (%last-attempt-text policy)))
+
+(defun %emit-review (policy)
+  "Emit the :consult that asks the reviewer oracle to judge the tests."
+  (setf (policy-state policy) :author-reviewed)
+  (make-decision :kind :consult :oracle (policy-reviewer policy)
+                 :subject (%review-subject policy)
+                 :reason "review authored tests against the goal"))
+
+(defun %author-verify (policy kernel)
+  "After RED-first run-tests: if the authored tests fail against the unfixed
+code, send them to review; otherwise they are vacuous — regenerate."
+  (if (%authored-tests-red-p policy (kernel-last-result kernel))
+      (%emit-review policy)
+      (%regenerate policy
+                   "your tests passed on the unfixed code (vacuous or already \
+met); assert the goal so they fail until it is implemented")))
+
+(defun %author-reviewed (policy kernel)
+  "After the review verdict: on PASS advance to the inner fix dial (same
+step, mirroring the adaptive dial); on a reject regenerate."
+  (let ((verdict (kernel-last-verdict kernel)))
+    (if (and verdict (verdict-pass-p verdict))
+        (progn (setf (policy-state policy) :fix)
+               (decide (policy-fix-policy policy) kernel))
+        (%regenerate policy
+                     (format nil "review rejected the tests: ~A"
+                             (and verdict (verdict-reason verdict)))))))
+
+(defmethod decide ((policy authoring-policy) kernel)
+  "The test-authoring FSM (spec 2026-06-14): read source → ensure skeleton →
+author → RED-first verify → review → delegate to the inner fix dial.
+One decision per step; :fix hands off to FIX-POLICY's own DECIDE."
+  (ecase (policy-state policy)
+    (:init (%read-source policy))
+    (:parse-source (%parse-source policy kernel))
+    (:ensure-skeleton (%ensure-skeleton policy kernel))
+    (:author-skeleton-written (%author policy))
+    (:author (%author policy))
+    (:author-written (%author-written policy kernel))
+    (:author-loaded (%author-loaded policy kernel))
+    (:author-verify (%author-verify policy kernel))
+    (:author-reviewed (%author-reviewed policy kernel))
+    (:fix (decide (policy-fix-policy policy) kernel))))
