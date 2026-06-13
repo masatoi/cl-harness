@@ -95,8 +95,11 @@ never renders \"?\" for a structured failure."
               description)))))
 
 (defun %note-failure (ledger test-name reason seq)
-  "Push an active failure unless an equivalent one is already active —
-same test name, or same reason for unnamed (unstructured) failures."
+  "Record an active failure. An equivalent one already active — same test
+name, or same reason for unnamed (unstructured) failures — is REFRESHED to
+this latest sighting (seq/patch-seq/reason) rather than left untouched: a
+failure re-seen after a patch is current, not stale, and the staleness check
+keys off the record's seq."
   (let ((duplicate
           (if test-name
               (find test-name (active-failures ledger)
@@ -105,12 +108,15 @@ same test name, or same reason for unnamed (unstructured) failures."
                          (and (null (failure-record-test-name failure))
                               (equal reason (failure-record-reason failure))))
                        (active-failures ledger)))))
-    (unless duplicate
-      (push (make-failure-record :test-name test-name
-                                 :reason reason
-                                 :seq seq
-                                 :patch-seq (%patch-seq ledger))
-            (active-failures ledger)))))
+    (if duplicate
+        (setf (failure-record-seq duplicate) seq
+              (failure-record-patch-seq duplicate) (%patch-seq ledger)
+              (failure-record-reason duplicate) reason)
+        (push (make-failure-record :test-name test-name
+                                   :reason reason
+                                   :seq seq
+                                   :patch-seq (%patch-seq ledger))
+              (active-failures ledger)))))
 
 (defun %resolve-all-failures (ledger seq)
   (dolist (failure (active-failures ledger))
