@@ -371,6 +371,38 @@ and its observation are recorded into the event log."))
           (ok (search "ABORT-RUN" text))
           (ok (search "stalled verify cycles" text)))))))
 
+(deftest tool-error-results-set-last-action-error
+  ;; A tool-level failure (isError result) must reach the policy's
+  ;; next prompt like a transport error does — guided live run 6: the
+  ;; agent read a wrong path, saw NOTHING about the failure, and spun
+  ;; into a thinking runaway.
+  (with-log (log path)
+    (declare (ignorable path))
+    (let* ((env (make-instance
+                 'fake-environment :log log
+                 :handlers
+                 (list (lambda (tool arguments)
+                         (declare (ignore tool arguments))
+                         (%hash "isError" t
+                                "content"
+                                (list (%hash "type" "text"
+                                             "text" "File not found: tests/test.lisp")))))))
+           (kernel (make-kernel
+                    :environment env
+                    :event-log log
+                    :policy (make-instance
+                             'script-policy
+                             :decisions
+                             (list (make-decision
+                                    :kind :act :tool "lisp-read-file"
+                                    :arguments (%hash "path" "tests/test.lisp")
+                                    :reason "read")
+                                   (make-decision :kind :finish
+                                                  :reason "ok"))))))
+      (run-kernel kernel)
+      (ok (search "File not found"
+                  (kernel-last-action-error kernel))))))
+
 (defclass replanning-policy (script-policy) ())
 
 (defmethod cl-harness-next/src/kernel:handle-intervention

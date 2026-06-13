@@ -129,6 +129,22 @@ counters then rebuild from the same log on resume)."
                                     (decision-reason decision)))
                :test #'equal)))
 
+(defun %result-error-text (result)
+  "Failure text of an isError tool RESULT, or NIL for success. A
+tool-level failure must reach the policy's next prompt like a
+transport error does (guided live run 6: an invisible failed read sent
+the model into a thinking runaway)."
+  (when (and (hash-table-p result)
+             (multiple-value-bind (value present-p)
+                 (gethash "isError" result)
+               (and present-p value)))
+    (let ((content (gethash "content" result)))
+      (or (when (and content (plusp (length content)))
+            (let ((entry (elt content 0)))
+              (when (hash-table-p entry)
+                (gethash "text" entry))))
+          "tool reported an error"))))
+
 (defun %governor-gate (kernel)
   "Run CHECK-GOVERNOR, letting the policy choose the restart via
 HANDLE-INTERVENTION. :continue → proceed; :demote-dial → record a dial
@@ -196,11 +212,14 @@ halts. True when halted."
             (:act
              (setf (kernel-last-action-error kernel) nil)
              (handler-case
-                 (setf (kernel-last-result kernel)
-                       (perform-action (kernel-environment kernel)
-                                       (decision-tool decision)
-                                       (or (decision-arguments decision)
-                                           (make-hash-table :test #'equal))))
+                 (let ((result
+                         (perform-action (kernel-environment kernel)
+                                         (decision-tool decision)
+                                         (or (decision-arguments decision)
+                                             (make-hash-table :test #'equal)))))
+                   (setf (kernel-last-result kernel) result
+                         (kernel-last-action-error kernel)
+                         (%result-error-text result)))
                (error (condition)
                  (setf (kernel-last-result kernel) nil
                        (kernel-last-action-error kernel)
