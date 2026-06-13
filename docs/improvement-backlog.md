@@ -2082,3 +2082,24 @@ read を要する旨を guided agenda / ドキュメントに明示し、scripte
 
 
 
+
+### N6. template-fix-policy(最下段ダイヤル) — ✅ コア実装・実証済み (2026-06-13)
+
+**根拠**: N1+N2+N4 後も Qwen は agency 層(計画・tool-call・完了判断)で全敗。
+診断: 詰まるのは code-gen ではなく agency。**変更**: 最下段 `template-fix-policy`
+を実装(spec `docs/superpowers/specs/2026-06-13-template-fix-policy-design.md`)。
+ハーネス FSM が agency を 100% 所有し、LLM は穴埋め body だけ出す code-gen オラクル
+に退化。リーダベース body 抽出 + per-form(prompt→snippet→抽出→ハーネス発行の
+lisp-edit-form→load→test→K再試行/park→clean ゲート)。全 271 テスト緑。
+
+**実証**: Qwen3.6-35B-A3B × clh-histogram full-5 で、全エージェントダイヤルが 0/5
+だったのに **template-fix は 5/5 緑・`:done`(3/3 再現)**。`total`/`top-key` の
+maphash アキュムレータも正答。`tools/run-template.lisp`。
+
+**残(follow-up)**:
+- B2: DISCOVER をソース化(現状は `:targets` 注入)。スタブ検出 + 失敗テスト
+  cross-check(spec §5)。
+- adaptive 最下段への配線 + demote トリガに `:give-up` を追加(spec §7)。
+  今は sub-level の give-up が kernel を即終了させ template-fix に届かない。
+- 能力ベース開始の自動化(モデル×自律度 matrix / L5)。
+- guided/self-directed の step-fn 用 free-var チェック(Increment A で後送り)。

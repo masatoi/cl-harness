@@ -259,7 +259,8 @@ and emit the edit, or park the current form and advance."
              raw
              :head (target-head (policy-current policy))
              :form-type (target-form-type (policy-current policy))
-             :package (find-package (policy-sut-package policy)))
+             :package (or (find-package (policy-sut-package policy))
+                          (find-package :cl-user)))
           (declare (ignore reason))
           (if candidate
               (return-from %gen (%make-edit-decision policy candidate))
