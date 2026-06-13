@@ -134,17 +134,31 @@ ambiguity at discovery. Locked by `discover-handles-overloaded-methods`.
 *Done-detection*, however, keys off the operator symbol, which the two overloads
 **share** (a second review caught this): a remaining failure for one overload
 still mentions the symbol, so `%form-resolved-p` alone would falsely re-try/park
-the already-patched sibling. `%check` therefore advances a shared-symbol target
-once its edit *builds cleanly* (run-tests returned real data, not a tool error)
-and lets the final clean oracle arbitrate. Locked by
-`template-overloaded-generic-resolves-each-method`.
+the already-patched sibling. For a shared symbol (`%symbol-shared-p`) `%check`
+therefore judges resolution by **progress**, not symbol-presence
+(`%overload-resolved-p`): the build must be clean (real test data) AND either the
+symbol is now wholly gone, or this patch **strictly reduced** the count of
+`failed_tests` entries mentioning the symbol versus the target's **pre-count**
+(the count when the target began). A *third* review caught that "build clean"
+alone advanced a compiling-but-*wrong* body without retry (the shared symbol
+still failed, but the run wasn't a tool error) → premature give-up at the final
+gate; the count-decrease test repairs that — a wrong body makes no progress and
+is retried within K. The pre-count is snapshotted at each target's start
+(`%snapshot-pre-count`) from the latest test result; to give the *first* target a
+pre-count, the **injected-targets path now also runs a baseline `load-system` +
+`run-tests`** (the cross-check filter is skipped for explicit targets). Locked by
+`template-overloaded-generic-resolves-each-method` (correct body, one edit each)
+and `template-overloaded-wrong-body-is-retried-not-advanced` (wrong body retried).
 
 **Failing-test cross-check** (`:disc-baseline-test` → `:disc-filter`): after
 discovering all source stubs, the FSM runs a baseline `load-system` + `run-tests`
 and keeps only targets whose `symbol` appears in the raw `failed_tests` (string
 match on the `form`/`description`/`test_name` fields — untested stubs do not block
 green, so they are skipped). **Conservative**: if the baseline yields no/absent
-failure data (e.g. the all-stub image failed to load), all stubs are kept.
+failure data (e.g. the all-stub image failed to load), all stubs are kept. The
+baseline test result is also retained (`last-tests-result`) as the first target's
+pre-count source. Injected targets run the same baseline but **skip the filter**
+(`injected-p`) — explicit targets are never narrowed away.
 
 `fix-target` also has an `original-body` slot reserved for a future revert
 payload; it is not populated yet (no post-edit revert — §3.5).
@@ -204,19 +218,24 @@ Slots: `snippet-fn` (prompt→raw-string), `system`, `test-system`, `sut-package
 `targets` (accessor — injected or discovered), `class-text` (accessor),
 `source-files` (default `("src/main.lisp")`), `disc-files`, `pending-file`,
 `state` (`:init`), `queue`, `current`, `attempts`, `feedback`, `parked`,
-`clean-oracle`.
+`injected-p` (skip the cross-check filter), `last-tests-result` +
+`pre-count` (overload progress baseline), `clean-oracle`.
 
 `decide` is an `ecase` over `state`; **every branch returns exactly one
 `decision`** (kernel is one-decision-per-step). The **LLM round-trip happens
 inside `decide`** in `%gen` (called from `:init`/advance/retry) — it is *not* a
 kernel `:consult` (that kind needs an oracle returning a verdict).
 
-### 7.1 Discovery sub-FSM (skipped when `:targets` is injected)
+### 7.1 Discovery sub-FSM
 `:init` (no targets) → set `disc-files`, emit `fs-read-file` (`:act`), state
 `:disc` → `:disc` (parse the result with `discover-targets`, accumulate
 targets/class-text/package; more files → read next, else `%baseline-load`) →
 `:disc-baseline-test` (emit `run-tests` `:act`) → `:disc-filter` (cross-check
-filter §5, then start the per-form loop).
+filter §5, then start the per-form loop). **Injected targets** (`:init` with
+`:targets`) take the *same* baseline path — `%init` sets `injected-p` and calls
+`%baseline-load` → `:disc-baseline-test` → `:disc-filter` — but `%disc-filter`
+skips the filter for `injected-p`. The baseline exists so the first target has a
+`pre-count` for overload done-detection (§5).
 
 ### 7.2 Per-form loop
 `%gen`: build the prompt (§8), call `snippet-fn`, `extract-method-body`; on a
@@ -227,9 +246,12 @@ on ≤K malformed re-samples (feeding the reason back) failing, park and advance
 (done? → advance; else `incf attempts`, retry `%gen` while `< K`, else park) →
 advance (next target → `%gen`; queue empty → `:final`). The done test is
 `%form-resolved-p` (positive evidence §3) for a unique symbol; for an
-**overloaded** symbol (`%symbol-shared-p`) it is instead "the build came back
-clean" (`not %run-tests-errored-p`), since the shared symbol can't single out the
-specializer — the final clean oracle is the backstop.
+**overloaded** symbol (`%symbol-shared-p`) it is `%overload-resolved-p` —
+*progress* against the `pre-count` (symbol gone, or its `failed_tests` count
+strictly dropped), since the shared symbol can't single out the specializer and
+"build clean" alone would advance a compiling-but-wrong body (§5). `%advance` and
+`%finish-discovery` snapshot the next target's `pre-count`; `%check` records each
+test result. The final clean oracle remains the backstop.
 
 ### 7.3 Termination & governor
 `:final` consults the clean oracle: `verdict-pass-p` → `:finish`
@@ -295,7 +317,10 @@ discovers, `:done`), `discovery-cross-check-skips-untested-stubs`,
 `template-tool-error-is-not-treated-as-resolved` (second review: a NOCOMPILE body
 errors the build → retried, not falsely advanced),
 `template-overloaded-generic-resolves-each-method` (second review: each overload
-patched once, no spurious park on the shared symbol).
+patched once, no spurious park on the shared symbol),
+`template-overloaded-wrong-body-is-retried-not-advanced` (third review: a
+compiling-but-wrong overload makes no progress vs the pre-count → retried within
+K, not advanced to a premature give-up).
 
 Adaptive: `give-up-demotes-to-the-next-rung-this-step`,
 `give-up-at-the-bottom-rung-escapes`,

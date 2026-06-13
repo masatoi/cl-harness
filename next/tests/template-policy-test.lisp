@@ -481,3 +481,42 @@
                          count (gethash fn (tt-resolved tr)))))
           ;; one edit per overload — no spurious retries on the shared symbol
           (ok (= 2 calls)))))))
+
+(deftest template-overloaded-wrong-body-is-retried-not-advanced
+  ;; A *compiling but semantically wrong* body for one overload (marker BAD:
+  ;; the build is clean but the shared symbol's assertion still fails) must
+  ;; consume the per-form retry budget — it must NOT be advanced just because
+  ;; run-tests returned without a tool error. A correct retry then drives :done.
+  (let ((square-calls 0))
+    (flet ((snip (prompt)
+             (cond
+               ((search "SQUARE" prompt :test #'char-equal)
+                (incf square-calls)
+                (if (= square-calls 1)
+                    "(progn 'BAD 0)"   ; compiles, wrong → AREA stays failing
+                    "(* 2 2)"))         ; correct on retry
+               (t "(* 3 3)"))))         ; circle: correct first try
+      (let ((targets (list (make-fix-target :symbol "AREA" :file "src/main.lisp"
+                                            :form-type "defmethod"
+                                            :form-name "area ((s square))"
+                                            :head "area ((s square))"
+                                            :contract "area of a square")
+                           (make-fix-target :symbol "AREA" :file "src/main.lisp"
+                                            :form-type "defmethod"
+                                            :form-name "area ((s circle))"
+                                            :head "area ((s circle))"
+                                            :contract "area of a circle")))
+            (symbols '(("area ((s square))" . "AREA")
+                       ("area ((s circle))" . "AREA"))))
+        (with-template-kernel (kernel :targets targets
+                                      :class-text "(defclass shape () ())"
+                                      :symbols symbols
+                                      :snippet-fn #'snip
+                                      :transport-var tr)
+          (multiple-value-bind (status reason) (run-kernel kernel :max-steps 120)
+            (ok (eq :done status))
+            (ok (and (stringp reason) (search "clean" reason))))
+          (ok (= 2 (loop for (fn . sym) in symbols
+                         count (gethash fn (tt-resolved tr)))))
+          ;; the wrong square body was retried, not advanced on a clean build
+          (ok (>= square-calls 2)))))))

@@ -307,6 +307,16 @@ explicit). When NIL, DISCOVER reads SOURCE-FILES and fills this.")
    (attempts :initform 0 :accessor policy-attempts)
    (feedback :initform nil :accessor policy-feedback)
    (parked :initform nil :accessor policy-parked)
+   (injected-p :initform nil :accessor policy-injected-p
+               :documentation "True when targets were injected (not discovered)
+— the baseline cross-check filter is skipped for explicit targets.")
+   (last-tests-result :initform nil :accessor policy-last-tests-result
+                      :documentation "Most recent run-tests result hash
+(baseline or per-form), used to snapshot a target's pre-patch failure count.")
+   (pre-count :initform nil :accessor policy-pre-count
+              :documentation "Count of failed_tests entries mentioning the
+current target's symbol at the moment the target began — the baseline a
+shared (overloaded) symbol's done-detection compares against.")
    (clean-oracle :accessor %clean-oracle))
   (:documentation "The lowest dial rung: the FSM owns all agency; the
 LLM only fills a method body. Targets are discovered from SOURCE-FILES
@@ -356,6 +366,7 @@ Reply with ONLY the body s-expression(s)."
   (setf (policy-current policy) (pop (policy-queue policy))
         (policy-attempts policy) 0
         (policy-feedback policy) nil)
+  (%snapshot-pre-count policy)
   (if (policy-current policy)
       (%gen policy)
       (%clean-consult policy)))
@@ -418,6 +429,13 @@ and emit the edit, or park the current form and advance."
 (defun %mentions (sym-name text)
   (and (stringp text) (search sym-name text :test #'char-equal) t))
 
+(defun %entry-mentions-p (entry sym-name)
+  "True when a failed_tests ENTRY names SYM-NAME in its form/description/name."
+  (and (hash-table-p entry)
+       (or (%mentions sym-name (gethash "form" entry))
+           (%mentions sym-name (gethash "description" entry))
+           (%mentions sym-name (gethash "test_name" entry)))))
+
 (defun %form-resolved-p (policy result)
   "True only on positive evidence that the current target now passes: either
 the whole suite is green, or run-tests reported per-test failures and this
@@ -431,13 +449,7 @@ treated as fixed."
            (sym (target-symbol (policy-current policy))))
       (cond
         (failures
-         (notany
-          (lambda (entry)
-            (and (hash-table-p entry)
-                 (or (%mentions sym (gethash "form" entry))
-                     (%mentions sym (gethash "description" entry))
-                     (%mentions sym (gethash "test_name" entry)))))
-          failures))
+         (notany (lambda (entry) (%entry-mentions-p entry sym)) failures))
         ((eql (gethash "failed" result) 0) t)
         (t nil)))))
 
@@ -460,13 +472,43 @@ the patched body did not build cleanly."
   (or (not (hash-table-p result))
       (and (gethash "isError" result) t)))
 
+(defun %symbol-fail-count (result sym-name)
+  "Number of failed_tests entries in the run-tests RESULT mentioning SYM-NAME."
+  (if (hash-table-p result)
+      (count-if (lambda (entry) (%entry-mentions-p entry sym-name))
+                (coerce (or (gethash "failed_tests" result) #()) 'list))
+      0))
+
+(defun %snapshot-pre-count (policy)
+  "Record the current target's symbol failure count from the latest test
+result — the baseline an overloaded symbol's done-detection compares against."
+  (setf (policy-pre-count policy)
+        (when (policy-current policy)
+          (%symbol-fail-count (policy-last-tests-result policy)
+                              (target-symbol (policy-current policy))))))
+
+(defun %overload-resolved-p (policy result)
+  "Done-detection for an overloaded (shared-symbol) target. The shared operator
+symbol cannot single out one specializer, so resolution is judged by progress:
+the build must be clean (real test data, not a tool error) AND either the
+symbol is now wholly gone, or this patch strictly reduced the symbol's failure
+count versus the target's PRE-COUNT. A compiling-but-wrong body leaves the
+count unchanged and is therefore retried, not advanced."
+  (and (not (%run-tests-errored-p result))
+       (let ((now (%symbol-fail-count result
+                                      (target-symbol (policy-current policy))))
+             (pre (policy-pre-count policy)))
+         (or (zerop now)
+             (and pre (< now pre))))))
+
 (defun %check (policy kernel)
   (let ((result (kernel-last-result kernel)))
+    (setf (policy-last-tests-result policy) result)
     (if (if (%symbol-shared-p policy)
             ;; Overloaded generic: the shared symbol can't single out this
-            ;; specializer, so advance once the patch builds cleanly (real
-            ;; test data came back) and let the final clean oracle arbitrate.
-            (not (%run-tests-errored-p result))
+            ;; specializer, so judge by progress against the pre-count — a
+            ;; compiling-but-wrong body makes no progress and is retried.
+            (%overload-resolved-p policy result)
             (%form-resolved-p policy result))
         (%advance policy)
         (progn
@@ -498,11 +540,13 @@ the patched body did not build cleanly."
           (when (hash-table-p entry) (gethash "text" entry)))))))
 
 (defun %finish-discovery (policy)
-  "After all source files are parsed, set up the work queue and start."
+  "After all source files are parsed (or targets injected) and the baseline
+test has run, set up the work queue and start."
   (setf (policy-queue policy) (copy-list (policy-targets policy))
         (policy-current policy) (pop (policy-queue policy))
         (policy-attempts policy) 0
         (policy-feedback policy) nil)
+  (%snapshot-pre-count policy)
   (if (policy-current policy)
       (%gen policy)
       (%clean-consult policy)))
@@ -559,41 +603,42 @@ next file or finish discovery."
    :reason "baseline tests for the failing-test cross-check"))
 
 (defun %disc-filter (policy kernel)
-  "Conservative failing-test cross-check: when the baseline run-tests
-yields failures, keep only targets whose symbol appears in them (untested
-stubs do not block green). On absent/empty failure data, keep all."
+  "Record the baseline test result (for pre-count snapshots), then — for
+discovered targets only — run the conservative failing-test cross-check: keep
+only targets whose symbol appears in the baseline failures (untested stubs do
+not block green). Injected targets are explicit and never filtered. On
+absent/empty failure data, keep all."
   (let* ((result (kernel-last-result kernel))
          (failed (and (hash-table-p result) (gethash "failed_tests" result))))
-    (when (and failed (plusp (length failed)))
+    (setf (policy-last-tests-result policy) result)
+    (when (and (not (policy-injected-p policy)) failed (plusp (length failed)))
       (setf (policy-targets policy)
             (remove-if-not
              (lambda (tgt)
                (some (lambda (entry)
-                       (and (hash-table-p entry)
-                            (or (%mentions (target-symbol tgt) (gethash "form" entry))
-                                (%mentions (target-symbol tgt) (gethash "description" entry))
-                                (%mentions (target-symbol tgt) (gethash "test_name" entry)))))
+                       (%entry-mentions-p entry (target-symbol tgt)))
                      (coerce failed 'list)))
              (policy-targets policy)))))
   (%finish-discovery policy))
 
 (defun %init (policy)
-  (setf (policy-queue policy) (copy-list (policy-targets policy))
-        (policy-current policy) (pop (policy-queue policy))
-        (policy-attempts policy) 0
-        (policy-feedback policy) nil))
+  "Injected-targets start: mark injected and run a baseline load+test so the
+per-form loop has a pre-count for overloaded symbols. The cross-check filter
+is skipped for explicit targets (see %disc-filter)."
+  (setf (policy-injected-p policy) t)
+  (%baseline-load policy))
 
 (defmethod decide ((policy template-fix-policy) kernel)
   (ecase (policy-state policy)
     (:init
      (if (policy-targets policy)
-         (progn (%init policy)
-                (if (policy-current policy)
-                    (%gen policy)
-                    (%clean-consult policy)))
-         (progn (setf (policy-disc-files policy)
-                      (copy-list (policy-source-files policy)))
-                (%disc-read-next policy))))
+         ;; Injected targets: baseline load+test (no cross-check filter) so the
+         ;; per-form loop has a pre-count for overloaded symbols.
+         (%init policy)
+         (progn
+          (setf (policy-disc-files policy)
+                  (copy-list (policy-source-files policy)))
+          (%disc-read-next policy))))
     (:disc (%disc policy kernel))
     (:disc-baseline-test (%baseline-test policy))
     (:disc-filter (%disc-filter policy kernel))
