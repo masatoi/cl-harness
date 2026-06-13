@@ -474,7 +474,44 @@ next file or finish discovery."
         (when pkg (setf (policy-sut-package policy) pkg)))))
   (if (policy-disc-files policy)
       (%disc-read-next policy)
-      (%finish-discovery policy)))
+      (%baseline-load policy)))
+
+(defun %baseline-load (policy)
+  (setf (policy-state policy) :disc-baseline-test)
+  (make-decision
+   :kind :act :tool "load-system"
+   :arguments (alexandria:plist-hash-table
+               (append (list "system" (policy-system policy))
+                       (when (%clear-fasls-p policy) (list "clear_fasls" t)))
+               :test #'equal)
+   :reason "baseline load for the failing-test cross-check"))
+
+(defun %baseline-test (policy)
+  (setf (policy-state policy) :disc-filter)
+  (make-decision
+   :kind :act :tool "run-tests"
+   :arguments (alexandria:plist-hash-table
+               (list "system" (policy-test-system policy)) :test #'equal)
+   :reason "baseline tests for the failing-test cross-check"))
+
+(defun %disc-filter (policy kernel)
+  "Conservative failing-test cross-check: when the baseline run-tests
+yields failures, keep only targets whose symbol appears in them (untested
+stubs do not block green). On absent/empty failure data, keep all."
+  (let* ((result (kernel-last-result kernel))
+         (failed (and (hash-table-p result) (gethash "failed_tests" result))))
+    (when (and failed (plusp (length failed)))
+      (setf (policy-targets policy)
+            (remove-if-not
+             (lambda (tgt)
+               (some (lambda (entry)
+                       (and (hash-table-p entry)
+                            (or (%mentions (target-symbol tgt) (gethash "form" entry))
+                                (%mentions (target-symbol tgt) (gethash "description" entry))
+                                (%mentions (target-symbol tgt) (gethash "test_name" entry)))))
+                     (coerce failed 'list)))
+             (policy-targets policy)))))
+  (%finish-discovery policy))
 
 (defun %init (policy)
   (setf (policy-queue policy) (copy-list (policy-targets policy))
@@ -494,6 +531,8 @@ next file or finish discovery."
                       (copy-list (policy-source-files policy)))
                 (%disc-read-next policy))))
     (:disc (%disc policy kernel))
+    (:disc-baseline-test (%baseline-test policy))
+    (:disc-filter (%disc-filter policy kernel))
     (:await-edit (%await-edit policy kernel))
     (:verify (%verify policy))
     (:check (%check policy kernel))

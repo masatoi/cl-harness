@@ -2100,11 +2100,23 @@ maphash アキュムレータも正答。`tools/run-template.lisp`。
 (リーダベースでソース解析→スタブ defmethod/defun を発見、class-text/contract/
 package も導出)＋発見サブFSM(`:disc`: fs-read-file→解析→per-form)。注入
 (`:targets`)経路も維持(テスト用)。canned 統合テストで注入なし `:done`、real Qwen
-discovery モード(`CLH_DISCOVER`)でも 5/5 `:done`(再現)。273 テスト緑。
-失敗テスト cross-check / 複数ファイル auto-list / overload 曖昧解決は将来の精緻化。
+discovery モード(`CLH_DISCOVER`)でも 5/5 `:done`(再現)。
+
+**精緻化 — ✅ 実装済み (2026-06-13)**:
+- **失敗テスト cross-check**: 発見後にベースライン run-tests を取り、失敗に現れる
+  シンボルのターゲットだけ残す(未テストのスタブは緑を妨げないので除外。失敗データが
+  無ければ保守的に全保持)。`:disc-baseline-test`/`:disc-filter` 状態。
+- **overload**: form 単位で解析するので、1 総称関数の複数 defmethod は別ターゲット
+  (別特定子 form-name)になり曖昧性なし — テストで確認。
+- **adaptive の `:give-up` demote**: `decide` で sub-level の `:give-up` を捕まえ、
+  下位段があれば demote(level-index++/governor reset/dial イベント)して同ステップで
+  再 decide。最下段の give-up のみ脱出。`progress-stalled` 経路は維持。これで
+  template-fix を `:levels` 最下段に置けば、上位段の give-up で template-fix へ落ちる。
+  全 277 テスト緑、real Qwen discovery も維持。
 
 **残(follow-up)**:
-- adaptive 最下段への配線 + demote トリガに `:give-up` を追加(spec §7)。
-  今は sub-level の give-up が kernel を即終了させ template-fix に届かない。
-- 能力ベース開始の自動化(モデル×自律度 matrix / L5)。
-- guided/self-directed の step-fn 用 free-var チェック(Increment A で後送り)。
+- 複数ファイルの auto-list(`fs-list-directory`)。現状は `:source-files` 明示
+  (既定 `src/main.lisp`)で多ファイルも可。
+- 能力ベース開始の自動化(モデル×自律度 matrix / L5) — 規模大。
+- guided/self-directed の step-fn 用 free-var チェック(scope 追跡が要り false-positive
+  しやすい。誤変数 body は load/test の再試行が既に拾うため低優先)。

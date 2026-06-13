@@ -120,6 +120,22 @@
       (ok (not (find "DONE-METHOD" targets :key #'target-symbol :test #'equal)))
       (ok (not (find "HELPER" targets :key #'target-symbol :test #'equal))))))
 
+(deftest discover-handles-overloaded-methods
+  ;; Form-by-form parsing means an overloaded generic's two stub methods
+  ;; become two distinct targets (distinct specializer form-names) — no
+  ;; symbol->form ambiguity to resolve.
+  (let ((source (format nil "~{~A~%~}"
+                        (list "(in-package #:cl-user)"
+                              "(defclass shape () ())"
+                              "(defclass circle (shape) ())"
+                              "(defgeneric area (s))"
+                              "(defmethod area ((s shape)) 0)"
+                              "(defmethod area ((s circle)) nil)"))))
+    (let ((targets (discover-targets source "f.lisp")))
+      (ok (= 2 (length targets)))
+      (ok (find "area ((s shape))" targets :key #'target-form-name :test #'equal))
+      (ok (find "area ((s circle))" targets :key #'target-form-name :test #'equal)))))
+
 ;;; --- FSM full-loop tests over a canned cl-mcp transport -------------------
 ;;; The transport tracks which form_names have been patched correctly (a
 ;;; patch is "correct" unless its content contains the marker BAD) and
@@ -345,3 +361,26 @@
     (ok (= 1 (tt-kill-count tr)))
     (ok (= 5 (loop for (fn . sym) in *hist-symbols*
                    count (gethash fn (tt-resolved tr)))))))
+
+(deftest discovery-cross-check-skips-untested-stubs
+  ;; A stub no test exercises ('unused', absent from the run-tests
+  ;; failures) is filtered out of the work queue; only the tested stubs
+  ;; are fixed, and the run still reaches :done.
+  (let ((source (format nil "~{~A~%~}"
+                         (list "(defpackage #:cc/main (:use #:cl) (:export #:observe #:count-of #:unused))"
+                               "(in-package #:cc/main)"
+                               "(defclass histogram () ((table :initform (make-hash-table) :accessor histogram-table)))"
+                               "(defmethod observe ((h histogram) key) (declare (ignore key)) 0)"
+                               "(defmethod count-of ((h histogram) key) (declare (ignore key)) 0)"
+                               "(defmethod unused ((h histogram)) nil)")))
+         (symbols '(("observe ((h histogram) key)" . "OBSERVE")
+                    ("count-of ((h histogram) key)" . "COUNT-OF")))
+         (bodies '(("OBSERVE" . "(incf (gethash key (histogram-table h) 0))")
+                   ("COUNT-OF" . "(gethash key (histogram-table h) 0)"))))
+    (with-template-kernel (kernel :class-text "" :source source
+                                  :symbols symbols :snippet-fn (%snippet bodies)
+                                  :transport-var tr)
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 120)
+        (ok (eq :done status))
+        (ok (and (stringp reason) (search "clean" reason))))
+      (ok (not (gethash "unused ((h histogram))" (tt-resolved tr)))))))
