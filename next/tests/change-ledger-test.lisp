@@ -20,6 +20,7 @@
                 #:patch-entry-seq
                 #:source-fact-file
                 #:source-fact-detail
+                #:source-fact-content
                 #:source-fact-seq
                 #:source-fact-stale-p))
 
@@ -62,6 +63,33 @@
       (ok (equal "defun" (patch-entry-form-type succeeded)))
       (ok (equal "f" (patch-entry-form-name succeeded)))
       (ok (equal "replace" (patch-entry-operation succeeded))))))
+
+(deftest source-facts-capture-the-read-content
+  ;; The guided live run looped forever because reads recorded only
+  ;; THAT a file was read, never WHAT it said — the agent's view
+  ;; carried zero content. Facts must keep a bounded excerpt.
+  (let ((ledger (make-instance 'change-ledger)))
+    (apply-interaction
+     ledger (%interaction "lisp-read-file"
+                          :arguments (%hash "path" "src/main.lisp")
+                          :result (%hash "content"
+                                         (list (%hash "type" "text"
+                                                      "text" "(defun add (a b)
+  (- a b))")))))
+    (let ((fact (first (source-facts ledger))))
+      (ok (search "(- a b)" (source-fact-content fact)))))
+  ;; Long results are truncated at the capture boundary.
+  (let ((ledger (make-instance 'change-ledger))
+        (long-text (make-string 2000 :initial-element #\x)))
+    (apply-interaction
+     ledger (%interaction "lisp-read-file"
+                          :arguments (%hash "path" "src/big.lisp")
+                          :result (%hash "content"
+                                         (list (%hash "type" "text"
+                                                      "text" long-text)))))
+    (let ((content (source-fact-content (first (source-facts ledger)))))
+      (ok (< (length content) 600))
+      (ok (search "truncated" content)))))
 
 (deftest read-tools-create-source-facts
   (let ((ledger (make-instance 'change-ledger)))

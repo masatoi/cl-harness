@@ -79,6 +79,21 @@ successful patch since the load."
     (multiple-value-bind (value present-p) (gethash key result)
       (when (and present-p (integerp value)) value))))
 
+(defun %failure-reason (entry)
+  "Human-readable reason from a failed_tests ENTRY. Load errors carry
+an explicit \"reason\"; Rove assertion entries carry the information
+in \"description\" and \"values\" instead — compose those so the view
+never renders \"?\" for a structured failure."
+  (let ((reason (gethash "reason" entry))
+        (description (gethash "description" entry))
+        (values (gethash "values" entry)))
+    (or reason
+        (when description
+          (if (and values (plusp (length values)))
+              (format nil "~A [values:~{ ~A~}]"
+                      description (coerce values 'list))
+              description)))))
+
 (defun %note-failure (ledger test-name reason seq)
   "Push an active failure unless an equivalent one is already active —
 same test name, or same reason for unnamed (unstructured) failures."
@@ -120,7 +135,7 @@ same test name, or same reason for unnamed (unstructured) failures."
                (when (hash-table-p entry)
                  (%note-failure ledger
                                 (gethash "test_name" entry)
-                                (gethash "reason" entry)
+                                (%failure-reason entry)
                                 seq)))
              (%note-failure ledger nil
                             (format nil "~A test(s) failed" failed)

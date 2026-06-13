@@ -69,6 +69,23 @@
     (ok (test-run-clean-p (last-test ledger)))
     (ok (clean-verified-p ledger))))
 
+(deftest assertion-failures-compose-reason-from-description-and-values
+  ;; Rove assertion entries carry no "reason" key — the information
+  ;; lives in description/values. The guided live run showed the cost
+  ;; of dropping it: the view rendered "ADD-ADDS: ?" and the agent had
+  ;; nothing to reason from.
+  (let ((ledger (make-instance 'verification-ledger)))
+    (%feed ledger "run-tests" 3
+           :result (%tests-result
+                    0 1
+                    (list "test_name" "ADD-ADDS"
+                          "description" "Expect (= 5 (ADD 2 3)) to be true."
+                          "values" (list "5" "2" "3" "-1"))))
+    (let ((failure (first (active-failures ledger))))
+      (ok (equal "ADD-ADDS" (failure-record-test-name failure)))
+      (ok (equal "Expect (= 5 (ADD 2 3)) to be true. [values: 5 2 3 -1]"
+                 (failure-record-reason failure))))))
+
 (deftest repl-eval-after-kill-breaks-clean
   (let ((ledger (make-instance 'verification-ledger)))
     (%feed ledger "pool-kill-worker" 5)

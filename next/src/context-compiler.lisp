@@ -42,6 +42,7 @@
                 #:patch-entry-seq
                 #:source-fact-file
                 #:source-fact-detail
+                #:source-fact-content
                 #:source-fact-stale-p)
   (:import-from #:cl-harness-next/src/verification-ledger
                 #:last-load
@@ -171,13 +172,32 @@
               (%take +recent-limit+ selected)))))
 
 (defun %source-fact-lines (changes)
+  "Recent source facts WITH their content excerpts — the agent must
+see what a read returned, not just that it happened (guided live run,
+2026-06-13). Identical repeated reads render once."
   (when changes
-    (mapcar (lambda (fact)
-              (format nil "- ~@[~A ~]~A~@[ (~A)~]"
-                      (when (source-fact-stale-p fact changes) "[STALE]")
-                      (or (source-fact-file fact) "(search)")
-                      (source-fact-detail fact)))
-            (%take +recent-limit+ (source-facts changes)))))
+    (let ((facts (remove-duplicates
+                  (%take +recent-limit+ (source-facts changes))
+                  :key (lambda (fact)
+                         (list (source-fact-file fact)
+                               (source-fact-detail fact)
+                               (source-fact-content fact)))
+                  :test #'equal
+                  :from-end t)))
+      (loop for fact in facts
+            append
+            (cons (format nil "- ~@[~A ~]~A~@[ (~A)~]"
+                          (when (source-fact-stale-p fact changes)
+                            "[STALE]")
+                          (or (source-fact-file fact) "(search)")
+                          (source-fact-detail fact))
+                  (let ((content (source-fact-content fact)))
+                    (when content
+                      (mapcar (lambda (line)
+                                (concatenate 'string "    " line))
+                              (uiop:split-string content
+                                                 :separator
+                                                 '(#\Newline))))))))))
 
 (defun %resolved-lines (verification)
   (when verification

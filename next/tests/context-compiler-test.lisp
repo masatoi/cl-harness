@@ -128,3 +128,27 @@
     (ok (search "## Next step" view))
     ;; Stale probes are filtered out of failure analysis (fresh only).
     (ok (not (search "[STALE]" view)))))
+
+(deftest source-facts-render-content-and-dedupe-repeats
+  ;; What the guided live run was missing: the read CONTENT must reach
+  ;; the view, and identical repeated reads must not multiply it.
+  (flet ((%count-substring (needle haystack)
+           (loop with start = 0
+                 for position = (search needle haystack :start2 start)
+                 while position
+                 count 1
+                 do (setf start (1+ position)))))
+    (let ((*seq* 0)
+          (world-model (make-standard-world-model)))
+      (%feed world-model :run-start
+             "goal" "g" "acceptance_criteria" (list "a"))
+      (dotimes (i 3)
+        (%feed-interaction world-model "lisp-read-file"
+                           :arguments (%hash "path" "src/main.lisp")
+                           :result (%hash "content"
+                                          (list (%hash "type" "text"
+                                                       "text" "(defun add (a b)
+  (- a b))")))))
+      (let ((view (compile-context world-model)))
+        (ok (search "(- a b)" view))
+        (ok (= 1 (%count-substring "(- a b)" view)))))))
