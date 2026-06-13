@@ -186,18 +186,26 @@ see what a read returned, not just that it happened (guided live run,
                   :from-end t)))
       (loop for fact in facts
             append
-            (cons (format nil "- ~@[~A ~]~A~@[ (~A)~]"
-                          (when (source-fact-stale-p fact changes)
-                            "[STALE]")
-                          (or (source-fact-file fact) "(search)")
-                          (source-fact-detail fact))
-                  (let ((content (source-fact-content fact)))
-                    (when content
-                      (mapcar (lambda (line)
-                                (concatenate 'string "    " line))
-                              (uiop:split-string content
-                                                 :separator
-                                                 '(#\Newline))))))))))
+            (let ((stale-p (source-fact-stale-p fact changes)))
+              (cons (format nil "- ~@[~A ~]~A~@[ (~A)~]"
+                            (when stale-p "[STALE]")
+                            (or (source-fact-file fact) "(search)")
+                            (source-fact-detail fact))
+                    (cond
+                      ;; A stale excerpt actively misleads (the guided
+                      ;; rerun kept re-patching against pre-patch
+                      ;; source) — withhold it, keep the entry.
+                      ((and stale-p (source-fact-content fact))
+                       (list (concatenate
+                              'string
+                              "    (content withheld — file patched"
+                              " since this read; re-read to refresh)")))
+                      ((source-fact-content fact)
+                       (mapcar (lambda (line)
+                                 (concatenate 'string "    " line))
+                               (uiop:split-string
+                                (source-fact-content fact)
+                                :separator '(#\Newline)))))))))))
 
 (defun %resolved-lines (verification)
   (when verification

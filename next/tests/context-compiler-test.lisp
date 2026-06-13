@@ -152,3 +152,28 @@
       (let ((view (compile-context world-model)))
         (ok (search "(- a b)" view))
         (ok (= 1 (%count-substring "(- a b)" view)))))))
+
+(deftest stale-source-facts-withhold-misleading-content
+  ;; After a patch the old read content is actively misleading — the
+  ;; guided rerun kept re-patching because the view still showed the
+  ;; pre-patch source. Stale facts keep their entry (annotate, don't
+  ;; filter, §9) but withhold the content with a re-read hint.
+  (let ((*seq* 0)
+        (world-model (make-standard-world-model)))
+    (%feed world-model :run-start
+           "goal" "g" "acceptance_criteria" (list "a"))
+    (%feed-interaction world-model "lisp-read-file"
+                       :arguments (%hash "path" "src/main.lisp")
+                       :result (%hash "content"
+                                      (list (%hash "type" "text"
+                                                   "text" "(- a b)"))))
+    (%feed-interaction world-model "lisp-edit-form"
+                       :arguments (%hash "file_path" "src/main.lisp"
+                                         "form_type" "defun"
+                                         "form_name" "add"
+                                         "operation" "replace"
+                                         "content" "(+ a b)"))
+    (let ((view (compile-context world-model)))
+      (ok (search "[STALE]" view))
+      (ok (not (search "(- a b)" view)))
+      (ok (search "re-read" view)))))
