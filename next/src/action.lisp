@@ -26,6 +26,7 @@
            #:agent-action-decision
            #:parse-action
            #:obtain-action
+           #:strip-code-fence
            #:action-parse-error
            #:action-parse-error-message
            #:action-parse-error-raw))

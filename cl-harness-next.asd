@@ -52,6 +52,7 @@
                "cl-harness-next/tests/json-test"
                "cl-harness-next/tests/kernel-test"
                "cl-harness-next/tests/scripted-policy-test"
+               "cl-harness-next/tests/template-policy-test"
                "cl-harness-next/tests/llm-policies-test"
                "cl-harness-next/tests/adaptive-policy-test"
                "cl-harness-next/tests/mission-test"
