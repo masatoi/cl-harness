@@ -268,3 +268,21 @@
       (let ((decision (decide adaptive kernel)))
         (ok (eq :give-up (decision-kind decision))))
       (ok (= 1 (policy-level-index adaptive))))))
+
+(deftest chained-give-ups-demote-through-to-a-finishing-rung
+  ;; guided -> scripted -> template-fix shape: two successive give-ups must
+  ;; demote twice in one step and reach the bottom rung, not terminate at the
+  ;; middle.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((log (open-event-log log-path))
+           (adaptive (make-instance 'adaptive-policy
+                                    :levels (list (make-instance 'give-up-policy)
+                                                  (make-instance 'give-up-policy)
+                                                  (make-instance 'finish-policy))))
+           (kernel (make-kernel :environment nil :event-log log
+                                :governor (make-instance 'governor)
+                                :policy adaptive)))
+      (let ((decision (decide adaptive kernel)))
+        (ok (eq :finish (decision-kind decision)))
+        (ok (= 2 (policy-level-index adaptive)))))))

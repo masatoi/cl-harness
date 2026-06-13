@@ -66,8 +66,12 @@ rung of `adaptive`.
    reader** (`discover-targets`, §5) — *not* clgrep-per-symbol nor parsing
    `failed_tests[].form` in the SUT package. Stub detection from source is
    primary; a baseline `run-tests` cross-check narrows to tested symbols.
-3. **Per-form done = "the target symbol no longer appears in `failed_tests`"** —
-   *not* "failed count strictly decreased" (which can misjudge — review finding 2).
+3. **Per-form done requires *positive* evidence** — the suite is green, or
+   `failed_tests` is present and the target symbol is absent from it (§7.2). A
+   tool error or a detail-less failure is **not** treated as resolved (a second
+   Codex review caught that an empty `failed_tests` made `notany` vacuously true,
+   so a never-compiling body looked fixed). This is *not* "failed count strictly
+   decreased" (which can misjudge — first review finding 2).
 4. **Whole-definition unwrap accepts only `defmethod`/`defun`** — `defgeneric`/
    `defclass`/`defmacro` are rejected as nested definitions (review finding 3).
 5. **No `lisp-check-parens`, no free-var gate, no post-edit revert.** Body
@@ -123,10 +127,17 @@ For each top-level form it derives:
   fabricates accessors).
 - **sut-package** = the `(in-package …)` name string.
 
-**Overloads** (review finding 3 / edge case): because parsing is *form-by-form*,
-an overloaded generic's two stub `defmethod`s become **two distinct targets**
-(distinct specializer `form-name`s) — there is no symbol→form ambiguity to
-resolve. Locked by `discover-handles-overloaded-methods`.
+**Overloads** (first review finding 3 / edge case): because parsing is
+*form-by-form*, an overloaded generic's two stub `defmethod`s become **two
+distinct targets** (distinct specializer `form-name`s) — there is no symbol→form
+ambiguity at discovery. Locked by `discover-handles-overloaded-methods`.
+*Done-detection*, however, keys off the operator symbol, which the two overloads
+**share** (a second review caught this): a remaining failure for one overload
+still mentions the symbol, so `%form-resolved-p` alone would falsely re-try/park
+the already-patched sibling. `%check` therefore advances a shared-symbol target
+once its edit *builds cleanly* (run-tests returned real data, not a tool error)
+and lets the final clean oracle arbitrate. Locked by
+`template-overloaded-generic-resolves-each-method`.
 
 **Failing-test cross-check** (`:disc-baseline-test` → `:disc-filter`): after
 discovering all source stubs, the FSM runs a baseline `load-system` + `run-tests`
@@ -213,9 +224,12 @@ valid candidate emit a harness-built `lisp-edit-form` `:act`, state `:await-edit
 on ≤K malformed re-samples (feeding the reason back) failing, park and advance.
 `:await-edit` (tool error → retry/park; else emit `load-system` `:act`, state
 `:verify`) → `:verify` (emit `run-tests` `:act`, state `:check`) → `:check`
-(`%form-resolved-p`: the current symbol gone from `failed_tests` → advance; else
-`incf attempts`, retry `%gen` while `< K`, else park) → advance (next target →
-`%gen`; queue empty → `:final`).
+(done? → advance; else `incf attempts`, retry `%gen` while `< K`, else park) →
+advance (next target → `%gen`; queue empty → `:final`). The done test is
+`%form-resolved-p` (positive evidence §3) for a unique symbol; for an
+**overloaded** symbol (`%symbol-shared-p`) it is instead "the build came back
+clean" (`not %run-tests-errored-p`), since the shared symbol can't single out the
+specializer — the final clean oracle is the backstop.
 
 ### 7.3 Termination & governor
 `:final` consults the clean oracle: `verdict-pass-p` → `:finish`
@@ -232,9 +246,14 @@ and `nil` for the stall guards.
 ### 7.4 Adaptive `:give-up` demotion (`adaptive-policy`)
 `decide` intercepts a sub-level `:give-up`: while a lower rung remains, it
 demotes (`level-index`++, governor stall reset, a logged `"dial"` event for
-replay coherence) and **re-decides with the lower rung this same step**. Only the
-bottom rung's `:give-up` escapes. The existing `progress-stalled` path is
-unchanged. This makes `template-fix` reachable as the bottom `:levels` rung.
+replay coherence) and **re-enters its *own* `decide` this same step** — not the
+lower rung's `decide` directly. Re-entering the wrapper is what lets a *chain* of
+give-ups keep demoting: in a `guided → scripted → template-fix` stack a guided
+give-up followed by a scripted give-up demotes twice and reaches `template-fix`,
+rather than terminating at the middle rung (a second review caught the direct-call
+version stopping one rung early). Only the bottom rung's `:give-up` escapes. The
+existing `progress-stalled` path is unchanged. Locked by
+`chained-give-ups-demote-through-to-a-finishing-rung`.
 
 ## 8. Model contract
 
@@ -272,10 +291,17 @@ FSM over a canned `template-transport` + `with-template-kernel`:
 `pool-kill-worker`), `template-malformed-snippet-recovers-within-k`,
 `template-unfixable-form-parks-then-gives-up` (4/5 patched, names the parked
 form), `template-discovery-drives-to-done` (NO injected targets — reads source,
-discovers, `:done`), `discovery-cross-check-skips-untested-stubs`.
+discovers, `:done`), `discovery-cross-check-skips-untested-stubs`,
+`template-tool-error-is-not-treated-as-resolved` (second review: a NOCOMPILE body
+errors the build → retried, not falsely advanced),
+`template-overloaded-generic-resolves-each-method` (second review: each overload
+patched once, no spurious park on the shared symbol).
 
 Adaptive: `give-up-demotes-to-the-next-rung-this-step`,
-`give-up-at-the-bottom-rung-escapes` (plus the unchanged progress-stalled tests).
+`give-up-at-the-bottom-rung-escapes`,
+`chained-give-ups-demote-through-to-a-finishing-rung` (second review: two
+successive give-ups reach the bottom rung) (plus the unchanged progress-stalled
+tests).
 
 280 tests green; `mallet` clean; `compile-system :force t` clean.
 

@@ -170,6 +170,7 @@
   ((symbols :initarg :symbols :initform nil :reader tt-symbols)
    (source :initarg :source :initform nil :reader tt-source)
    (resolved :initform (make-hash-table :test 'equal) :reader tt-resolved)
+   (bad-p :initform nil :accessor tt-bad-p)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %tt-run-tests-result (transport)
@@ -199,6 +200,13 @@
 
 (defun %tt-ok () (alexandria:plist-hash-table (list "content" nil) :test 'equal))
 
+(defun %tt-error (text)
+  (alexandria:plist-hash-table
+   (list "isError" t "content"
+         (list (alexandria:plist-hash-table
+                (list "type" "text" "text" text) :test 'equal)))
+   :test 'equal))
+
 (defmethod transport-send-request ((transport template-transport) body)
   (let* ((parsed (yason:parse body))
          (id (gethash "id" parsed))
@@ -225,15 +233,22 @@
            ((member tool '("lisp-edit-form" "lisp-patch-form") :test #'equal)
             (let ((fn (gethash "form_name" args))
                   (content (or (gethash "content" args) (gethash "new_text" args) "")))
+              (setf (tt-bad-p transport) (and (search "NOCOMPILE" content) t))
               (when fn
                 (setf (gethash fn (tt-resolved transport))
-                      (not (search "BAD" content)))))
+                      (not (or (search "BAD" content) (search "NOCOMPILE" content))))))
             (%tt-encode id (%tt-ok)))
            ((equal tool "pool-kill-worker")
             (incf (tt-kill-count transport))
             (%tt-encode id (%tt-ok)))
+           ((equal tool "load-system")
+            (if (tt-bad-p transport)
+                (%tt-encode id (%tt-error "compile error in source"))
+                (%tt-encode id (%tt-ok))))
            ((equal tool "run-tests")
-            (%tt-encode id (%tt-run-tests-result transport)))
+            (if (tt-bad-p transport)
+                (%tt-encode id (%tt-error "test system failed to load"))
+                (%tt-encode id (%tt-run-tests-result transport))))
            ((equal tool "fs-read-file")
             (%tt-encode
              id (alexandria:plist-hash-table
@@ -409,3 +424,60 @@
         (ok (eq :done status))
         (ok (and (stringp reason) (search "clean" reason))))
       (ok (not (gethash "unused ((h histogram))" (tt-resolved tr)))))))
+
+(deftest template-tool-error-is-not-treated-as-resolved
+  ;; A first body that breaks the build (load-system AND run-tests return a
+  ;; tool error with no failure detail) must NOT be read as "this form is
+  ;; fixed" — that empty failed_tests would make notany vacuously true. The
+  ;; policy retries within K on the missing positive signal and reaches :done.
+  (let ((calls 0))
+    (flet ((snip (prompt)
+             (incf calls)
+             (if (= calls 1)
+                 "(NOCOMPILE)"
+                 (funcall (%snippet *hist-bodies*) prompt))))
+      (with-template-kernel (kernel :targets (%hist-targets)
+                                    :class-text *hist-class*
+                                    :symbols *hist-symbols*
+                                    :snippet-fn #'snip
+                                    :transport-var tr)
+        (multiple-value-bind (status reason) (run-kernel kernel :max-steps 120)
+          (ok (eq :done status))
+          (ok (and (stringp reason) (search "clean" reason))))
+        (ok (= 5 (loop for (fn . sym) in *hist-symbols*
+                       count (gethash fn (tt-resolved tr)))))))))
+
+(deftest template-overloaded-generic-resolves-each-method
+  ;; Two stubs of the same generic (different specializers) share one symbol.
+  ;; Per-form done-detection keys off the operator symbol, which cannot tell
+  ;; the overloads apart, so it must not retry/park an already-patched overload
+  ;; just because a sibling overload still mentions the shared symbol. Both are
+  ;; patched exactly once and the run reaches :done.
+  (let ((calls 0))
+    (flet ((snip (prompt)
+             (incf calls)
+             (funcall (%snippet '(("AREA" . "(* 2 2)"))) prompt)))
+      (let ((targets (list (make-fix-target :symbol "AREA" :file "src/main.lisp"
+                                            :form-type "defmethod"
+                                            :form-name "area ((s square))"
+                                            :head "area ((s square))"
+                                            :contract "area of a square")
+                           (make-fix-target :symbol "AREA" :file "src/main.lisp"
+                                            :form-type "defmethod"
+                                            :form-name "area ((s circle))"
+                                            :head "area ((s circle))"
+                                            :contract "area of a circle")))
+            (symbols '(("area ((s square))" . "AREA")
+                       ("area ((s circle))" . "AREA"))))
+        (with-template-kernel (kernel :targets targets
+                                      :class-text "(defclass shape () ())"
+                                      :symbols symbols
+                                      :snippet-fn #'snip
+                                      :transport-var tr)
+          (multiple-value-bind (status reason) (run-kernel kernel :max-steps 100)
+            (ok (eq :done status))
+            (ok (and (stringp reason) (search "clean" reason))))
+          (ok (= 2 (loop for (fn . sym) in symbols
+                         count (gethash fn (tt-resolved tr)))))
+          ;; one edit per overload — no spurious retries on the shared symbol
+          (ok (= 2 calls)))))))

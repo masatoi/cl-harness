@@ -419,28 +419,65 @@ and emit the edit, or park the current form and advance."
   (and (stringp text) (search sym-name text :test #'char-equal) t))
 
 (defun %form-resolved-p (policy result)
-  "True when the current target's symbol no longer appears in the raw
-run-tests RESULT's failed_tests."
-  (let ((failed (and (hash-table-p result) (gethash "failed_tests" result)))
-        (sym (target-symbol (policy-current policy))))
-    (notany (lambda (entry)
-              (and (hash-table-p entry)
-                   (or (%mentions sym (gethash "form" entry))
-                       (%mentions sym (gethash "description" entry))
-                       (%mentions sym (gethash "test_name" entry)))))
-            (coerce (or failed #()) 'list))))
+  "True only on positive evidence that the current target now passes: either
+the whole suite is green, or run-tests reported per-test failures and this
+target's symbol is absent from them. A tool error or a detail-less failure
+\(empty/missing failed_tests) is NOT resolved — without that guard an empty
+sequence makes NOTANY vacuously true and a form that never compiled would be
+treated as fixed."
+  (when (hash-table-p result)
+    (let* ((failed (gethash "failed_tests" result))
+           (failures (coerce (or failed #()) 'list))
+           (sym (target-symbol (policy-current policy))))
+      (cond
+        (failures
+         (notany
+          (lambda (entry)
+            (and (hash-table-p entry)
+                 (or (%mentions sym (gethash "form" entry))
+                     (%mentions sym (gethash "description" entry))
+                     (%mentions sym (gethash "test_name" entry)))))
+          failures))
+        ((eql (gethash "failed" result) 0) t)
+        (t nil)))))
+
+(defun %symbol-shared-p (policy)
+  "True when another discovered target shares the current target's symbol — an
+overloaded generic. Per-form run-tests evidence keys off the operator symbol,
+which cannot tell overloads apart, so done-detection must not gate on it for
+these targets (else an already-patched overload looks unresolved whenever a
+sibling overload still fails)."
+  (let ((current (policy-current policy)))
+    (and current
+         (some (lambda (tgt)
+                 (and (not (eq tgt current))
+                      (equal (target-symbol tgt) (target-symbol current))))
+               (policy-targets policy)))))
+
+(defun %run-tests-errored-p (result)
+  "True when the run-tests RESULT is a tool error or carries no test data —
+the patched body did not build cleanly."
+  (or (not (hash-table-p result))
+      (and (gethash "isError" result) t)))
 
 (defun %check (policy kernel)
-  (if (%form-resolved-p policy (kernel-last-result kernel))
-      (%advance policy)
-      (progn
-        (incf (policy-attempts policy))
-        (setf (policy-feedback policy)
-              "the tests still fail for this method; the body is wrong")
-        (if (< (policy-attempts policy) (policy-k policy))
-            (%gen policy)
-            (progn (%park-current policy "wrong body after retries")
-                   (%advance policy))))))
+  (let ((result (kernel-last-result kernel)))
+    (if (if (%symbol-shared-p policy)
+            ;; Overloaded generic: the shared symbol can't single out this
+            ;; specializer, so advance once the patch builds cleanly (real
+            ;; test data came back) and let the final clean oracle arbitrate.
+            (not (%run-tests-errored-p result))
+            (%form-resolved-p policy result))
+        (%advance policy)
+        (progn
+          (incf (policy-attempts policy))
+          (setf (policy-feedback policy)
+                "the tests still fail for this method; the body is wrong")
+          (if (< (policy-attempts policy) (policy-k policy))
+              (%gen policy)
+              (progn
+                (%park-current policy "wrong body after retries")
+                (%advance policy)))))))
 
 (defun %final (policy kernel)
   (let ((verdict (kernel-last-verdict kernel)))

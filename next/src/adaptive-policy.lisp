@@ -76,8 +76,11 @@ progress-stalled demotion, but driven by a sub-level :give-up."
     (if (and (eq :give-up (decision-kind decision))
              (< (1+ (policy-level-index policy))
                 (length (policy-levels policy))))
+        ;; Re-enter THIS policy's decide (not the sub-level's directly) so a
+        ;; chained give-up keeps demoting until a rung produces a non-give-up
+        ;; decision or the bottom rung itself gives up.
         (progn (%demote-on-give-up policy kernel)
-               (decide (%current-level policy) kernel))
+               (decide policy kernel))
         decision)))
 
 (defmethod handle-intervention ((policy adaptive-policy) condition)
