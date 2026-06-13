@@ -18,6 +18,7 @@
                 #:failure-report-error-samples
                 #:failure-report-error-argument-samples
                 #:failure-report-give-up-reason
+                #:failure-report-park-reason
                 #:rank-failure-modes
                 #:summarize-failure-evidence))
 
@@ -122,6 +123,19 @@
     (ok (= 1 (cdr (assoc :give-ups
                          (rank-failure-modes (list report))))))))
 
+(deftest mine-extracts-park-reason
+  (let ((report
+          (with-mined-log (report)
+            (%emit-interaction log "run-tests"
+                               :result (%hash "passed" 0 "failed" 1))
+            ;; The kernel's park terminal event.
+            (emit-event log :decision
+                        (%hash "kind" "step"
+                               "text" "park — governor intervention: PARK-MISSION (consecutive failed patches: 3 >= 3)")))))
+    (ok (equal "governor intervention: PARK-MISSION (consecutive failed patches: 3 >= 3)"
+               (failure-report-park-reason report)))
+    (ok (= 1 (cdr (assoc :parks (rank-failure-modes (list report))))))))
+
 (deftest summarize-failure-evidence-renders-and-stays-silent
   (let ((failing
           (with-mined-log (report)
@@ -130,7 +144,10 @@
                                :error "file_path is required")
             (emit-event log :decision
                         (%hash "kind" "step"
-                               "text" "give-up — diagnose call failed: empty content"))))
+                               "text" "give-up — diagnose call failed: empty content"))
+            (emit-event log :decision
+                        (%hash "kind" "step"
+                               "text" "park — governor intervention: PARK-MISSION (actions: 30 >= 30)"))))
         (clean
           (with-mined-log (report)
             (%emit-interaction log "pool-kill-worker")
@@ -140,6 +157,7 @@
     (let ((text (summarize-failure-evidence (list failing clean))))
       (ok (search "file_path is required" text))
       (ok (search "diagnose call failed: empty content" text))
+      (ok (search "PARK-MISSION (actions: 30 >= 30)" text))
       ;; The offending arguments appear as JSON.
       (ok (search "\"file\"" text)))
     ;; No evidence → NIL, so callers can skip the prompt section.

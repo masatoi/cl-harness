@@ -136,6 +136,69 @@ green (stall scenarios).")
       (ok (eq :given-up status))
       (ok (search "unparseable" reason)))))
 
+(deftest transient-unparseable-diagnosis-recovers
+  ;; The first diagnose reply is malformed, the retry yields a valid patch.
+  ;; obtain-action must re-sample and let the mission reach :done instead of
+  ;; failing the whole run on one bad reply.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((transport (make-instance 'fix-transport :fixable-p t))
+           (log (open-event-log log-path))
+           (environment (make-cl-mcp-environment
+                         :client (make-mcp-client transport)
+                         :condition :runtime-native
+                         :event-log log))
+           (calls 0)
+           (kernel (make-kernel
+                    :environment environment
+                    :event-log log
+                    :policy (make-instance
+                             'scripted-fix-policy
+                             :system "s" :test-system "s/tests"
+                             :diagnose-fn
+                             (lambda (view)
+                               (declare (ignore view))
+                               (incf calls)
+                               (if (= calls 1) "totally not json" *patch-json*))))))
+      (multiple-value-bind (status reason) (run-kernel kernel)
+        (ok (eq :done status))
+        (ok (search "clean" reason)))
+      (ok (>= calls 2)))))
+
+(deftest diagnose-view-includes-tool-schemas
+  ;; The allowed tools' schemas are injected into the failure-analysis
+  ;; view handed to the diagnose function.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((transport (make-instance 'fix-transport :fixable-p nil))
+           (log (open-event-log log-path))
+           (environment (make-cl-mcp-environment
+                         :client (make-mcp-client transport)
+                         :condition :runtime-native
+                         :event-log log))
+           (seen-view nil)
+           (kernel (make-kernel
+                    :environment environment
+                    :event-log log
+                    :policy (make-instance
+                             'scripted-fix-policy
+                             :system "s" :test-system "s/tests"
+                             :diagnose-fn
+                             (lambda (view)
+                               (setf seen-view view)
+                               (concatenate
+                                'string
+                                "{\"type\":\"finish\",\"status\":"
+                                "\"give_up\",\"summary\":\"x\"}"))))))
+      (run-kernel kernel)
+      (ok (search "lisp-edit-form" seen-view))
+      (ok (search "TOOLS" seen-view))
+      ;; Scripted only ACCEPTS patch tools, so it must advertise only those —
+      ;; advertising run-tests/repl-eval just tempts the model into a
+      ;; non-patch proposal that the FSM rejects.
+      (ok (not (search "- run-tests(" seen-view)))
+      (ok (not (search "- pool-kill-worker(" seen-view))))))
+
 (deftest model-give-up-is-respected
   (with-fix-kernel (kernel :diagnose
                            "{\"type\":\"finish\",\"status\":\"give_up\",\"summary\":\"stuck\"}")

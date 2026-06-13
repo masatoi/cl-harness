@@ -37,6 +37,7 @@
            #:failure-report-error-samples
            #:failure-report-error-argument-samples
            #:failure-report-give-up-reason
+           #:failure-report-park-reason
            #:rank-failure-modes
            #:summarize-failure-evidence))
 
@@ -46,8 +47,9 @@
   log-path total-actions failed-patches tool-errors
   stalled-cycles dial-demotions clean-verified-p
   ;; v2 (diagnose-layer vocabulary): what the tool failures actually
-  ;; said, what arguments produced them, and why the run gave up.
-  error-samples error-argument-samples give-up-reason)
+  ;; said, what arguments produced them, and why the run gave up or
+  ;; parked.
+  error-samples error-argument-samples give-up-reason park-reason)
 
 (defconstant +evidence-error-limit+ 5
   "Max distinct tool-error texts rendered by SUMMARIZE-FAILURE-EVIDENCE.")
@@ -124,19 +126,20 @@ order) of the arguments whose action's observation failed — the
     (let ((ordered (nreverse samples)))
       (subseq ordered 0 (min +evidence-sample-limit+ (length ordered))))))
 
-(defun %give-up-reason (events)
-  "Reason text of the LAST give-up decision, or NIL. Mirrors the
-kernel's decision rendering: a :decision event whose text is
-\"give-up — <reason>\"."
-  (let ((reason nil))
+(defun %terminal-reason (events prefix)
+  "Reason text of the LAST decision rendered as \"PREFIX — <reason>\"
+(the kernel's terminal-decision format: policy give-ups, governor
+aborts, and parks), or NIL."
+  (let ((reason nil)
+        (prefix-length (length prefix)))
     (dolist (event events reason)
       (when (eq :decision (event-type event))
         (let* ((payload (event-payload event))
                (text (and (hash-table-p payload)
                           (gethash "text" payload))))
           (when (and (stringp text)
-                     (<= 7 (length text))
-                     (string= "give-up" text :end2 7))
+                     (<= prefix-length (length text))
+                     (string= prefix text :end2 prefix-length))
             (let ((separator (search " — " text)))
               (setf reason
                       (if separator
@@ -173,7 +176,8 @@ and distill a FAILURE-REPORT (deterministic; spec §10.2 stage 2)."
      :clean-verified-p (clean-verified-p verification)
      :error-samples (%error-samples events)
      :error-argument-samples (%error-argument-samples events)
-     :give-up-reason (%give-up-reason events))))
+     :give-up-reason (%terminal-reason events "give-up")
+     :park-reason (%terminal-reason events "park"))))
 
 (defun rank-failure-modes (reports)
   "Aggregate failure counts across REPORTS, descending; zero modes
@@ -190,6 +194,9 @@ omitted. Returns an alist of (mode-keyword . total)."
                         (total #'failure-report-dial-demotions))
                   (cons :give-ups
                         (count-if #'failure-report-give-up-reason
+                                  reports))
+                  (cons :parks
+                        (count-if #'failure-report-park-reason
                                   reports)))))
       (sort (remove 0 totals :key #'cdr) #'> :key #'cdr))))
 
@@ -199,11 +206,13 @@ omitted. Returns an alist of (mode-keyword . total)."
 (defun summarize-failure-evidence (reports)
   "Render the diagnose-layer evidence across REPORTS for the variant
 proposer (spec §10.2 stage 3): distinct tool-error texts with counts,
-sample offending arguments (JSON), and give-up reasons. Returns NIL
-when the transcripts carry none, so callers can omit the section."
+sample offending arguments (JSON), give-up reasons, and park reasons.
+Returns NIL when the transcripts carry none, so callers can omit the
+section."
   (let ((errors '())
         (arguments '())
-        (reasons '()))
+        (give-ups '())
+        (parks '()))
     (dolist (report reports)
       (loop for (text . count) in (failure-report-error-samples report)
             do (let ((cell (assoc text errors :test #'equal)))
@@ -214,15 +223,20 @@ when the transcripts carry none, so callers can omit the section."
         (pushnew sample arguments :test #'equal))
       (let ((reason (failure-report-give-up-reason report)))
         (when reason
-          (pushnew reason reasons :test #'equal))))
-    (when (or errors arguments reasons)
+          (pushnew reason give-ups :test #'equal)))
+      (let ((reason (failure-report-park-reason report)))
+        (when reason
+          (pushnew reason parks :test #'equal))))
+    (when (or errors arguments give-ups parks)
       (format nil "~{- tool error (x~A): ~A~%~}~
                    ~{- offending arguments: ~A~%~}~
-                   ~{- run gave up: ~A~%~}"
+                   ~{- run gave up: ~A~%~}~
+                   ~{- run parked: ~A~%~}"
               (loop for (text . count)
                       in (%take +evidence-error-limit+
                                 (stable-sort (nreverse errors) #'>
                                              :key #'cdr))
                     append (list count text))
               (%take +evidence-sample-limit+ (nreverse arguments))
-              (%take +evidence-sample-limit+ (nreverse reasons))))))
+              (%take +evidence-sample-limit+ (nreverse give-ups))
+              (%take +evidence-sample-limit+ (nreverse parks))))))

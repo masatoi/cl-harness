@@ -18,6 +18,10 @@ benchmark effect measurements live in `docs/benchmarks/`.
 
 ### next/ — autonomous-harness redesign (experimental)
 
+For a zero-to-running, end-to-end walkthrough of driving an autonomous
+fix mission against your own project with `cl-harness-next`, see
+[`next/README.md`](next/README.md).
+
 `cl-harness-next` (sources under `next/`) is the greenfield redesign
 substrate from
 `docs/superpowers/specs/2026-06-11-autonomous-harness-redesign-design.md`.
@@ -40,6 +44,23 @@ the log, async human escalation); SP8 closes the loop with L5
 self-improvement (transcript mining, one-mutation pack variants,
 paired sign-test promotion with an audit trail, human dossiers for
 code changes). It does not affect the `cl-harness` CLI.
+
+Post-SP8, the stack was hardened by a day of live-fire runs against a
+real cl-mcp subprocess and a real LLM (see
+`docs/notes/2026-06-13-live-fire-experiments.md`): the L5 loop
+promoted one pack and rejected a plausible-but-regressive one on
+real trials; miner v2 grew the diagnose-layer failure vocabulary
+(error samples, give-up/park reasons) that improve-once now feeds the
+proposer automatically; the verification oracle gained `:clear-fasls`
+(with a companion cl-mcp fix — ASDF `:force t` never rebuilt
+package-inferred dependency subsystems); parked/aborted runs now log
+terminal events; the context view learned to carry observation
+content (read excerpts, failure values, tool errors) with staleness
+supersession; and the governor detects identical-action repetition —
+which the adaptive dial converts into a demotion, turning a guided
+agent that can fix but never declares completion into a finished,
+clean-verified mission (the first live data point for the
+capability-adaptive dial hypothesis).
 
 ## Quick start
 

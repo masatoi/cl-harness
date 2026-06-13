@@ -23,6 +23,7 @@
                 #:resolved-failures
                 #:failure-record-test-name
                 #:failure-record-reason
+                #:failure-record-seq
                 #:failure-record-patch-seq
                 #:failure-record-resolved-seq))
 
@@ -68,6 +69,23 @@
     (%feed ledger "run-tests" 7 :result (%tests-result 5 0))
     (ok (test-run-clean-p (last-test ledger)))
     (ok (clean-verified-p ledger))))
+
+(deftest assertion-failures-compose-reason-from-description-and-values
+  ;; Rove assertion entries carry no "reason" key — the information
+  ;; lives in description/values. The guided live run showed the cost
+  ;; of dropping it: the view rendered "ADD-ADDS: ?" and the agent had
+  ;; nothing to reason from.
+  (let ((ledger (make-instance 'verification-ledger)))
+    (%feed ledger "run-tests" 3
+           :result (%tests-result
+                    0 1
+                    (list "test_name" "ADD-ADDS"
+                          "description" "Expect (= 5 (ADD 2 3)) to be true."
+                          "values" (list "5" "2" "3" "-1"))))
+    (let ((failure (first (active-failures ledger))))
+      (ok (equal "ADD-ADDS" (failure-record-test-name failure)))
+      (ok (equal "Expect (= 5 (ADD 2 3)) to be true. [values: 5 2 3 -1]"
+                 (failure-record-reason failure))))))
 
 (deftest repl-eval-after-kill-breaks-clean
   (let ((ledger (make-instance 'verification-ledger)))
@@ -125,6 +143,31 @@
     (%feed ledger "run-tests" 3 :result (%hash "passed" 4 "failed" 2))
     (%feed ledger "run-tests" 5 :result (%hash "passed" 4 "failed" 2))
     (ok (= 1 (length (active-failures ledger))))))
+
+(deftest recurring-failure-refreshes-its-sequence
+  ;; A failure re-observed after a later patch is CURRENT, not stale. The
+  ;; dedup must REFRESH the record's seq/patch-seq to the latest sighting,
+  ;; else the pre-patch staleness check (context-compiler) mislabels a
+  ;; still-red-after-patch failure as predating the patch and tells the model
+  ;; to re-run tests it just ran.
+  (let ((ledger (make-instance 'verification-ledger)))
+    (%feed ledger "lisp-edit-form" 3 :arguments (%hash "file_path" "a"))
+    (%feed ledger "run-tests" 4
+           :result (%tests-result 4 1 (list "test_name" "t-one"
+                                            "reason" "boom")))
+    (let ((failure (first (active-failures ledger))))
+      (ok (= 4 (failure-record-seq failure)))
+      (ok (= 3 (failure-record-patch-seq failure))))
+    ;; A later patch, then the SAME test fails again — still red afterwards.
+    (%feed ledger "lisp-edit-form" 6 :arguments (%hash "file_path" "a"))
+    (%feed ledger "run-tests" 8
+           :result (%tests-result 4 1 (list "test_name" "t-one"
+                                            "reason" "boom")))
+    (ok (= 1 (length (active-failures ledger))))
+    (let ((failure (first (active-failures ledger))))
+      ;; refreshed to the post-patch observation, not the stale pre-patch seq
+      (ok (= 8 (failure-record-seq failure)))
+      (ok (= 6 (failure-record-patch-seq failure))))))
 
 (deftest iserror-load-is-not-ok
   ;; SP4 coherence fix: cl-mcp reports tool failure via result isError,

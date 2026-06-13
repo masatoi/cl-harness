@@ -14,6 +14,7 @@
                 #:interaction-succeeded-p
                 #:interaction-observation-seq
                 #:argument-string
+                #:result-text
                 #:+patch-tool-names+)
   (:export #:change-ledger
            #:patches
@@ -22,10 +23,12 @@
            #:patch-entry-form-type
            #:patch-entry-form-name
            #:patch-entry-operation
+           #:patch-entry-content
            #:patch-entry-ok-p
            #:patch-entry-seq
            #:source-fact-file
            #:source-fact-detail
+           #:source-fact-content
            #:source-fact-seq
            #:source-fact-stale-p))
 
@@ -37,10 +40,14 @@
   :documentation "Tools whose successful use establishes a source fact.")
 
 (defstruct (patch-entry (:conc-name patch-entry-))
-  file form-type form-name operation ok-p seq)
+  file form-type form-name operation content ok-p seq)
 
 (defstruct (source-fact (:conc-name source-fact-))
-  file detail seq)
+  ;; CONTENT is a bounded excerpt of what the read returned — without
+  ;; it the agent's view only says THAT a file was read, and an
+  ;; LLM-driven policy loops re-reading it (guided live run,
+  ;; 2026-06-13).
+  file detail content seq)
 
 (defclass change-ledger (projection)
   ((patches :initform nil :accessor patches
@@ -54,6 +61,21 @@ attempts are recorded too (ok-p NIL) — patch oscillation is a signal.")
   (or (argument-string interaction "file_path")
       (argument-string interaction "path")))
 
+(defconstant +source-fact-content-limit+ 480
+  "Capture bound for a source fact's content excerpt. Keeps the
+ledger (and every later context view) within budget even for large
+reads.")
+
+(defun %result-excerpt (interaction)
+  "Bounded excerpt of INTERACTION's result content text, or NIL."
+  (let ((text (result-text interaction)))
+    (when (and (stringp text) (plusp (length text)))
+      (if (> (length text) +source-fact-content-limit+)
+          (concatenate 'string
+                       (subseq text 0 +source-fact-content-limit+)
+                       " …[truncated]")
+          text))))
+
 (defmethod apply-interaction ((ledger change-ledger) interaction)
   (let ((tool (interaction-tool interaction)))
     (cond
@@ -63,6 +85,8 @@ attempts are recorded too (ok-p NIL) — patch oscillation is a signal.")
               :form-type (argument-string interaction "form_type")
               :form-name (argument-string interaction "form_name")
               :operation (or (argument-string interaction "operation") tool)
+              :content (or (argument-string interaction "content")
+                           (argument-string interaction "new_text"))
               :ok-p (interaction-succeeded-p interaction)
               :seq (interaction-observation-seq interaction))
              (patches ledger)))
@@ -72,6 +96,7 @@ attempts are recorded too (ok-p NIL) — patch oscillation is a signal.")
               :file (%interaction-file interaction)
               :detail (or (argument-string interaction "name_pattern")
                           (argument-string interaction "pattern"))
+              :content (%result-excerpt interaction)
               :seq (interaction-observation-seq interaction))
              (source-facts ledger)))))
   ledger)

@@ -32,6 +32,10 @@
                 #:progress-stalled
                 #:budget-exhausted)
   (:import-from #:cl-harness-next/src/kernel
+                #:control-policy
+                #:decide
+                #:make-decision
+                #:decision-kind
                 #:handle-intervention
                 #:make-kernel
                 #:kernel-world-model
@@ -215,3 +219,70 @@
     (ok (= 1 (policy-level-index adaptive)))
     (apply-event adaptive (%dial-event 5))
     (ok (= 1 (policy-level-index adaptive)))))
+
+(defclass give-up-policy (control-policy) ())
+
+(defmethod decide ((policy give-up-policy) kernel)
+  (declare (ignore kernel))
+  (make-decision :kind :give-up :reason "I quit"))
+
+(defclass finish-policy (control-policy) ())
+
+(defmethod decide ((policy finish-policy) kernel)
+  (declare (ignore kernel))
+  (make-decision :kind :finish :reason "done by the lower rung"))
+
+(deftest give-up-demotes-to-the-next-rung-this-step
+  ;; A sub-level :give-up demotes to the lower rung and re-decides THIS
+  ;; step (a give-up never reaches the governor) — the bottom rung's
+  ;; decision is returned and a dial event is logged.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((log (open-event-log log-path))
+           (adaptive (make-instance 'adaptive-policy
+                                    :levels (list (make-instance 'give-up-policy)
+                                                  (make-instance 'finish-policy))))
+           (kernel (make-kernel :environment nil :event-log log
+                                :governor (make-instance 'governor)
+                                :policy adaptive)))
+      (let ((decision (decide adaptive kernel)))
+        (ok (eq :finish (decision-kind decision)))
+        (ok (= 1 (policy-level-index adaptive))))
+      (ok (find-if (lambda (e)
+                     (and (eq :decision (event-type e))
+                          (equal "dial" (gethash "kind" (event-payload e)))))
+                   (read-events log-path))))))
+
+(deftest give-up-at-the-bottom-rung-escapes
+  ;; When the lowest rung itself gives up, :give-up is returned (no
+  ;; infinite demotion).
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((log (open-event-log log-path))
+           (adaptive (make-instance 'adaptive-policy
+                                    :levels (list (make-instance 'give-up-policy)
+                                                  (make-instance 'give-up-policy))))
+           (kernel (make-kernel :environment nil :event-log log
+                                :governor (make-instance 'governor)
+                                :policy adaptive)))
+      (let ((decision (decide adaptive kernel)))
+        (ok (eq :give-up (decision-kind decision))))
+      (ok (= 1 (policy-level-index adaptive))))))
+
+(deftest chained-give-ups-demote-through-to-a-finishing-rung
+  ;; guided -> scripted -> template-fix shape: two successive give-ups must
+  ;; demote twice in one step and reach the bottom rung, not terminate at the
+  ;; middle.
+  (uiop:with-temporary-file (:pathname log-path :type "jsonl")
+    (uiop:delete-file-if-exists log-path)
+    (let* ((log (open-event-log log-path))
+           (adaptive (make-instance 'adaptive-policy
+                                    :levels (list (make-instance 'give-up-policy)
+                                                  (make-instance 'give-up-policy)
+                                                  (make-instance 'finish-policy))))
+           (kernel (make-kernel :environment nil :event-log log
+                                :governor (make-instance 'governor)
+                                :policy adaptive)))
+      (let ((decision (decide adaptive kernel)))
+        (ok (eq :finish (decision-kind decision)))
+        (ok (= 2 (policy-level-index adaptive)))))))

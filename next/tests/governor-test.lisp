@@ -23,6 +23,8 @@
                 #:governor-patch-count
                 #:governor-consecutive-failed-patches
                 #:governor-stalled-verify-cycles
+                #:governor-identical-action-run
+                #:governor-breaches
                 #:check-governor
                 #:reset-governor-progress
                 #:progress-stalled
@@ -36,9 +38,10 @@
 (defun %hash (&rest plist)
   (alexandria:plist-hash-table plist :test #'equal))
 
-(defun %interaction (tool &key result error (seq 2))
+(defun %interaction (tool &key result error arguments (seq 2))
   (make-instance 'interaction
                  :tool tool
+                 :arguments arguments
                  :result result
                  :error-message error
                  :action-seq (1- seq)
@@ -60,6 +63,52 @@
     (ok (= 2 (governor-consecutive-failed-patches governor)))
     (apply-interaction governor (%interaction "lisp-edit-form" :seq 3))
     (ok (zerop (governor-consecutive-failed-patches governor)))))
+
+(deftest identical-action-repetition-breaches-progress
+  ;; The two live blind spots — read-loop paralysis and the green
+  ;; run-tests ping-pong — are both literally the SAME (tool,
+  ;; arguments) action repeated. Neither failed patches nor stalled
+  ;; verifies see them; this counter does.
+  (let ((governor (make-instance 'governor)))
+    (dotimes (i 4)
+      (apply-interaction governor
+                         (%interaction "lisp-read-file"
+                                       :arguments (%hash "path" "src/main.lisp"
+                                                         "collapsed" t)
+                                       :seq (+ 2 i))))
+    (ok (= 4 (governor-identical-action-run governor)))
+    (let ((breach (assoc :progress (governor-breaches governor))))
+      (ok breach)
+      (ok (search "identical consecutive actions" (cdr breach))))))
+
+(deftest different-action-resets-the-identical-run
+  (let ((governor (make-instance 'governor)))
+    (dotimes (i 3)
+      (apply-interaction governor
+                         (%interaction "lisp-read-file"
+                                       :arguments (%hash "path" "a")
+                                       :seq (+ 2 i))))
+    (apply-interaction governor (%interaction "run-tests"
+                                              :arguments (%hash "system" "s")
+                                              :seq 6))
+    (dotimes (i 3)
+      (apply-interaction governor
+                         (%interaction "lisp-read-file"
+                                       :arguments (%hash "path" "a")
+                                       :seq (+ 7 i))))
+    ;; Two separate streaks of 3 — never 4 in a row.
+    (ok (= 3 (governor-identical-action-run governor)))
+    (ok (null (governor-breaches governor))))
+  ;; Same tool with DIFFERENT arguments is not a repetition.
+  (let ((governor (make-instance 'governor)))
+    (dotimes (i 5)
+      (apply-interaction governor
+                         (%interaction "lisp-read-file"
+                                       :arguments (%hash "path"
+                                                         (format nil "f~A" i))
+                                       :seq (+ 2 i))))
+    (ok (= 1 (governor-identical-action-run governor)))
+    (ok (null (governor-breaches governor)))))
 
 (deftest stalled-verify-counts-only-without-patch
   (let ((governor (make-instance 'governor)))

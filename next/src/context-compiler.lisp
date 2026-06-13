@@ -38,10 +38,13 @@
                 #:patch-entry-form-type
                 #:patch-entry-form-name
                 #:patch-entry-operation
+                #:patch-entry-content
                 #:patch-entry-ok-p
                 #:patch-entry-seq
                 #:source-fact-file
                 #:source-fact-detail
+                #:source-fact-content
+                #:source-fact-seq
                 #:source-fact-stale-p)
   (:import-from #:cl-harness-next/src/verification-ledger
                 #:last-load
@@ -51,6 +54,7 @@
                 #:test-run-passed
                 #:test-run-failed
                 #:test-run-clean-p
+                #:test-run-seq
                 #:clean-verified-p
                 #:active-failures
                 #:resolved-failures
@@ -60,7 +64,8 @@
                 #:failure-record-patch-seq
                 #:failure-record-resolved-seq)
   (:export #:compile-context
-           #:estimate-tokens))
+           #:estimate-tokens
+           #:render-tool-schemas))
 
 (in-package #:cl-harness-next/src/context-compiler)
 
@@ -70,9 +75,48 @@
 (defconstant +resolved-limit+ 3
   "Max resolved failures rendered (legacy regression-watch default).")
 
+(defconstant +patch-content-limit+ 480
+  "Capture bound for a patch's rendered content excerpt — keeps the
+current-source echo within the view's token budget for large forms.")
+
 (defun estimate-tokens (string)
   "Crude token estimate: ceiling(characters / 4)."
   (ceiling (length string) 4))
+
+(defun render-tool-schemas (descriptors)
+  "Render allowed tool DESCRIPTORS (tools/list hash-tables carrying
+'name' and an optional 'inputSchema') as a compact block listing each
+tool with its parameter keys — required ones marked with '*'. Injected
+into the decision view so the model uses the right argument names
+(different cl-mcp tools use different keys, e.g. lisp-edit-form's
+file_path vs lisp-read-file's path) instead of guessing. Returns NIL
+when DESCRIPTORS is empty."
+  (when descriptors
+    (with-output-to-string (stream)
+      (write-string
+       "TOOLS (allowed actions — use these exact argument keys; * = required):"
+       stream)
+      (dolist (descriptor descriptors)
+        (let* ((name (gethash "name" descriptor))
+               (schema (gethash "inputSchema" descriptor))
+               (properties (and (hash-table-p schema)
+                                (gethash "properties" schema)))
+               (required (and (hash-table-p schema)
+                              (coerce (gethash "required" schema) 'list)))
+               (keys (when (hash-table-p properties)
+                       (let ((acc '()))
+                         (maphash (lambda (key value)
+                                    (declare (ignore value))
+                                    (push key acc))
+                                  properties)
+                         (sort acc #'string<)))))
+          (format stream "~%- ~A(~{~A~^, ~})"
+                  name
+                  (mapcar (lambda (key)
+                            (if (member key required :test #'equal)
+                                (concatenate 'string key "*")
+                                key))
+                          keys)))))))
 
 (defun %take (n list)
   (subseq list 0 (min n (length list))))
@@ -89,9 +133,27 @@
         (push (format nil "- non-goal: ~A" non-goal) lines))
       (nreverse lines))))
 
-(defun %verification-lines (verification)
+(defun %latest-successful-patch-seq (changes)
+  "Seq of the most recent successful patch, or NIL."
+  (when changes
+    (loop for patch in (patches changes)
+          when (patch-entry-ok-p patch)
+            maximize (patch-entry-seq patch) into latest
+          finally (return (and (plusp (or latest 0)) latest)))))
+
+(alexandria:define-constant +pre-patch-note+
+    " [predates the last patch — re-run tests]"
+  :test #'equal
+  :documentation "Annotation for verification info observed before the
+most recent successful patch. Without it an LLM policy reads a
+red-but-outdated run as \"still broken\" and loops re-checking the
+source instead of re-running the tests (guided live run 3,
+2026-06-13).")
+
+(defun %verification-lines (verification changes)
   (when verification
-    (let ((lines '()))
+    (let ((lines '())
+          (patch-seq (%latest-successful-patch-seq changes)))
       (let ((load (last-load verification)))
         (when load
           (push (format nil "load-system: ~A~@[ (~A)~]"
@@ -100,27 +162,35 @@
                 lines)))
       (let ((run (last-test verification)))
         (when run
-          (push (format nil "run-tests: passed ~A, failed ~A (~A)"
+          (push (format nil "run-tests: passed ~A, failed ~A (~A)~@[~A~]"
                         (or (test-run-passed run) "?")
                         (or (test-run-failed run) "?")
                         (if (test-run-clean-p run)
                             "clean image"
-                            "runtime state only"))
+                            "runtime state only")
+                        (when (and patch-seq
+                                   (< (test-run-seq run) patch-seq))
+                          +pre-patch-note+))
                 lines)))
       (push (format nil "clean-verified: ~A"
                     (if (clean-verified-p verification) "YES" "NO"))
             lines)
       (nreverse lines))))
 
-(defun %active-failure-lines (verification)
+(defun %active-failure-lines (verification changes)
   (when verification
-    (mapcar (lambda (failure)
-              (format nil "- ~A: ~A (seq ~A~@[, after patch seq ~A~])"
-                      (or (failure-record-test-name failure) "(unnamed)")
-                      (or (failure-record-reason failure) "?")
-                      (failure-record-seq failure)
-                      (failure-record-patch-seq failure)))
-            (active-failures verification))))
+    (let ((patch-seq (%latest-successful-patch-seq changes)))
+      (mapcar (lambda (failure)
+                (format nil "- ~A: ~A (seq ~A~@[, after patch seq ~A~])~@[~A~]"
+                        (or (failure-record-test-name failure) "(unnamed)")
+                        (or (failure-record-reason failure) "?")
+                        (failure-record-seq failure)
+                        (failure-record-patch-seq failure)
+                        (when (and patch-seq
+                                   (< (failure-record-seq failure)
+                                      patch-seq))
+                          +pre-patch-note+)))
+              (active-failures verification)))))
 
 (defun %decision-lines (goal)
   (when goal
@@ -142,17 +212,49 @@
                       (finding-decision finding)))
             (reverse (findings exploration)))))
 
+(defun %bounded-excerpt (text limit)
+  "TEXT truncated to LIMIT chars with a marker, or TEXT unchanged."
+  (if (and (stringp text) (> (length text) limit))
+      (concatenate 'string (subseq text 0 limit) " …[truncated]")
+      text))
+
+(defun %latest-form-patch-p (patch changes)
+  "True when PATCH is the most recent SUCCESSFUL patch (with content)
+for its (file . form-name) — i.e. it is the current source of that
+form, worth echoing so the agent can see what it wrote."
+  (and (patch-entry-ok-p patch)
+       (patch-entry-content patch)
+       (let ((file (patch-entry-file patch))
+             (name (patch-entry-form-name patch))
+             (seq (patch-entry-seq patch)))
+         (notany (lambda (other)
+                   (and (patch-entry-ok-p other)
+                        (equal file (patch-entry-file other))
+                        (equal name (patch-entry-form-name other))
+                        (> (patch-entry-seq other) seq)))
+                 (patches changes)))))
+
 (defun %patch-lines (changes)
   (when changes
-    (mapcar (lambda (patch)
-              (format nil "- seq ~A ~A ~@[~A ~]~@[~A ~]in ~A~@[ [FAILED]~]"
-                      (patch-entry-seq patch)
-                      (patch-entry-operation patch)
-                      (patch-entry-form-type patch)
-                      (patch-entry-form-name patch)
-                      (or (patch-entry-file patch) "?")
-                      (not (patch-entry-ok-p patch))))
-            (%take +recent-limit+ (patches changes)))))
+    (loop for patch in (%take +recent-limit+ (patches changes))
+          append
+          (cons (format nil "- seq ~A ~A ~@[~A ~]~@[~A ~]in ~A~@[ [FAILED]~]"
+                        (patch-entry-seq patch)
+                        (patch-entry-operation patch)
+                        (patch-entry-form-type patch)
+                        (patch-entry-form-name patch)
+                        (or (patch-entry-file patch) "?")
+                        (not (patch-entry-ok-p patch)))
+                ;; Echo the CURRENT content of each edited form (latest
+                ;; successful patch only — older oscillations stay as
+                ;; metadata) so the agent sees the source it wrote, not
+                ;; just that it patched (clh-histogram live run, N4).
+                (when (%latest-form-patch-p patch changes)
+                  (mapcar (lambda (line) (concatenate 'string "    " line))
+                          (uiop:split-string
+                           (%bounded-excerpt (patch-entry-content patch)
+                                             +patch-content-limit+)
+                           :separator '(#\Newline))))))))
 
 (defun %probe-lines (exploration &key fresh-only)
   (when exploration
@@ -170,14 +272,60 @@
                         (or (probe-summary probe) "?")))
               (%take +recent-limit+ selected)))))
 
+(defun %superseded-p (fact facts)
+  "True when a newer fact in FACTS reads the same file as FACT."
+  (let ((file (source-fact-file fact)))
+    (and file
+         (some (lambda (other)
+                 (and (equal file (source-fact-file other))
+                      (> (source-fact-seq other)
+                         (source-fact-seq fact))))
+               facts)
+         t)))
+
 (defun %source-fact-lines (changes)
+  "Recent source facts WITH their content excerpts — the agent must
+see what a read returned, not just that it happened (guided live run,
+2026-06-13). Identical repeated reads render once."
   (when changes
-    (mapcar (lambda (fact)
-              (format nil "- ~@[~A ~]~A~@[ (~A)~]"
-                      (when (source-fact-stale-p fact changes) "[STALE]")
-                      (or (source-fact-file fact) "(search)")
-                      (source-fact-detail fact)))
-            (%take +recent-limit+ (source-facts changes)))))
+    (let* ((all (source-facts changes))
+           (facts (remove-duplicates
+                   ;; A stale fact that a NEWER read of the same file
+                   ;; supersedes adds nothing but a standing
+                   ;; \"re-read\" instruction the agent obeys forever
+                   ;; (guided live run 5) — drop it from the view.
+                   (remove-if (lambda (fact)
+                                (and (source-fact-stale-p fact changes)
+                                     (%superseded-p fact all)))
+                              (%take +recent-limit+ all))
+                   :key (lambda (fact)
+                          (list (source-fact-file fact)
+                                (source-fact-detail fact)
+                                (source-fact-content fact)))
+                   :test #'equal
+                   :from-end t)))
+      (loop for fact in facts
+            append
+            (let ((stale-p (source-fact-stale-p fact changes)))
+              (cons (format nil "- ~@[~A ~]~A~@[ (~A)~]"
+                            (when stale-p "[STALE]")
+                            (or (source-fact-file fact) "(search)")
+                            (source-fact-detail fact))
+                    (cond
+                      ;; A stale excerpt actively misleads (the guided
+                      ;; rerun kept re-patching against pre-patch
+                      ;; source) — withhold it, keep the entry.
+                      ((and stale-p (source-fact-content fact))
+                       (list (concatenate
+                              'string
+                              "    (content withheld — file patched"
+                              " since this read; re-read to refresh)")))
+                      ((source-fact-content fact)
+                       (mapcar (lambda (line)
+                                 (concatenate 'string "    " line))
+                               (uiop:split-string
+                                (source-fact-content fact)
+                                :separator '(#\Newline)))))))))))
 
 (defun %resolved-lines (verification)
   (when verification
@@ -195,8 +343,9 @@
         (changes (world-model-projection world-model :changes))
         (verification (world-model-projection world-model :verification)))
     (list (cons "Goal" (%goal-lines goal))
-          (cons "Verification" (%verification-lines verification))
-          (cons "Active failures" (%active-failure-lines verification))
+          (cons "Verification" (%verification-lines verification changes))
+          (cons "Active failures"
+                (%active-failure-lines verification changes))
           (cons "Decisions" (%decision-lines goal))
           (cons "Findings" (%finding-lines exploration))
           (cons "Recent patches" (%patch-lines changes))
@@ -213,9 +362,11 @@ patches; fresh probes only; explicit next-step guidance."
         (changes (world-model-projection world-model :changes))
         (verification (world-model-projection world-model :verification)))
     (list (cons "Goal" (%take 1 (%goal-lines goal)))
-          (cons "Active failures" (%active-failure-lines verification))
+          (cons "Active failures"
+                (%active-failure-lines verification changes))
           (cons "Recent patches" (%patch-lines changes))
-          (cons "Verification" (%verification-lines verification))
+          (cons "Verification"
+                (%verification-lines verification changes))
           (cons "Fresh runtime probes"
                 (%probe-lines exploration :fresh-only t))
           (cons "Findings" (%finding-lines exploration))

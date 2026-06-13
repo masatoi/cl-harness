@@ -16,6 +16,7 @@
                 #:apply-event
                 #:apply-interaction
                 #:interaction-tool
+                #:interaction-arguments
                 #:interaction-succeeded-p
                 #:interaction-result
                 #:+patch-tool-names+)
@@ -32,6 +33,8 @@
            #:governor-patch-count
            #:governor-consecutive-failed-patches
            #:governor-stalled-verify-cycles
+           #:governor-identical-action-run
+           #:governor-max-consecutive-identical-actions
            #:governor-breaches
            #:check-governor
            #:reset-governor-progress
@@ -67,6 +70,19 @@ replay-consistent semantic. Calibrate pack budgets accordingly.")
     :documentation "Failing run-tests with no patch attempt since the
 previous run-tests. The initial observe-phase red verify counts as the
 first cycle; the default threshold (3) accounts for that.")
+   (max-consecutive-identical-actions
+    :initarg :max-consecutive-identical-actions :initform 4
+    :reader governor-max-consecutive-identical-actions
+    :documentation "Live blind-spot fix (2026-06-13): read-loop
+paralysis and the green run-tests ping-pong are both the SAME (tool,
+arguments) action repeated — invisible to failed-patch and
+stalled-verify counters. NIL disables.")
+   (identical-action-run
+    :initform 0 :accessor governor-identical-action-run
+    :documentation "Length of the current streak of identical
+consecutive actions (1 = no repetition yet).")
+   (last-action-signature
+    :initform nil :accessor %last-action-signature)
    (patched-since-last-verify
     :initform nil :accessor %patched-since-last-verify))
   (:documentation "Progress oracle + budget governor (spec §7/§11)."))
@@ -78,8 +94,38 @@ first cycle; the default threshold (3) accounts for that.")
     (multiple-value-bind (value present-p) (gethash key result)
       (when (and present-p (integerp value)) value))))
 
+(defun %argument-token (value)
+  "Stable rendering of a top-level argument VALUE for the identical-
+action signature. Nested structures collapse to constants — their
+printed forms carry object addresses, which would defeat repetition
+detection; scalar arguments (the loop-prone tools' case) compare
+exactly."
+  (typecase value
+    (hash-table "#object")
+    (cons "#list")
+    (t (format nil "~S" value))))
+
+(defun %action-signature (interaction)
+  "Canonical \"tool|key=value&…\" string (keys sorted) identifying an
+action for repetition detection."
+  (let ((arguments (interaction-arguments interaction))
+        (pairs '()))
+    (when (hash-table-p arguments)
+      (maphash (lambda (key value)
+                 (push (format nil "~A=~A" key (%argument-token value))
+                       pairs))
+               arguments))
+    (format nil "~A|~{~A~^&~}"
+            (interaction-tool interaction)
+            (sort pairs #'string<))))
+
 (defmethod apply-interaction ((governor governor) interaction)
   (incf (governor-action-count governor))
+  (let ((signature (%action-signature interaction)))
+    (if (equal signature (%last-action-signature governor))
+        (incf (governor-identical-action-run governor))
+        (setf (governor-identical-action-run governor) 1
+              (%last-action-signature governor) signature)))
   (let ((tool (interaction-tool interaction)))
     (cond
       ((member tool +patch-tool-names+ :test #'string=)
@@ -119,7 +165,11 @@ Categories: :budget (resource counts) and :progress (stall signals)."
               "consecutive failed patches")
       (breach :progress (governor-max-stalled-verify-cycles governor)
               (governor-stalled-verify-cycles governor)
-              "stalled verify cycles"))
+              "stalled verify cycles")
+      (breach :progress
+              (governor-max-consecutive-identical-actions governor)
+              (governor-identical-action-run governor)
+              "identical consecutive actions"))
     (nreverse breaches)))
 
 (defmethod evaluate ((governor governor) subject)
@@ -190,6 +240,8 @@ grants the new policy a fresh stall allowance; actions and patches
 already spent stay spent (spec §6.1)."
   (setf (governor-consecutive-failed-patches governor) 0
         (governor-stalled-verify-cycles governor) 0
+        (governor-identical-action-run governor) 0
+        (%last-action-signature governor) nil
         (%patched-since-last-verify governor) nil)
   governor)
 

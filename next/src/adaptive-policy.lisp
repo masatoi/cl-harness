@@ -15,10 +15,15 @@
   (:import-from #:cl-harness-next/src/event
                 #:event-type
                 #:event-payload)
+  (:import-from #:cl-harness-next/src/event-log
+                #:emit-event)
   (:import-from #:cl-harness-next/src/kernel
                 #:control-policy
                 #:decide
-                #:handle-intervention)
+                #:handle-intervention
+                #:decision-kind
+                #:kernel-governor
+                #:kernel-event-log)
   (:import-from #:cl-harness-next/src/governor
                 #:progress-stalled
                 #:budget-exhausted
@@ -48,8 +53,35 @@ the dial level from the log."))
 (defun %current-level (policy)
   (elt (policy-levels policy) (policy-level-index policy)))
 
+(defun %demote-on-give-up (policy kernel)
+  "Bump to the next level, reset the governor's stall allowance, and log a
+dial event (so a cold replay re-derives the level). Mirrors the
+progress-stalled demotion, but driven by a sub-level :give-up."
+  (setf (policy-level-index policy)
+        (min (1+ (policy-level-index policy))
+             (1- (length (policy-levels policy)))))
+  (alexandria:when-let ((governor (kernel-governor kernel)))
+    (reset-governor-progress governor))
+  (emit-event (kernel-event-log kernel) :decision
+              (alexandria:plist-hash-table
+               (list "kind" "dial" "text" "demoted one dial level (give-up)")
+               :test #'equal)))
+
 (defmethod decide ((policy adaptive-policy) kernel)
-  (decide (%current-level policy) kernel))
+  (let ((decision (decide (%current-level policy) kernel)))
+    ;; A sub-level :give-up terminates the kernel before any governor pass
+    ;; (kernel-step's :give-up branch), so progress-stalled never fires.
+    ;; Intercept it: while a lower rung remains, demote and re-decide with
+    ;; it THIS step. :give-up only escapes once the bottom rung gives up.
+    (if (and (eq :give-up (decision-kind decision))
+             (< (1+ (policy-level-index policy))
+                (length (policy-levels policy))))
+        ;; Re-enter THIS policy's decide (not the sub-level's directly) so a
+        ;; chained give-up keeps demoting until a rung produces a non-give-up
+        ;; decision or the bottom rung itself gives up.
+        (progn (%demote-on-give-up policy kernel)
+               (decide policy kernel))
+        decision)))
 
 (defmethod handle-intervention ((policy adaptive-policy) condition)
   (typecase condition

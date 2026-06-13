@@ -14,16 +14,19 @@
                 #:decide
                 #:make-decision
                 #:kernel-last-verdict
-                #:kernel-world-model)
+                #:kernel-world-model
+                #:kernel-environment)
   (:import-from #:cl-harness-next/src/oracle
                 #:verdict-pass-p)
   (:import-from #:cl-harness-next/src/verification-oracle
                 #:verification-oracle)
   (:import-from #:cl-harness-next/src/context-compiler
-                #:compile-context)
+                #:compile-context
+                #:render-tool-schemas)
+  (:import-from #:cl-harness-next/src/environment
+                #:environment-action-space)
   (:import-from #:cl-harness-next/src/action
-                #:parse-action
-                #:action-parse-error
+                #:obtain-action
                 #:agent-action-type
                 #:agent-action-tool
                 #:agent-action-arguments
@@ -90,36 +93,42 @@ owns WHAT happens next; the LLM only proposes patch content."))
 
 (defun %diagnose (policy kernel)
   "Ask the LLM for exactly one patch action against the
-failure-analysis view. Anything else gives up (the scripted dial does
-not negotiate)."
-  (let* ((view (compile-context (kernel-world-model kernel)
-                                :decision-point :failure-analysis))
-         (response
-           (handler-case (funcall (policy-diagnose-fn policy) view)
-             (error (condition)
-               (return-from %diagnose
-                 (%give-up "diagnose call failed: ~A" condition)))))
-         (action
-           (handler-case (parse-action response)
-             (action-parse-error (condition)
-               (return-from %diagnose
-                 (%give-up "unparseable diagnosis: ~A" condition))))))
-    (cond
-      ((and (eq :tool-call (agent-action-type action))
-            (member (agent-action-tool action) +patch-tool-names+
-                    :test #'string=))
-       (setf (policy-state policy) :verify)
-       (make-decision :kind :act
-                      :tool (agent-action-tool action)
-                      :arguments (agent-action-arguments action)
-                      :reason (or (agent-action-thought action)
-                                  "apply diagnosed patch")))
-      ((eq :finish (agent-action-type action))
-       (%give-up "model stopped: ~A"
-                 (or (agent-action-summary action) "(no summary)")))
-      (t
-       (%give-up "scripted policy accepts only patch tools, got ~A"
-                 (agent-action-tool action))))))
+failure-analysis view, re-sampling up to OBTAIN-ACTION's MAX-TRIES on a
+malformed reply. Anything other than a patch tool gives up (the scripted
+dial does not negotiate)."
+  (let* ((tools (render-tool-schemas
+                 ;; Scripted only accepts patch tools — advertise only those,
+                 ;; so the model is not tempted into a rejected non-patch call.
+                 (remove-if-not
+                  (lambda (descriptor)
+                    (member (gethash "name" descriptor) +patch-tool-names+
+                            :test #'string=))
+                  (environment-action-space (kernel-environment kernel)))))
+         (context (compile-context (kernel-world-model kernel)
+                                   :decision-point :failure-analysis))
+         (view (if tools
+                   (format nil "~A~2%~A" tools context)
+                   context)))
+    (multiple-value-bind (action err)
+        (obtain-action (policy-diagnose-fn policy) view)
+      (when (null action)
+        (return-from %diagnose (%give-up "unparseable diagnosis: ~A" err)))
+      (cond
+        ((and (eq :tool-call (agent-action-type action))
+              (member (agent-action-tool action) +patch-tool-names+
+                      :test #'string=))
+         (setf (policy-state policy) :verify)
+         (make-decision :kind :act
+                        :tool (agent-action-tool action)
+                        :arguments (agent-action-arguments action)
+                        :reason (or (agent-action-thought action)
+                                    "apply diagnosed patch")))
+        ((eq :finish (agent-action-type action))
+         (%give-up "model stopped: ~A"
+                   (or (agent-action-summary action) "(no summary)")))
+        (t
+         (%give-up "scripted policy accepts only patch tools, got ~A"
+                   (agent-action-tool action)))))))
 
 (defmethod decide ((policy scripted-fix-policy) kernel)
   (ecase (policy-state policy)

@@ -2003,6 +2003,130 @@ DR-2026-05-27 の実装に対する implementation review
 - `docs/notes/2026-05-06-v0.4-development-harness.md` §11 — design review
   followup として finding 一覧 + 各 commit を log
 
+---
+
+## cl-harness-next dogfooding findings (2026-06-13)
+
+`cl-harness-next` を「既存 CLOS クラスの複数メソッド実装」タスク(clh-histogram)で
+連続運転して抽出。一次データと根拠は
+`docs/notes/2026-06-13-next-complex-task-experiment.md`。Qwen3.6-35B-A3B ×
+scripted/adaptive/guided の 6 run はいずれも `:done` 未到達、各失敗が別欠陥を露出。
+
+### N1.(高)許可ツールの引数スキーマを context に注入 — ✅ 実装済み (2026-06-13)
+
+**根拠**: 全 run を貫く根本原因。environment は tools/list の inputSchema を含む
+descriptor を保持しているのに view/prompt に出していない。モデルは引数名を推測し
+外す(`lisp-read-file` を `path` でなく `file_path` で呼び 10 連敗 park / `form_type`
+を defun と誤る)。cl-mcp はファイルパス引数名すらツール間で異なる(`file_path` vs
+`path`)。**変更案**: 許可ツールの name + 必須/任意パラメータを compiled view か
+system prompt に注入。
+
+**実装**: `render-tool-schemas`(`context-compiler.lisp`)が許可ツールの name +
+パラメータ(必須は `*`)を描画し、scripted `%diagnose` / llm-step `%step-prompt` の
+view 先頭に注入。scripted は受理する patch ツールに限定描画(全ツール提示だと
+repl-eval 等を誘発して即 give-up することを実機確認、`+patch-tool-names+` で filter)。
+再走で誤引数ループが解消(guided が `fs-list-directory` を `path` で正しく呼べた)。
+
+### N2.(高)action パーサの寛容化 + パース失敗の K 回許容 — ✅ 実装済み (2026-06-13)
+
+**根拠**: parser は fail-closed で、不正応答 1 回(実測 ~33% の不正率)で
+ミッション全体が `:failed`。scripted も guided も同様。**変更案**:
+①`parse-action` に「`type` 未知 + 非空 `tool` → `tool_call`」正規化を追加
+(既存の fence 除去 / flat-arguments と同系統。caller 側 wrapper で完走前進を実証済)。
+②policy が parse 失敗で即 give-up せず、エラーを `last-action-error` に載せて
+K 回まで継続(既存 backlog「llm-step-policy fail-closed 寛容度」の実データ版)。
+
+**実装**: ①`parse-action` に正規化クローズを追加(`action.lisp`)。②`obtain-action`
+ヘルパが LLM を再サンプル + 訂正ヒント付きで K 回(既定 3)試行し、scripted
+`%diagnose` / llm-step `%llm-step` の即 give-up を置換。全 260 テスト緑。
+
+### N3.(中)adaptive の demote 契機に give-up / parse 失敗を含める
+
+**根拠**: adaptive の降格は governor `progress-stalled` のみが契機。parse 失敗は
+`:give-up` decision で介入ではないため、guided が step 1 で I/O 破綻しても
+**一度も demote せず** `:failed`(dial イベント 0)。**変更案**: 「policy が
+give-up を返した」も降格トリガにする。最自律 dial が I/O で詰まったら下げる。
+
+### N4.(高に昇格)compiled view に現在ソースを載せる — ✅ ① 実装済み (2026-06-13)
+
+**実装(option ①)**: `patch-entry` に `content` を保持(`apply-interaction` が
+lisp-edit-form `content` / lisp-patch-form `new_text` を取り込む)。`compile-context`
+の "Recent patches" が各フォームの最新成功パッチ内容(編集後の現在ソース)を echo
+(`+patch-content-limit+` 480 字 bound、オシレーション旧版はメタデータのみ)。
+全 262 テスト緑。**canned 正解パッチで scripted が 5 メソッドを順に当て `:done`
+(clean green)に到達**を確認 → ハーネスは多段タスクを完遂できる。実 LLM では律速が
+モデルの素の信頼性(typo・空応答・幻 optional 引数)へ移った。option ②(パッチ後
+自動 read)/③(scripted に read フェーズ + failure-analysis に Source facts)は
+未着手(より完全なソース可視性が要る場合)。
+
+**当初の根拠**:
+
+**根拠**: failure view は run-tests 失敗(form+got 値)を良質に伝えるが、ソース
+ファイル一覧や**現在のソース内容**を含まない → モデルが存在しない `class.lisp`
+を patch、既存 defmethod でなく defun を捏造。N1+N2 実装後の再走では、scripted が
+`observe` を正しく実装できたのに**ソースを観測できない**ため、パッチが効かない理由を
+診断できず「patch history しか見えず実ソースを確認できないので直せない」と
+**モデル自身が 3 度明言して give_up**。これが 5 メソッド整合実装を `:done` に
+できない唯一の残ブロッカー(N1+N2 は I/O 契約を直したが必要条件にとどまる)。
+**変更案**: scripted に read フェーズ(または source projection)を足し、対象
+ファイルの現在ソース(+失敗シンボルの定義箇所/form_type)を diagnose view に載せる。
+guided は read 可能なので、停滞検出と組み合わせて read を促す。
+
+### N5.(設計)dial 選択をタスク種別にも対応させる
+
+**根拠**: scripted は read ステップ無しでソースを観測しないため、既存クラスの
+slot/accessor に整合した実装を書けず捏造する。「局所バグ修正」には向くが
+「既存定義への整合実装」には read 可能 dial が要る。**変更案**: 整合実装系は
+read を要する旨を guided agenda / ドキュメントに明示し、scripted を既定にしない。
 
 
 
+
+
+### N6. template-fix-policy(最下段ダイヤル) — ✅ コア実装・実証済み (2026-06-13)
+
+**根拠**: N1+N2+N4 後も Qwen は agency 層(計画・tool-call・完了判断)で全敗。
+診断: 詰まるのは code-gen ではなく agency。**変更**: 最下段 `template-fix-policy`
+を実装(spec `docs/superpowers/specs/2026-06-13-template-fix-policy-design.md`)。
+ハーネス FSM が agency を 100% 所有し、LLM は穴埋め body だけ出す code-gen オラクル
+に退化。リーダベース body 抽出 + per-form(prompt→snippet→抽出→ハーネス発行の
+lisp-edit-form→load→test→K再試行/park→clean ゲート)。全 271 テスト緑。
+
+**実証**: Qwen3.6-35B-A3B × clh-histogram full-5 で、全エージェントダイヤルが 0/5
+だったのに **template-fix は 5/5 緑・`:done`(3/3 再現)**。`total`/`top-key` の
+maphash アキュムレータも正答。`tools/run-template.lisp`。
+
+**B2: DISCOVER のソース化 — ✅ 実装済み (2026-06-13)**: `discover-targets`
+(リーダベースでソース解析→スタブ defmethod/defun を発見、class-text/contract/
+package も導出)＋発見サブFSM(`:disc`: fs-read-file→解析→per-form)。注入
+(`:targets`)経路も維持(テスト用)。canned 統合テストで注入なし `:done`、real Qwen
+discovery モード(`CLH_DISCOVER`)でも 5/5 `:done`(再現)。
+
+**精緻化 — ✅ 実装済み (2026-06-13)**:
+- **失敗テスト cross-check**: 発見後にベースライン run-tests を取り、失敗に現れる
+  シンボルのターゲットだけ残す(未テストのスタブは緑を妨げないので除外。失敗データが
+  無ければ保守的に全保持)。`:disc-baseline-test`/`:disc-filter` 状態。
+- **overload**: form 単位で解析するので、1 総称関数の複数 defmethod は別ターゲット
+  (別特定子 form-name)になり曖昧性なし — テストで確認。
+- **adaptive の `:give-up` demote**: `decide` で sub-level の `:give-up` を捕まえ、
+  下位段があれば demote(level-index++/governor reset/dial イベント)して同ステップで
+  再 decide。最下段の give-up のみ脱出。`progress-stalled` 経路は維持。これで
+  template-fix を `:levels` 最下段に置けば、上位段の give-up で template-fix へ落ちる。
+  全 277 テスト緑、real Qwen discovery も維持。
+
+**残(follow-up)**:
+- 複数ファイルの auto-list(`fs-list-directory`)。現状は `:source-files` 明示
+  (既定 `src/main.lisp`)で多ファイルも可。
+- 能力ベース開始の自動化(モデル×自律度 matrix / L5) — 規模大。
+- guided/self-directed の step-fn 用 free-var チェック(scope 追跡が要り false-positive
+  しやすい。誤変数 body は load/test の再試行が既に拾うため低優先)。
+- **overload 部分修正の group-level retry (re-review B, 2026-06-13)**:
+  `%overload-resolved-p` の count-decrease 分岐は *任意の* 減少を進捗として advance する
+  ため、複数 assertion を持つ 1 overload を body が *一部だけ* 修正した場合も advance し、
+  最終 clean gate で "suite still red" の安全な give-up になる(false `:done` は無し)。
+  共有シンボルの集約からは overload 単位の full-fix と partial-fix を区別できず、retry は
+  form を re-patch するため弱モデルでは *正しい兄弟 body を上書き* するリスクがある
+  (template-fix が対象とする層でまさに危険)。よって overwrite-safe な advance-on-progress
+  を意図的に選択。完全な解は group 単位 retry + body snapshot/revert(overload 群をまとめて
+  patch→symbol green まで再試行し各 attempt の最良 body を保持)— 規模中、overload が稀なため
+  低優先。docstring/spec(§5 Known limitation)に記載。
