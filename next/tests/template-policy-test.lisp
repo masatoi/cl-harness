@@ -90,6 +90,31 @@
   (ok (eq :malformed (nth-value 1 (extract-method-body "(incf (gethash key"
                                                        :head "observe ((h histogram) key)")))))
 
+(deftest body-extraction-rejects-non-method-definitions
+  ;; A whole defgeneric/defclass/defmacro is NOT a method to unwrap;
+  ;; extracting a "body" from it is meaningless — reject as a definition.
+  (dolist (def '("(defgeneric foo (x))"
+                 "(defclass c () ((s :initarg :s)))"
+                 "(defmacro foo (x) (list '1+ x))"))
+    (ok (eq :nested-definition
+            (nth-value 1 (extract-method-body def :head "foo ((x bar))")))
+        (format nil "~S should be rejected as a definition" def))))
+
+(deftest body-extraction-preserves-leading-reader-prefix
+  ;; A body that begins with a quote / function reader macro must keep it;
+  ;; the prose-skip must not drop the ' / #' .
+  (let ((form (extract-method-body "'(:a :b)" :head "tags ((x foo))")))
+    (ok (and form (search "'(:a :b)" form))))
+  (let ((form (extract-method-body "#'(lambda (e) e)" :head "fn ((x foo))")))
+    (ok (and form (search "#'(lambda (e) e)" form)))))
+
+(deftest body-extraction-rejects-declare-docstring-constant
+  ;; A stub-equivalent body with a leading docstring + declarations is
+  ;; still degenerate after they are stripped.
+  (ok (eq :degenerate
+          (nth-value 1 (extract-method-body "(declare (ignore x)) \"doc\" 0"
+                                            :head "m ((x c))")))))
+
 (deftest discover-finds-stub-defmethods
   ;; Stub defmethods (constant / declare+constant body) are discovered from
   ;; source; real methods and defuns are not; the class + package + contract

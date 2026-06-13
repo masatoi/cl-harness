@@ -60,6 +60,15 @@
                '("DEFMETHOD" "DEFUN" "DEFGENERIC" "DEFCLASS" "DEFMACRO")
                :test #'string=)))
 
+(defun %method-form-p (form)
+  "True when FORM is a defmethod/defun — a method/function definition
+whose body can be meaningfully unwrapped. Other definition forms
+(defgeneric/defclass/defmacro) are NOT unwrappable into a method body."
+  (and (consp form)
+       (symbolp (first form))
+       (member (symbol-name (first form)) '("DEFMETHOD" "DEFUN")
+               :test #'string=)))
+
 (defun %read-body-forms (text package)
   "Read every top-level form from TEXT under *read-eval* nil in PACKAGE.
 Returns (values forms end-position error-string); ERROR-STRING non-NIL
@@ -90,11 +99,14 @@ means TEXT was unbalanced/unreadable."
 
 (defun %degenerate-body-p (forms)
   "True when FORMS is a stub-equivalent body: after dropping leading
-declarations, nothing remains or a single literal constant remains."
+declarations and a leading docstring, nothing or a single literal
+constant remains."
   (let ((rest (remove-if (lambda (f)
                            (and (consp f) (symbolp (first f))
                                 (string= (symbol-name (first f)) "DECLARE")))
                          forms)))
+    (when (and (cdr rest) (stringp (first rest)))
+      (setf rest (cdr rest)))
     (or (null rest)
         (and (= 1 (length rest))
              (let ((f (first rest)))
@@ -104,57 +116,72 @@ declarations, nothing remains or a single literal constant remains."
                                      (package (find-package :cl-user)))
   "Extract a method BODY from RAW (the LLM reply) and re-wrap it under the
 FSM-owned HEAD (e.g. \"observe ((h histogram) key)\") and FORM-TYPE,
-using the Lisp reader for all lexical parsing. A whole-definition reply
-has its model-supplied header discarded (never trust its specializers).
-Returns the full form string, or (values NIL reason-keyword feedback)."
+using the Lisp reader for all lexical parsing. A whole defmethod/defun
+reply has its model-supplied header discarded; other definition forms
+are rejected. Returns the full form string, or (values NIL reason feedback)."
   (let ((text (%strip raw)))
     (when (zerop (length text))
       (return-from extract-method-body
         (values nil :empty "your reply was empty; emit the method body")))
-    (let ((start (position #\( text)))
-      (unless start
+    ;; Read from the start so leading '/#'/` reader prefixes are preserved;
+    ;; only on a read error (genuine leading prose) fall back to scanning to
+    ;; the first open paren.
+    (multiple-value-bind (forms end err) (%read-body-forms text package)
+      ;; Fall back to scanning to the first paren when the start is genuine
+      ;; prose: either it failed to read, or it read as a leading bare atom
+      ;; while a parenthesized form waits later (e.g. "the body is: (...)").
+      (when (or err
+                (and forms (atom (first forms)) (position #\( text)))
+        (let ((paren (position #\( text)))
+          (when paren
+            (setf text (subseq text paren))
+            (multiple-value-setq (forms end err)
+              (%read-body-forms text package)))))
+      (when err
         (return-from extract-method-body
-          (values nil :degenerate "emit a parenthesized body s-expression")))
-      (let ((sub (subseq text start)))
-        (multiple-value-bind (forms end err) (%read-body-forms sub package)
-          (when err
-            (return-from extract-method-body
-              (values nil :malformed (format nil "unbalanced/unreadable reply: ~A" err))))
-          (when (null forms)
-            (return-from extract-method-body
-              (values nil :degenerate "emit a method body")))
-          (let (body-forms body-text)
-            (cond
-              ((and (= 1 (length forms)) (%definition-form-p (first forms)))
-               (setf body-forms (%extract-definition-body (first forms)))
-               (when (null body-forms)
-                 (return-from extract-method-body
-                   (values nil :degenerate "the method body is empty")))
-               (let ((*package* package)
-                     (*print-case* :downcase)
-                     (*print-right-margin* nil))
-                 (setf body-text (format nil "~{~S~^~%  ~}" body-forms))))
-              (t
-               (setf body-forms forms)
-               (setf body-text (string-right-trim +whitespace+
-                                                  (subseq sub 0 end)))))
-            (when (some #'%definition-form-p body-forms)
+          (values nil :malformed (format nil "unbalanced/unreadable reply: ~A" err))))
+      (when (null forms)
+        (return-from extract-method-body
+          (values nil :degenerate "emit a method body")))
+      (let (body-forms body-text)
+        (cond
+          ;; Whole defmethod/defun reply: keep only its body. defgeneric/
+          ;; defclass/defmacro are NOT methods — they fall through and the
+          ;; nested-definition guard below rejects them.
+          ((and (= 1 (length forms)) (%method-form-p (first forms)))
+           (setf body-forms (%extract-definition-body (first forms)))
+           (when (null body-forms)
+             (return-from extract-method-body
+               (values nil :degenerate "the method body is empty")))
+           (let ((*package* package)
+                 (*print-case* :downcase)
+                 (*print-right-margin* nil))
+             (setf body-text (format nil "~{~S~^~%  ~}" body-forms))))
+          (t
+           (setf body-forms forms)
+           (setf body-text (string-right-trim +whitespace+
+                                              (subseq text 0 end)))))
+        ;; Several bare atoms with no parenthesized form is prose, not a body.
+        (when (and (cdr body-forms) (notany #'consp body-forms))
+          (return-from extract-method-body
+            (values nil :malformed "reply is not a method body s-expression")))
+        (when (some #'%definition-form-p body-forms)
+          (return-from extract-method-body
+            (values nil :nested-definition
+                    "reply must be ONLY the method body, not a definition")))
+        (when (%degenerate-body-p body-forms)
+          (return-from extract-method-body
+            (values nil :degenerate
+                    "the body must implement the method, not return a constant")))
+        (let ((candidate (format nil "(~A ~A~%  ~A)" form-type head body-text)))
+          (multiple-value-bind (forms2 e2 err2) (%read-body-forms candidate package)
+            (declare (ignore e2))
+            (when (or err2
+                      (/= 1 (length forms2))
+                      (not (%definition-form-p (first forms2))))
               (return-from extract-method-body
-                (values nil :nested-definition
-                        "reply must be ONLY the method body, not a definition")))
-            (when (%degenerate-body-p body-forms)
-              (return-from extract-method-body
-                (values nil :degenerate
-                        "the body must implement the method, not return a constant")))
-            (let ((candidate (format nil "(~A ~A~%  ~A)" form-type head body-text)))
-              (multiple-value-bind (forms2 e2 err2) (%read-body-forms candidate package)
-                (declare (ignore e2))
-                (when (or err2
-                          (/= 1 (length forms2))
-                          (not (%definition-form-p (first forms2))))
-                  (return-from extract-method-body
-                    (values nil :malformed "assembled form did not re-read cleanly")))
-                (values candidate nil nil)))))))))
+                (values nil :malformed "assembled form did not re-read cleanly")))
+            (values candidate nil nil)))))))
 
 ;;; --- The template-fix FSM -------------------------------------------------
 ;;; The harness owns 100% of agency; the LLM only fills a body. The kernel
