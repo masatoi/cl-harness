@@ -1,6 +1,17 @@
-# template-fix-policy — Design Spec (2026-06-13)
+# template-fix-policy — Design Spec (2026-06-13, as-built)
 
-Status: approved (this session). Target system: `cl-harness-next`.
+Status: **implemented** (this session). Target system: `cl-harness-next`.
+Source `next/src/template-policy.lisp`; tests `next/tests/template-policy-test.lisp`;
+adaptive wiring `next/src/adaptive-policy.lisp`; runner `tools/run-template.lisp`.
+Commits: `f8029c6` (design) → `f75519a` (A) → `037b49c` (B) → `2dd85a6` (C, Qwen
+5/5) → `7795659` (B2 DISCOVER) → `f7a86d9` (refinements) → `f2139b5` (review fixes).
+
+> This document was **reconciled with the implementation** after build. The
+> original pre-build synthesis (workflow run `wf_50a7b10b-a55`) proposed a
+> clgrep-driven DISCOVER, a hand-written char scanner, a free-var gate, and a
+> `lisp-check-parens` validation step; the implementation deviated from all of
+> those. The sections below describe **what was actually built**; where the
+> as-built differs from the synthesis it is called out inline.
 
 ## 1. Motivation & principle
 
@@ -15,263 +26,289 @@ in that layer. A capable agent (Opus) drove the *same* harness to `:done`.
 
 **Principle**: move the entire agentic layer into the harness FSM; reduce the
 LLM to a *stateless code-generation oracle* — "given a fully-specified hole
-(signature + contract + class + failing assertions), emit the body". This is the
-purest application of the spec's central thesis *autonomy ∝ capability*: it is
-the lowest dial rung, where the LLM has zero agency.
+(signature + contract + class), emit the body". This is the purest application
+of the spec's central thesis *autonomy ∝ capability*: it is the lowest dial rung,
+where the LLM has zero agency.
 
 **Corollary (the honest residue)**: removing agency does not make hard *code*
-easy. Qwen's code-gen has a difficulty gradient — `gethash`/`incf`/
-`hash-table-count` one-liners are reliable; `maphash` accumulators with tie-breaks
-(`total`, `top-key`) are coin-flips. The design's value is that such failures now
-surface as *clean, isolated, measurable code-gen failures* (not muddied by
-agency). The residue is addressed by pushing **code structure** into the harness
-too (skeleton scaffolding — §10, deferred), not by reaching for a stronger model.
+easy. The design's value is that any residual failure surfaces as a *clean,
+isolated, measurable code-gen failure* (not muddied by agency), addressable by
+pushing **code structure** into the harness too (skeleton scaffolding — §10,
+deferred), not by reaching for a stronger model. **Measured outcome (§11): the
+residue did not materialize — Qwen reached 5/5 `:done`, including `total`/
+`top-key`.**
 
-## 2. Selection model (how the dial is chosen) — decided
+## 2. Selection model (how the dial is chosen)
 
-Not "always start high and fall back". Two axes, decided this session:
+Not "always start high and fall back". Two axes:
 
 - **Primary = capability-based starting rung.** Capability (per model × task
   shape) sets *where in the ladder a run starts*. For a known-weak model on an
   implement-stubs task, start directly at `template-fix`. Mechanism: config /
-  per-model registry now; auto-calibration (the spec's model×autonomy matrix /
-  L5) later.
-- **Safety net = fast demotion** (deferred, §10). When the start is too high,
-  demote — but on *leading* indicators (malformed-rate, exploration-without-edit,
-  identical-action, **give-up**), not only the lagging `progress-stalled`, and
-  **reset state on demotion** so the lower rung starts clean.
+  per-model registry now; auto-calibration (the L5 model×autonomy matrix) later
+  (§10).
+- **Safety net = demotion on `:give-up`.** ✅ implemented in `adaptive-policy`
+  (§7.4): a sub-level `:give-up` demotes to the next rung and re-decides *this
+  step*. So `template-fix` placed as the bottom `:levels` rung is reachable when
+  a higher rung gives up — a `:give-up` otherwise terminates the kernel before
+  any governor pass, so the existing `progress-stalled` trigger never fired.
 
-**Scope for THIS work**: build `template-fix-policy` **standalone** and run it
-directly (capability-based start = "Qwen → template-fix"). Adaptive `:levels`
-integration + the widened demotion trigger are a **follow-up** (§10).
+This work built `template-fix-policy` so it runs **standalone** (capability-based
+start = "Qwen → template-fix", `tools/run-template.lisp`) **and** as the bottom
+rung of `adaptive`.
 
-## 3. Revisions over the baseline synthesis
+## 3. Revisions over the baseline synthesis (as-built)
 
-The detailed grounding/critique/synthesis is in the design workflow output
-(run `wf_50a7b10b-a55`). This spec adopts it with these revisions:
+1. **Body extraction uses the Lisp reader, not a hand-written char scanner**
+   (§6). The policy runs in the worker; `read` (with `*read-eval* nil`) handles
+   strings/comments/char-literals/nesting correctly.
+2. **DISCOVER reads the whole source via `fs-read-file` and parses it with the
+   reader** (`discover-targets`, §5) — *not* clgrep-per-symbol nor parsing
+   `failed_tests[].form` in the SUT package. Stub detection from source is
+   primary; a baseline `run-tests` cross-check narrows to tested symbols.
+3. **Per-form done = "the target symbol no longer appears in `failed_tests`"** —
+   *not* "failed count strictly decreased" (which can misjudge — review finding 2).
+4. **Whole-definition unwrap accepts only `defmethod`/`defun`** — `defgeneric`/
+   `defclass`/`defmacro` are rejected as nested definitions (review finding 3).
+5. **No `lisp-check-parens`, no free-var gate, no post-edit revert.** Body
+   validity is checked by *re-reading the assembled form* in-process; wrong-var
+   and wrong-body cases are caught by the load/run-tests retry loop. The free-var
+   gate is deferred (review finding 4 — it needs lexical-scope tracking).
+6. **Capability-based start primary; adaptive `:give-up` demotion as the safety
+   net** — both implemented (§2, §7.4).
+7. **Skeleton scaffolding** remains the deferred answer to any hard-method
+   code-gen residue (§10), unused so far (Qwen reached 5/5).
 
-1. **Body extraction uses the Lisp reader, NOT a hand-written char scanner.**
-   The policy is Lisp running in the worker; `read` (with `*read-eval* nil`,
-   `*package*` = SUT package) correctly handles the string/comment/char-literal/
-   nesting boundaries a hand-rolled scanner would botch. See §6.
-2. **DISCOVER leads with stub-detection from source**, using test failures only
-   to prioritize and to decide done. See §5.
-3. **Standalone first**; adaptive/demote integration deferred (§2, §10).
-4. **Capability-based start is primary**; fallback-demotion is the safety net
-   (§2).
-5. **Skeleton scaffolding** is the deferred answer to hard methods (§10), applied
-   only if `total`/`top-key` fail as code-gen on real Qwen.
+## 4. Package / file / build (as-built)
 
-## 4. Package / file / build
-
-- File: `next/src/template-policy.lisp`; package
+- File `next/src/template-policy.lisp`; package
   `cl-harness-next/src/template-policy` (package-inferred-system; **no
-  `:local-nicknames`** per project CLAUDE.md).
-- Imports from kernel (`control-policy` `decide` `make-decision`
-  `kernel-last-verdict` `kernel-last-result` `kernel-last-action-error`
-  `kernel-world-model` `kernel-environment`), oracle (`verdict-pass-p`
-  `verdict-reason`), verification-oracle (`verification-oracle`), action
-  (`strip-code-fence` — **must be newly exported** from
-  `next/src/action.lisp`), projection (`+patch-tool-names+`).
-- Exports: `template-fix-policy` `policy-state` `policy-system`
-  `policy-test-system` `make-template-snippet-system-prompt` `+template-snippet-system-prompt+`
-  and the body-extraction entrypoint `extract-method-body` (for unit tests).
-- `.asd`: add `cl-harness-next/tests/template-policy-test` to the
-  `cl-harness-next/tests` `:depends-on`. No `main.lisp` facade edit needed
-  (package-inferred-system pulls the source via the test dep / future adaptive
-  wiring).
+  `:local-nicknames`**).
+- Imports: kernel (`control-policy` `decide` `make-decision` `kernel-last-result`
+  `kernel-last-action-error` `kernel-last-verdict`), oracle (`verdict-pass-p`),
+  verification-oracle (`verification-oracle`), action (`strip-code-fence` —
+  **newly exported** from `next/src/action.lisp`). `alexandria:plist-hash-table`
+  is used package-qualified. (No projection / kernel-environment / world-model
+  imports — the policy reads only `kernel-last-{result,action-error,verdict}`.)
+- Exports: `template-fix-policy`, `fix-target` + `make-fix-target` + the
+  `target-*` accessors, `discover-targets`, `extract-method-body`,
+  `+template-snippet-system-prompt+`, `policy-state`/`policy-system`/
+  `policy-test-system`/`policy-parked`.
+- `.asd`: `cl-harness-next/tests/template-policy-test` added to the
+  `cl-harness-next/tests` `:depends-on`; that test package `:import-from`s the
+  source, pulling it into the build. No `main.lisp` facade edit (the standalone
+  runner loads `"cl-harness-next/src/template-policy"` explicitly; adaptive
+  wiring is the production path).
 
 ## 5. DISCOVER (harness-only, no LLM)
 
-Produces a work queue of form-descriptors:
-`{symbol, file, form-type, form-name, head-text, bound-vars, contract, original-body}`
-plus a shared `class-text`.
+`discover-targets (source file &key package)` is a **pure** function (unit
+tested) returning `(values targets class-text sut-package)`. The FSM feeds it the
+`fs-read-file` result text. It reads `source` with the Lisp reader
+(`*read-eval* nil`, `*package*` = `CL-USER` — **the SUT package is never required
+to exist**; the package name is derived from the `(in-package …)` form via
+`symbol-name`, resolving review finding 1).
 
-- **Primary: stub detection from source.** Read the SUT source
-  (`lisp-read-file`, untruncated targeted reads — never the 480-char source-fact
-  view). Enumerate top-level `defmethod`/`defun` forms whose body is a *stub*
-  (a single constant `0`/`nil`/`t` or `(declare …)`-only). Each becomes a target.
-  - `form-name`: for `defmethod`, the name + specializer lambda list
-    (`"observe ((h histogram) key)"`, the exact `lisp-edit-form` requirement);
-    for `defun`, the bare name.
-  - `head-text`: the text between `(defmethod`/`(defun` and the body — used to
-    re-assemble (`"observe ((h histogram) key)"` / `"observe (histogram key)"`).
-  - `bound-vars`: variable names parsed from the lambda list (for the free-var
-    check, §6).
-  - `contract`: the `defgeneric` docstring if present (read via name_pattern).
-  - `original-body`: the current stub body verbatim (revert payload on file
-    poisoning).
-  - `class-text`: the verbatim `defclass` form(s) of the SUT (shared across all
-    prompts; non-negotiable — without it Qwen fabricates accessors).
-- **Secondary: failing-test cross-check.** Parse `kernel-last-result`'s
-  `failed_tests` (raw run-tests result, NOT the lossy world-model view): read
-  each `failed_tests[].form` with a guarded reader (`*read-eval* nil`, SUT
-  package), walk the whole s-expression collecting every operator symbol, filter
-  to SUT external symbols. Use this set to (a) **prioritize** the queue and (b)
-  define **per-form done** (`symbol no longer in failed_tests AND failed
-  count strictly decreased`). It does NOT define queue membership (a stub may
-  pass an assertion by accident, e.g. `(= 0 (count-of h :z))`).
-- **Edge cases**: defgeneric+single defmethod → patch the defmethod. plain defun
-  → bare name. **>1 defmethod on one generic → park-and-surface (never guess)**.
-  target with no resolvable on-disk stub → classify unresolvable; if any
-  unresolvable target is required for green → `:give-up` (never loop).
-- DISCOVER reads need **no load** (parent-process tools). The baseline incremental
-  `:consult` is best-effort; if the all-stub image fails to compile, proceed
-  disk-only.
+For each top-level form it derives:
+- **stubs** = `defmethod`/`defun` whose body (after dropping leading declarations
+  **and a leading docstring** — review finding 6) is empty or a single literal
+  constant (`%degenerate-body-p`). Each stub becomes a `fix-target`:
+  `symbol` (upcased operator name), `file`, `form-type` (`"defmethod"`/`"defun"`),
+  `form-name` (for `defmethod`, name + specializer lambda list
+  `"observe ((h histogram) key)"`; for `defun`, the bare name), `head` (the same
+  name+lambda-list text, re-printed downcase with `*package*` bound so no package
+  prefixes leak), `contract` (the matching `defgeneric` docstring).
+- **class-text** = the verbatim `defclass` source (substring via span tracking),
+  concatenated across files — non-negotiable in the prompt (without it Qwen
+  fabricates accessors).
+- **sut-package** = the `(in-package …)` name string.
 
-## 6. Body extraction (reader-based — revision ①)
+**Overloads** (review finding 3 / edge case): because parsing is *form-by-form*,
+an overloaded generic's two stub `defmethod`s become **two distinct targets**
+(distinct specializer `form-name`s) — there is no symbol→form ambiguity to
+resolve. Locked by `discover-handles-overloaded-methods`.
 
-`(raw-llm-text, head-text, form-type, bound-vars, sut-package) → full-form-string | (values nil reason feedback)`.
-Reuse `strip-code-fence`; validate with `lisp-check-parens`. **No hand-written
-char scanner** — use the Lisp reader for all lexical parsing.
+**Failing-test cross-check** (`:disc-baseline-test` → `:disc-filter`): after
+discovering all source stubs, the FSM runs a baseline `load-system` + `run-tests`
+and keeps only targets whose `symbol` appears in the raw `failed_tests` (string
+match on the `form`/`description`/`test_name` fields — untested stubs do not block
+green, so they are skipped). **Conservative**: if the baseline yields no/absent
+failure data (e.g. the all-stub image failed to load), all stubs are kept.
+
+`fix-target` also has an `original-body` slot reserved for a future revert
+payload; it is not populated yet (no post-edit revert — §3.5).
+
+## 6. Body extraction (reader-based)
+
+`extract-method-body (raw &key head form-type package)` →
+full-form-string | `(values nil reason feedback)`. Reuses `strip-code-fence`.
+**No char scanner, no `lisp-check-parens`** — the Lisp reader does all lexical
+parsing and a re-read validates the assembled form.
 
 Steps:
 1. **Pre-clean**: `(string-trim ws (strip-code-fence raw))`. Empty → `:empty`.
-2. **Locate first form**: scan to the first `(`/`#(` (skips leading prose the
-   model added despite instructions). No form-open at all → treat the trimmed
-   text as a single atom candidate (caught by degenerate check).
-3. **Read all top-level forms** with the real reader: `with-input-from-string`,
-   `*read-eval* nil`, `*package* (find-package sut-package)`, loop `read` with an
-   eof sentinel, recording each form. A reader error → `:malformed` (capture the
-   condition message as feedback). The reader correctly handles `"…"` strings,
-   `;`/`#|…|#` comments, `#\(` char literals, nested parens.
+2. **Read from the start** with the real reader (`*read-eval* nil`), collecting
+   all top-level forms. The reader preserves leading reader prefixes
+   (`'(…)`, `` `(…) ``, `#'(…)`) — review finding 5. Only on a *read error*
+   (genuine leading prose), **or** when the first form read is a bare atom while a
+   `(` waits later, fall back to scanning to the first `(` and re-read. A reader
+   error with no recoverable form → `:malformed`.
+3. **Reject prose**: ≥2 forms, none of them a cons → `:malformed` (catches
+   "I cannot help with that" reading as bare symbols).
 4. **Classify**:
-   - Exactly one form whose head ∈ `{defmethod defun defgeneric defclass}` →
-     **whole-definition** (case b, Qwen's common behavior): take the body
-     sub-forms (after name + lambda-list + optional qualifiers/docstring);
-     **discard the model's header** (never trust model-supplied specializers).
-   - Otherwise → **body forms** (case a): all read forms are the body.
-5. **Reject nested definitions**: any body form whose head ∈ definitions →
-   `:nested-definition`.
-6. **Degenerate rejection**: body equals the stub (`0`/`nil`/`t` /
-   `(declare …)`-only) → `:degenerate` (else it re-creates the stub and loops).
-7. **Free-variable check**: collect symbols in the body; subtract CL-package
-   symbols + SUT-exported symbols + `bound-vars`. A remaining lowercase
-   param-shaped symbol (`self`, `obj`) → `:free-var` with feedback ("body uses
-   `self` but the parameter is `h`").
-8. **Assemble under the FSM-owned head**: `(format nil "(~A ~A~%  ~A)" form-type
-   head-text body-text)` where `body-text` is the original substring (case a,
-   preserves formatting) or the re-printed body forms (case b). This keeps the
-   on-disk header ↔ `form-name` invariant across all K retries.
-9. **Head-match assertion**: guarded-read the assembled candidate; assert head is
-   the expected definition operator and matches `form-name`. Fail → never write.
-   (Closes the "bare body silently replaces the whole defmethod" corruption.)
-10. **`lisp-check-parens {code: assembled}`** (the assembled form, not the bare
-    body). Not-success → fail, capture message.
-11. Return the validated full-form string for the FSM to splice via its own
-    `lisp-edit-form` `:act`.
+   - Exactly one form whose head ∈ `{defmethod defun}` (`%method-form-p`) →
+     **whole-definition**: keep the body sub-forms (after qualifiers + lambda
+     list), discard the model's header (never trust its specializers).
+   - Otherwise → the read forms **are** the body (multiple body forms allowed).
+5. **Reject nested definitions**: any body form whose head ∈ `{defmethod defun
+   defgeneric defclass defmacro}` (`%definition-form-p`) → `:nested-definition`.
+   This is how a whole `defgeneric`/`defclass`/`defmacro` reply is rejected
+   (review finding 3) — it is not a `%method-form-p`, so it falls here.
+6. **Degenerate rejection**: stub-equivalent body (constant after dropping
+   declarations + a leading docstring) → `:degenerate`.
+7. **Assemble** under the FSM-owned head: `(format nil "(~A ~A~%  ~A)" form-type
+   head body-text)`, where `body-text` is the original substring (bare-body case,
+   preserves formatting) or the re-printed body forms (whole-definition case).
+   This keeps the on-disk `form-name` ↔ header invariant across all K retries.
+8. **Re-read guard**: read the assembled candidate back; it must be exactly one
+   definition form. Fail → `:malformed`. (Closes the "bare body silently replaces
+   the whole defmethod" corruption — a naked `(incf …)` would re-read as a
+   top-level `incf`, not a `defmethod`.)
+
+Deferred (review finding 4): a free-variable gate (body uses `self` where the
+param is `h`). It needs lexical-binder scope tracking to avoid false positives on
+`let`/`lambda`/`maphash` locals; until then the load/run-tests retry catches
+wrong-variable bodies.
 
 ## 7. FSM
 
-`template-fix-policy` subclasses `control-policy`; builds incremental + clean
-`verification-oracle`s in `initialize-instance :after` (mirroring
-`scripted-fix-policy`, `:clear-fasls` default **t**). Slots: `snippet-fn`
-(prompt→raw-string), `system`, `test-system`, `sut-package`, `k` (per-form
-attempt cap, default 3), `snippet-timeout`, `state` (`:init`), `queue`,
-`current`, `attempts`, `parked`, the two oracles, and the cached DISCOVER data.
+`template-fix-policy` subclasses `control-policy`; builds the **clean**
+`verification-oracle` in `initialize-instance :after` (`:mode :clean`,
+`:clear-fasls` default **t**). Per-form verification is done with **explicit
+`load-system` + `run-tests` `:act`s** (so the policy sees the raw `failed_tests`
+for per-symbol done-detection); only the *final* gate uses the clean oracle.
+
+Slots: `snippet-fn` (prompt→raw-string), `system`, `test-system`, `sut-package`
+(accessor — set by discovery), `clear-fasls-p`, `k` (per-form cap, default 3),
+`targets` (accessor — injected or discovered), `class-text` (accessor),
+`source-files` (default `("src/main.lisp")`), `disc-files`, `pending-file`,
+`state` (`:init`), `queue`, `current`, `attempts`, `feedback`, `parked`,
+`clean-oracle`.
 
 `decide` is an `ecase` over `state`; **every branch returns exactly one
-`decision` and advances state** (kernel is one-decision-per-step). The LLM
-round-trip happens **inside `decide`** at `:consult-snippet` (it is NOT a kernel
-`:consult` — that kind needs an oracle returning a verdict).
+`decision`** (kernel is one-decision-per-step). The **LLM round-trip happens
+inside `decide`** in `%gen` (called from `:init`/advance/retry) — it is *not* a
+kernel `:consult` (that kind needs an oracle returning a verdict).
 
-States (per the synthesis FSM table): `:init` (consult incremental baseline) →
-`:discover-tests` (run-tests to enumerate) → `:parse-targets` (DISCOVER, pure) →
-`:read-form`/`:await-read` (read current body) → `:consult-snippet` (call
-snippet-fn under timeout; extract+validate §6; emit `lisp-edit-form` :act) →
-`:await-edit` (check tool error) → `:check-integrity` (post-edit
-`lisp-check-parens` whole-file; revert with cached original on poison) →
-`:check-form` (consult incremental; per-form done = symbol gone from failed_tests
-& failed decreased; else incf attempts, retry < K else park) → `:next-form` (pop
-queue) → `:final-decide` (consult clean oracle; `verdict-pass-p` → `:finish`,
-else `:give-up` naming parked forms).
+### 7.1 Discovery sub-FSM (skipped when `:targets` is injected)
+`:init` (no targets) → set `disc-files`, emit `fs-read-file` (`:act`), state
+`:disc` → `:disc` (parse the result with `discover-targets`, accumulate
+targets/class-text/package; more files → read next, else `%baseline-load`) →
+`:disc-baseline-test` (emit `run-tests` `:act`) → `:disc-filter` (cross-check
+filter §5, then start the per-form loop).
 
-- **Two retry budgets**: in-`decide` sample loop for malformed/empty snippets
-  (≤ K, never reach the file); per-form `attempts` counter for clean-but-wrong
-  bodies (incremented on red verify; park at K). **Do not delegate per-form
-  bounding to the governor** — a compile-broken edit *succeeds* as a tool call so
-  `consecutive-failed-patches` never fires.
-- **Termination**: variant `Σ(K − attempts_f)` strictly decreases each verify
-  cycle; queue strictly shrinks. Terminal set `{:done, :given-up}`.
-- **Governor calibration (the run factory must set)**: `:max-steps ≥ 120`,
-  `:max-actions ≥ 80`, and `max-consecutive-identical-actions` raised (≥ K+3) or
-  `nil` — K successive edits to one `form-name` collapse to one identical-action
-  signature (`%argument-token` renders hash args as a constant) and would trip
-  `progress-stalled` mid-form. The policy's own K+park is the real bound.
+### 7.2 Per-form loop
+`%gen`: build the prompt (§8), call `snippet-fn`, `extract-method-body`; on a
+valid candidate emit a harness-built `lisp-edit-form` `:act`, state `:await-edit`;
+on ≤K malformed re-samples (feeding the reason back) failing, park and advance.
+`:await-edit` (tool error → retry/park; else emit `load-system` `:act`, state
+`:verify`) → `:verify` (emit `run-tests` `:act`, state `:check`) → `:check`
+(`%form-resolved-p`: the current symbol gone from `failed_tests` → advance; else
+`incf attempts`, retry `%gen` while `< K`, else park) → advance (next target →
+`%gen`; queue empty → `:final`).
+
+### 7.3 Termination & governor
+`:final` consults the clean oracle: `verdict-pass-p` → `:finish`
+"clean verification green"; else `:give-up` naming the parked forms. Two retry
+budgets: the in-`decide` malformed re-sample (≤K, never reaches the file) and the
+per-form `attempts` counter (red verify → park at K). The policy's own K+park is
+the bound — a compile-broken edit *succeeds* as a tool call, so the governor's
+`consecutive-failed-patches` never fires. **The run factory must set**
+`:max-steps ≥ 120/200`, `:max-actions` high, and disable/raise
+`max-consecutive-identical-actions` (K edits to one `form-name` collapse to one
+identical-action signature). `tools/run-template.lisp` uses `:max-actions 300`
+and `nil` for the stall guards.
+
+### 7.4 Adaptive `:give-up` demotion (`adaptive-policy`)
+`decide` intercepts a sub-level `:give-up`: while a lower rung remains, it
+demotes (`level-index`++, governor stall reset, a logged `"dial"` event for
+replay coherence) and **re-decides with the lower rung this same step**. Only the
+bottom rung's `:give-up` escapes. The existing `progress-stalled` path is
+unchanged. This makes `template-fix` reachable as the bottom `:levels` rung.
 
 ## 8. Model contract
 
-`snippet-fn` is a `make-judge-fn`-style closure with a **dedicated** system
-prompt (NOT `+scripted-fix-system-prompt+`, which demands JSON):
+`snippet-fn` is a `make-judge-fn` closure over the OpenAI-compatible provider with
+a **dedicated** system prompt (`+template-snippet-system-prompt+`, NOT
+`+scripted-fix-system-prompt+` which demands JSON):
 
-> You are a Common Lisp method-body oracle. You are given one generic function's
-> contract, the class it operates on, and the failing test assertions. Reply with
-> ONLY the body of the method as Common Lisp s-expressions — no defmethod
-> wrapper, no markdown, no prose. Use ONLY the accessors and slots shown.
+> You are a Common Lisp method-body oracle. You are given one method's signature,
+> its contract, and the class it operates on. Reply with ONLY the body of the
+> method as Common Lisp s-expressions — no defmethod wrapper, no markdown, no
+> prose, no explanation. Use ONLY the accessors and slots shown.
 
-Per-form user prompt assembled deterministically (ZERO LLM decomposition): the
-verbatim `class-text` (slots/accessors), the method head with `<YOUR BODY HERE>`,
-the `contract` docstring, and the `failed_tests` entries for this symbol (use
-`description` to preserve `:keywords`). The per-symbol spec is NOT extracted from
-the free-text goal (no decomposition call); it is assembled from CONTRACT +
-FAILING ASSERTIONS + CLASS (all harness-held). Work-queue order easy→hard to bank
-green assertions.
+The per-form **user** prompt (`%build-prompt`) is assembled deterministically
+(ZERO LLM decomposition) from harness-held data: the verbatim `class-text`
+(slots/accessors), the method head with `<YOUR BODY HERE>`, the `contract`
+docstring, and any `feedback` from a failed attempt. (The failing-assertion text
+is used by discovery's cross-check, not injected into the prompt; the contract +
+class proved sufficient on Qwen.) Work-queue order is discovery order
+(easy→hard naturally, since stubs are processed as found).
 
-## 9. TDD plan (RED-first, smallest increment first)
+## 9. Tests (RED-first; actual names)
 
-Increment A — **body extraction** (pure unit, no kernel), in
-`next/tests/template-policy-test.lisp`:
-1. `body-extraction-bare-body-wraps`
-2. `body-extraction-strips-fence-and-prose`
-3. `body-extraction-rewraps-whole-defmethod-under-canonical-head` (divergent sig)
-4. `body-extraction-accepts-multiple-body-forms` *(reader-based: a body may be
-   several forms — this REPLACES the synthesis's "reject multiple forms", which
-   was a char-scanner artifact)*
-5. `body-extraction-rejects-nested-definition`
-6. `body-extraction-rejects-free-variable` (feedback message)
-7. `body-extraction-rejects-degenerate-and-malformed` (empty / `nil`-only /
-   unbalanced)
+Body extraction (pure unit): `body-extraction-bare-body-wraps`,
+`-strips-fence-and-prose`, `-rewraps-whole-defmethod`,
+`-accepts-multiple-body-forms`, `-rejects-nested-definition`,
+`-rejects-degenerate-and-malformed`, `-rejects-non-method-definitions`
+(finding 3), `-preserves-leading-reader-prefix` (finding 5),
+`-rejects-declare-docstring-constant` (finding 6).
 
-Increment B — **FSM + DISCOVER end-to-end with a canned oracle** (mirrors
-`scripted-policy-test.lisp`: a stateful `fix-transport`, a `with-template-kernel`
-macro, `run-kernel`):
-8. `discover-finds-stubs-and-targets` (stub detection + failing-test cross-check;
-   the `(EQ A (TOP-KEY H))` nesting trap)
-9. `happy-path-canned-oracle-drives-to-done` (snippet-fn returns correct bodies;
-   stateful transport flips failed_tests empty when all patched; assert `:done`,
-   `clean-verified-p`, one `pool-kill-worker`, 5 patches)
-10. `malformed-snippet-recovers-within-k`
-11. `empty-reply-gets-extra-retries-not-immediate-park`
-12. `unfixable-form-parks-then-gives-up` (4/5 patched, reason names the parked
-    symbol)
-13. `post-edit-broken-file-reverts` (cached-original revert on poison)
-14. `governor-identical-action-threshold-respected`
+Discovery (pure unit): `discover-finds-stub-defmethods`,
+`discover-handles-overloaded-methods`.
 
-Increment C — **real Qwen**: wire a `snippet-fn` over the OpenAI-compatible
-provider (`make-judge-fn` + the §8 system prompt), run via
-`tools/run-next-experiment.lisp` (a new `CLH_DIAL=template`), **easy-3 first**
-(work-queue order makes this natural), then full-5. Measure & record.
+FSM over a canned `template-transport` + `with-template-kernel`:
+`template-happy-path-canned-oracle-drives-to-done` (5 forms → `:done`, one
+`pool-kill-worker`), `template-malformed-snippet-recovers-within-k`,
+`template-unfixable-form-parks-then-gives-up` (4/5 patched, names the parked
+form), `template-discovery-drives-to-done` (NO injected targets — reads source,
+discovers, `:done`), `discovery-cross-check-skips-untested-stubs`.
 
-## 10. Deferred (separate follow-ups, not this work)
+Adaptive: `give-up-demotes-to-the-next-rung-this-step`,
+`give-up-at-the-bottom-rung-escapes` (plus the unchanged progress-stalled tests).
 
-- **Adaptive integration**: append `template-fix` as the bottom `:levels` rung;
-  widen demotion to `:give-up` (+ leading-indicator triggers); reset state on
-  demotion.
+280 tests green; `mallet` clean; `compile-system :force t` clean.
+
+Real Qwen: `tools/run-template.lisp` (`CLH_DISCOVER=1` for source discovery,
+else injected targets).
+
+## 10. Deferred (follow-ups)
+
 - **Capability auto-calibration**: a cheap per-model probe / the L5 model×autonomy
-  matrix to pick the starting rung.
-- **Skeleton scaffolding**: for accumulation-pattern methods that fail as code-gen
-  on real Qwen, the harness supplies a body skeleton with a smaller hole
-  (e.g. a `maphash` template with `<HOLE>` = the accumulation step) — the same
-  agency-removal principle applied one level deeper into the code.
+  matrix to pick the starting rung (largest remaining item).
+- **Multi-file auto-listing**: `fs-list-directory` to populate `source-files`
+  (today an explicit list, default `src/main.lisp`).
+- **Free-variable gate** (§6, review finding 4): lexical-scope-aware, with a
+  class-derived accessor allow-list.
+- **Post-edit integrity / revert**: `lisp-check-parens` on the whole file after an
+  edit + revert from `original-body` on parinfer mis-repair.
+- **Skeleton scaffolding**: for any accumulation-pattern method that fails as
+  code-gen, supply a body skeleton with a smaller hole (e.g. a `maphash` template)
+  — unused so far (Qwen reached 5/5).
 - **vLLM `guided_grammar`** (single balanced s-expr) via `:extra-body` — add only
-  if §6 sanitization proves insufficient on real Qwen.
+  if §6 sanitization proves insufficient.
 
-## 11. Risk
+## 11. Risk & measured outcome
 
-Easy-3 (`count-of`/`observe`/`distinct`) plausibly reach green on Qwen — the
-design eliminates failure modes 1/2/3/5 structurally and bounds 4. `total`/
-`top-key` are the honest residue (code-gen difficulty, no live data); realistic
-first outcome is 3–4/5 green → `:given-up` (partial), strictly better than
-today's 0/5. Smallest validation: Increment A + the canned-oracle full-loop
-(test 9) proves the machinery with zero LLM variance; only then real Qwen on
-easy-3.
+Predicted: easy-3 (`count-of`/`observe`/`distinct`) reach green; `total`/
+`top-key` (`maphash` accumulators) were the honest code-gen residue, expected to
+be coin-flips → a realistic 3–4/5 partial.
+
+**Measured**: Qwen3.6-35B-A3B reached **5/5 `:done`** on clh-histogram via
+`template-fix`, **reproduced** (injected and discovery modes), including `total`
+and `top-key` (`observe` needed 1 retry; the rest one-shot) — versus **0/5** on
+every agency dial (scripted/guided/adaptive). The "coin-flip" prediction was
+pessimistic: with the class in context and a precisely specified hole, the weak
+model's code-gen sufficed even for the hard methods. The hypothesis (collapse the
+LLM to a body oracle, move all agency into the harness) is confirmed for this
+task class.
