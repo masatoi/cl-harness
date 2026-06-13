@@ -186,4 +186,39 @@ TDD で実装(全 260 テスト緑、mallet クリーン、`compile-system :forc
 
 **再現**: 実験ランナーを `tools/run-next-experiment.lisp` にコミット。
 `CLH_DIAL`(scripted|guided|adaptive)、`CLH_ROBUST`/`CLH_APPENDIX`/`CLH_SOURCE_HINT`
-(いずれも opt-in)、LLM/`MCP_PROJECT_ROOT` 環境変数で駆動。
+/`CLH_CANNED`(いずれも opt-in)、LLM/`MCP_PROJECT_ROOT` 環境変数で駆動。
+
+## 実装フォローアップ②(同日): N4 ① を実装 — ハーネスは多段タスクで :done に到達
+
+N4 の最小版(option ①)を TDD で実装(全 262 テスト緑、mallet クリーン、
+`compile-system :force t` 警告なし)。
+
+**実装内容**
+- `patch-entry` に `content` スロットを追加し、`apply-interaction` が
+  lisp-edit-form の `content` / lisp-patch-form の `new_text` を取り込む
+  (`change-ledger.lisp`、test `patch-entries-capture-content`)。
+- `compile-context` の "Recent patches" が、各フォームの**最新成功パッチの内容**
+  (= 編集後フォームの現在ソース)を字下げで echo。オシレーションの古い版はメタ
+  データのみ。`+patch-content-limit+`(480 字)で bound(`context-compiler.lisp`、
+  test `failure-view-shows-current-patch-content`)。これでモデルは「自分が書いた
+  もの」を view で確認できる。
+
+**検証 — canned 正解パッチで `:done`**: モデルの素の信頼性とハーネスの機械を
+切り分けるため、決定論的に正しいパッチ列を返す diagnose-fn(`CLH_CANNED`)で
+scripted を実走。**5 フォーム(observe/count-of/total/distinct/top-key)を順に
+当て → incremental green → clean-verification green → `:done`**(61 events、
+独立再テストで全 10 アサーション緑)。**新ハーネス(N1+N2+N4)は多段「整合実装」
+タスクを実 cl-mcp 相手に end-to-end で完遂できる**。
+
+**実 LLM での再走(N4 込み)**: それでも Qwen3.6-35B-A3B では `:done` に届かず。
+ただし失敗は毎回**別のモデル側の杜撰さ**に移った —— パス typo(`roswoll`)、幻の
+optional 引数(`readtable:"COMMON-LISP"`)、空応答(EOF)、早すぎる give_up。
+**ハーネス側の単一ブロッカーは解消し、律速はモデルの素の信頼性に移った**。これは
+spec の中心仮説「自律度はモデル能力に従う」の裏返し: この 35B ローカルモデルは
+全ハーネス支援をもってしても 5 メソッド自律実装の床を下回る。
+
+**結論(更新)**: N1+N2+N4 で I/O 契約・観測ループのハーネス欠陥は閉じ、ハーネスは
+canned 検証で多段タスクを `:done` まで完遂。残る差は**モデル能力**で、より強い
+モデル(クラウド)なら同タスクを自律的に通せるはず、というのが次の検証点。
+N1 の副作用(全 optional 引数を提示すると弱モデルが幻の値で埋める)は、必須引数を
+強調する/optional を畳む等の改善余地として記録。

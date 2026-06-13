@@ -16,6 +16,7 @@
                 #:patch-entry-form-type
                 #:patch-entry-form-name
                 #:patch-entry-operation
+                #:patch-entry-content
                 #:patch-entry-ok-p
                 #:patch-entry-seq
                 #:source-fact-file
@@ -63,6 +64,33 @@
       (ok (equal "defun" (patch-entry-form-type succeeded)))
       (ok (equal "f" (patch-entry-form-name succeeded)))
       (ok (equal "replace" (patch-entry-operation succeeded))))))
+
+(deftest patch-entries-capture-content
+  ;; The new form text (lisp-edit-form content / lisp-patch-form new_text)
+  ;; must be retained so the view can show the agent what it wrote —
+  ;; otherwise it patches blind and cannot tell whether its own edit was
+  ;; correct (clh-histogram live run, 2026-06-13).
+  (let ((ledger (make-instance 'change-ledger)))
+    (apply-interaction
+     ledger (%interaction "lisp-edit-form"
+                          :arguments (%hash "file_path" "src/a.lisp"
+                                            "form_type" "defmethod"
+                                            "form_name" "observe ((h histogram) key)"
+                                            "operation" "replace"
+                                            "content"
+                                            "(defmethod observe ((h histogram) key) 1)")
+                          :observation-seq 4))
+    (apply-interaction
+     ledger (%interaction "lisp-patch-form"
+                          :arguments (%hash "file_path" "src/a.lisp"
+                                            "form_name" "g"
+                                            "old_text" "0" "new_text" "42")
+                          :observation-seq 6))
+    (let ((patch-form (first (patches ledger)))
+          (edit-form (second (patches ledger))))
+      (ok (equal "(defmethod observe ((h histogram) key) 1)"
+                 (patch-entry-content edit-form)))
+      (ok (equal "42" (patch-entry-content patch-form))))))
 
 (deftest source-facts-capture-the-read-content
   ;; The guided live run looped forever because reads recorded only

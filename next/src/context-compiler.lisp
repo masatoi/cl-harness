@@ -38,6 +38,7 @@
                 #:patch-entry-form-type
                 #:patch-entry-form-name
                 #:patch-entry-operation
+                #:patch-entry-content
                 #:patch-entry-ok-p
                 #:patch-entry-seq
                 #:source-fact-file
@@ -73,6 +74,10 @@
 
 (defconstant +resolved-limit+ 3
   "Max resolved failures rendered (legacy regression-watch default).")
+
+(defconstant +patch-content-limit+ 480
+  "Capture bound for a patch's rendered content excerpt — keeps the
+current-source echo within the view's token budget for large forms.")
 
 (defun estimate-tokens (string)
   "Crude token estimate: ceiling(characters / 4)."
@@ -207,17 +212,49 @@ source instead of re-running the tests (guided live run 3,
                       (finding-decision finding)))
             (reverse (findings exploration)))))
 
+(defun %bounded-excerpt (text limit)
+  "TEXT truncated to LIMIT chars with a marker, or TEXT unchanged."
+  (if (and (stringp text) (> (length text) limit))
+      (concatenate 'string (subseq text 0 limit) " …[truncated]")
+      text))
+
+(defun %latest-form-patch-p (patch changes)
+  "True when PATCH is the most recent SUCCESSFUL patch (with content)
+for its (file . form-name) — i.e. it is the current source of that
+form, worth echoing so the agent can see what it wrote."
+  (and (patch-entry-ok-p patch)
+       (patch-entry-content patch)
+       (let ((file (patch-entry-file patch))
+             (name (patch-entry-form-name patch))
+             (seq (patch-entry-seq patch)))
+         (notany (lambda (other)
+                   (and (patch-entry-ok-p other)
+                        (equal file (patch-entry-file other))
+                        (equal name (patch-entry-form-name other))
+                        (> (patch-entry-seq other) seq)))
+                 (patches changes)))))
+
 (defun %patch-lines (changes)
   (when changes
-    (mapcar (lambda (patch)
-              (format nil "- seq ~A ~A ~@[~A ~]~@[~A ~]in ~A~@[ [FAILED]~]"
-                      (patch-entry-seq patch)
-                      (patch-entry-operation patch)
-                      (patch-entry-form-type patch)
-                      (patch-entry-form-name patch)
-                      (or (patch-entry-file patch) "?")
-                      (not (patch-entry-ok-p patch))))
-            (%take +recent-limit+ (patches changes)))))
+    (loop for patch in (%take +recent-limit+ (patches changes))
+          append
+          (cons (format nil "- seq ~A ~A ~@[~A ~]~@[~A ~]in ~A~@[ [FAILED]~]"
+                        (patch-entry-seq patch)
+                        (patch-entry-operation patch)
+                        (patch-entry-form-type patch)
+                        (patch-entry-form-name patch)
+                        (or (patch-entry-file patch) "?")
+                        (not (patch-entry-ok-p patch)))
+                ;; Echo the CURRENT content of each edited form (latest
+                ;; successful patch only — older oscillations stay as
+                ;; metadata) so the agent sees the source it wrote, not
+                ;; just that it patched (clh-histogram live run, N4).
+                (when (%latest-form-patch-p patch changes)
+                  (mapcar (lambda (line) (concatenate 'string "    " line))
+                          (uiop:split-string
+                           (%bounded-excerpt (patch-entry-content patch)
+                                             +patch-content-limit+)
+                           :separator '(#\Newline))))))))
 
 (defun %probe-lines (exploration &key fresh-only)
   (when exploration

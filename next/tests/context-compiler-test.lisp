@@ -265,3 +265,12 @@
 
 (deftest render-tool-schemas-empty-is-nil
   (ok (null (render-tool-schemas '()))))
+
+(deftest failure-view-shows-current-patch-content
+  ;; The agent must see the source it just wrote (the latest successful
+  ;; patch's content), not only that a form was patched — otherwise it
+  ;; patches blind and cannot tell whether its own edit was correct
+  ;; (clh-histogram live run, 2026-06-13).
+  (let ((view (compile-context (%sample-world-model)
+                               :decision-point :failure-analysis)))
+    (ok (search "lru list ordering fix" view))))

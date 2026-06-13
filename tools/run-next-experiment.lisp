@@ -6,9 +6,11 @@
 ;;;;
 ;;;; Required env: CL_HARNESS_LLM_{BASE_URL,API_KEY,MODEL}, MCP_PROJECT_ROOT,
 ;;;;   CLH_SYSTEM, CLH_TEST_SYSTEM, CLH_GOAL, CLH_DIAL (scripted|guided|adaptive).
-;;;; Optional env (all opt-in): CLH_ROBUST (caller-side parse retry — now
+;;;; Optional env (all opt-in): CLH_ROBUST (caller-side parse retry, now
 ;;;;   redundant with the in-harness obtain-action), CLH_APPENDIX (prepend a
-;;;;   manual tool-schema hint), CLH_SOURCE_HINT (inject source/workspace text).
+;;;;   manual tool-schema hint), CLH_SOURCE_HINT (inject source/workspace text),
+;;;;   CLH_CANNED (deterministic correct-patch "model" for the histogram fixture
+;;;;   — isolates the harness loop from LLM reliability).
 ;;;; Run as a STANDALONE process, never under cl-mcp repl-eval:
 ;;;;   ros run --load run-next-experiment.lisp
 
@@ -128,10 +130,38 @@ behavior proposed for the harness."
 
 (defparameter *robust* (uiop:getenv "CLH_ROBUST"))
 
+;; CLH_CANNED: a deterministic "model" that returns the correct patch for
+;; each histogram method in turn. Isolates the harness loop (multi-form
+;; verify->diagnose->patch->verify + clean gate, N4 echo) from the LLM's
+;; raw reliability — proves the harness reaches :done when fed good patches.
+(defun %edit-json (form-name content)
+  (format nil "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\",\"arguments\":{~
+\"file_path\":\"~A/src/main.lisp\",\"form_type\":\"defmethod\",\"form_name\":\"~A\",~
+\"operation\":\"replace\",\"content\":\"~A\"}}"
+          *project-root* form-name content))
+
+(defparameter *canned-patches*
+  (list (%edit-json "observe ((h histogram) key)"
+                    "(defmethod observe ((h histogram) key) (incf (gethash key (histogram-table h) 0)))")
+        (%edit-json "count-of ((h histogram) key)"
+                    "(defmethod count-of ((h histogram) key) (gethash key (histogram-table h) 0))")
+        (%edit-json "total ((h histogram))"
+                    "(defmethod total ((h histogram)) (let ((s 0)) (maphash (lambda (k v) (declare (ignore k)) (incf s v)) (histogram-table h)) s))")
+        (%edit-json "distinct ((h histogram))"
+                    "(defmethod distinct ((h histogram)) (hash-table-count (histogram-table h)))")
+        (%edit-json "top-key ((h histogram))"
+                    "(defmethod top-key ((h histogram)) (let ((best nil) (best-n -1)) (maphash (lambda (k v) (when (> v best-n) (setf best k best-n v))) (histogram-table h)) best))")))
+
+(defun make-canned-fn ()
+  (let ((remaining *canned-patches*))
+    (lambda (view)
+      (declare (ignore view))
+      (if (rest remaining) (pop remaining) (first remaining)))))
+
 (defparameter *diagnose-fn*
-  (if *robust*
-      (make-robust-judge *provider* *scripted-prompt*)
-      (make-judge-fn *provider* :system-prompt *scripted-prompt*)))
+  (cond ((uiop:getenv "CLH_CANNED") (make-canned-fn))
+        (*robust* (make-robust-judge *provider* *scripted-prompt*))
+        (t (make-judge-fn *provider* :system-prompt *scripted-prompt*))))
 (defparameter *step-fn*
   (if *robust*
       (make-robust-judge *provider* *guided-prompt*)

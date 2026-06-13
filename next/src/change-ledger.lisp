@@ -23,6 +23,7 @@
            #:patch-entry-form-type
            #:patch-entry-form-name
            #:patch-entry-operation
+           #:patch-entry-content
            #:patch-entry-ok-p
            #:patch-entry-seq
            #:source-fact-file
@@ -39,7 +40,7 @@
   :documentation "Tools whose successful use establishes a source fact.")
 
 (defstruct (patch-entry (:conc-name patch-entry-))
-  file form-type form-name operation ok-p seq)
+  file form-type form-name operation content ok-p seq)
 
 (defstruct (source-fact (:conc-name source-fact-))
   ;; CONTENT is a bounded excerpt of what the read returned — without
@@ -84,6 +85,8 @@ reads.")
               :form-type (argument-string interaction "form_type")
               :form-name (argument-string interaction "form_name")
               :operation (or (argument-string interaction "operation") tool)
+              :content (or (argument-string interaction "content")
+                           (argument-string interaction "new_text"))
               :ok-p (interaction-succeeded-p interaction)
               :seq (interaction-observation-seq interaction))
              (patches ledger)))
