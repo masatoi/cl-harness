@@ -122,15 +122,14 @@
        (let* ((params (gethash "params" p))
               (tool (gethash "name" params))
               (args (gethash "arguments" params))
-              (path (and (hash-table-p args) (gethash "path" args)))
-              (fpath (and (hash-table-p args) (gethash "file_path" args))))
+              (path (and (hash-table-p args) (gethash "path" args))))
          (cond
            ((equal tool "fs-read-file")
             (%enc id (%text-result
                       (if (search "src" (or path ""))
                           (tt-src tr) (tt-test-content tr)))))
            ((member tool '("fs-write-file" "lisp-edit-form") :test #'equal)
-            (when (search "test" (or fpath path ""))
+            (when (search "test" (or path ""))
               (incf (tt-test-edits tr))
               (setf (tt-test-content tr)
                     (or (gethash "content" args) (tt-test-content tr))))

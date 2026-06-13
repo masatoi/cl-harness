@@ -184,7 +184,7 @@ content and author straight away; otherwise write a fresh skeleton first."
           (setf (policy-base-content policy) (%skeleton policy)
                 (policy-state policy) :author-skeleton-written)
           (%act "fs-write-file"
-                (list "file_path" (policy-test-file policy)
+                (list "path" (policy-test-file policy)
                       "content" (%skeleton policy))
                 "write test-file defpackage skeleton")))))
 
@@ -217,7 +217,7 @@ content and author straight away; otherwise write a fresh skeleton first."
                       (%last-attempt-text policy) text
                       (policy-state policy) :author-written)
                 (%act "fs-write-file"
-                      (list "file_path" (policy-test-file policy)
+                      (list "path" (policy-test-file policy)
                             "content" (format nil "~A~%~%~A~%"
                                               (policy-base-content policy) text))
                       "write authored tests")))))))
