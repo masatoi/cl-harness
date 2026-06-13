@@ -22,15 +22,7 @@
                 #:run-kernel
                 #:control-policy
                 #:decide
-                #:make-decision)
-  (:import-from #:cl-harness-next/src/mission
-                #:mission
-                #:mission-queue
-                #:enqueue-mission)
-  (:import-from #:cl-harness-next/src/mission-runner
-                #:run-mission)
-  (:import-from #:cl-harness-next/src/governor
-                #:governor))
+                #:make-decision))
 
 (in-package #:cl-harness-next/tests/authoring-policy-test)
 
