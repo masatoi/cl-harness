@@ -17,7 +17,8 @@
                 #:make-decision
                 #:kernel-last-verdict
                 #:kernel-last-action-error
-                #:kernel-world-model)
+                #:kernel-world-model
+                #:kernel-environment)
   (:import-from #:cl-harness-next/src/scripted-policy
                 #:policy-system
                 #:policy-test-system)
@@ -26,10 +27,12 @@
   (:import-from #:cl-harness-next/src/verification-oracle
                 #:verification-oracle)
   (:import-from #:cl-harness-next/src/context-compiler
-                #:compile-context)
+                #:compile-context
+                #:render-tool-schemas)
+  (:import-from #:cl-harness-next/src/environment
+                #:environment-action-space)
   (:import-from #:cl-harness-next/src/action
-                #:parse-action
-                #:action-parse-error
+                #:obtain-action
                 #:agent-action-type
                 #:agent-action-tool
                 #:agent-action-arguments
@@ -138,7 +141,9 @@ self-directed dials, with the mandatory clean gate on finish."))
 context view, or NIL."))
 
 (defun %step-prompt (policy kernel)
-  (format nil "~@[~A~%~%~]~A~@[~%~%Last action error: ~A~]"
+  (format nil "~@[~A~%~%~]~@[~A~%~%~]~A~@[~%~%Last action error: ~A~]"
+          (render-tool-schemas
+           (environment-action-space (kernel-environment kernel)))
           (policy-prompt-sections policy kernel)
           (compile-context (kernel-world-model kernel))
           (kernel-last-action-error kernel)))
@@ -148,17 +153,10 @@ context view, or NIL."))
                  :reason (apply #'format nil control arguments)))
 
 (defun %llm-step (policy kernel)
-  (let* ((response
-           (handler-case (funcall (policy-step-fn policy)
-                                  (%step-prompt policy kernel))
-             (error (condition)
-               (return-from %llm-step
-                 (%give-up "step call failed: ~A" condition)))))
-         (action
-           (handler-case (parse-action response)
-             (action-parse-error (condition)
-               (return-from %llm-step
-                 (%give-up "unparseable action: ~A" condition))))))
+  (multiple-value-bind (action err)
+      (obtain-action (policy-step-fn policy) (%step-prompt policy kernel))
+    (when (null action)
+      (return-from %llm-step (%give-up "unparseable action: ~A" err)))
     (ecase (agent-action-type action)
       (:tool-call
        (make-decision :kind :act

@@ -13,7 +13,8 @@
                 #:update-world-model)
   (:import-from #:cl-harness-next/src/context-compiler
                 #:compile-context
-                #:estimate-tokens))
+                #:estimate-tokens
+                #:render-tool-schemas))
 
 (in-package #:cl-harness-next/tests/context-compiler-test)
 
@@ -245,3 +246,22 @@
                        :result (%hash "passed" 1 "failed" 0))
     (let ((view (compile-context world-model)))
       (ok (not (search "re-run tests" view))))))
+
+(deftest render-tool-schemas-marks-required-params
+  (let* ((desc (%hash "name" "lisp-read-file"
+                      "inputSchema"
+                      (%hash "properties"
+                             (%hash "path" (%hash) "collapsed" (%hash))
+                             "required" (vector "path"))))
+         (out (render-tool-schemas (list desc))))
+    (ok (search "lisp-read-file" out))
+    (ok (search "path*" out))
+    (ok (search "collapsed" out))
+    (ok (not (search "collapsed*" out)))))
+
+(deftest render-tool-schemas-handles-missing-schema
+  (let ((out (render-tool-schemas (list (%hash "name" "run-tests")))))
+    (ok (search "run-tests" out))))
+
+(deftest render-tool-schemas-empty-is-nil
+  (ok (null (render-tool-schemas '()))))

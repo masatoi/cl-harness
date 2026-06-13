@@ -18,6 +18,10 @@ benchmark effect measurements live in `docs/benchmarks/`.
 
 ### next/ — autonomous-harness redesign (experimental)
 
+For a zero-to-running, end-to-end walkthrough of driving an autonomous
+fix mission against your own project with `cl-harness-next`, see
+[`next/README.md`](next/README.md).
+
 `cl-harness-next` (sources under `next/`) is the greenfield redesign
 substrate from
 `docs/superpowers/specs/2026-06-11-autonomous-harness-redesign-design.md`.

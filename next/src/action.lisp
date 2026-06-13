@@ -25,6 +25,7 @@
            #:agent-action-finding
            #:agent-action-decision
            #:parse-action
+           #:obtain-action
            #:action-parse-error
            #:action-parse-error-message
            #:action-parse-error-raw))
@@ -174,7 +175,46 @@ declares an unknown TYPE, or is missing a required field for its variant."
                           :decision decision
                           :thought (and (stringp thought) thought)
                           :raw parsed)))
+        ((and (stringp (gethash "tool" parsed))
+              (plusp (length (gethash "tool" parsed))))
+         ;; Lenient: the model declared an unknown TYPE but a non-empty
+         ;; 'tool' is present (small models put the tool name in 'type'
+         ;; instead of the literal "tool_call"). Treat it as a tool_call —
+         ;; same family as the fence-stripping and flat-arguments fallbacks.
+         (let ((tool (gethash "tool" parsed))
+               (args (gethash "arguments" parsed)))
+           (make-instance 'agent-action
+                          :type :tool-call
+                          :tool tool
+                          :arguments (or args (%extract-flat-arguments parsed))
+                          :thought (and (stringp thought) thought)
+                          :raw parsed)))
         (t (error 'action-parse-error
                   :message (format nil "unknown action type: ~A"
                                    (or type "<missing>"))
                   :raw parsed))))))
+
+(defun obtain-action (fn prompt &key (max-tries 3))
+  "Call FN (a function of one prompt string returning a raw LLM response)
+and PARSE-ACTION the result, retrying up to MAX-TRIES.
+
+On a parse failure (or an error raised by FN itself, e.g. a transport
+error) the failure is appended to the ORIGINAL PROMPT — the view is
+retained, the note does not compound across retries — so the next sample
+can self-correct. Returns (values ACTION NIL) on the first parseable
+reply, or (values NIL ERROR-MESSAGE) once MAX-TRIES is exhausted.
+
+This makes the policies tolerant of the intermittently-malformed action
+JSON that small local models emit, instead of failing the whole mission
+on the first bad reply."
+  (let ((current prompt)
+        (last-error "(no attempt)"))
+    (dotimes (i max-tries (values nil last-error))
+      (handler-case
+          (return (values (parse-action (funcall fn current)) nil))
+        (error (condition)
+          (setf last-error (princ-to-string condition))
+          (setf current
+                (format nil "~A~2%IMPORTANT: your previous reply was not a ~
+valid action (~A). Reply with EXACTLY ONE valid JSON object and nothing else."
+                        prompt last-error)))))))

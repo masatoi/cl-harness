@@ -63,7 +63,8 @@
                 #:failure-record-patch-seq
                 #:failure-record-resolved-seq)
   (:export #:compile-context
-           #:estimate-tokens))
+           #:estimate-tokens
+           #:render-tool-schemas))
 
 (in-package #:cl-harness-next/src/context-compiler)
 
@@ -76,6 +77,41 @@
 (defun estimate-tokens (string)
   "Crude token estimate: ceiling(characters / 4)."
   (ceiling (length string) 4))
+
+(defun render-tool-schemas (descriptors)
+  "Render allowed tool DESCRIPTORS (tools/list hash-tables carrying
+'name' and an optional 'inputSchema') as a compact block listing each
+tool with its parameter keys — required ones marked with '*'. Injected
+into the decision view so the model uses the right argument names
+(different cl-mcp tools use different keys, e.g. lisp-edit-form's
+file_path vs lisp-read-file's path) instead of guessing. Returns NIL
+when DESCRIPTORS is empty."
+  (when descriptors
+    (with-output-to-string (stream)
+      (write-string
+       "TOOLS (allowed actions — use these exact argument keys; * = required):"
+       stream)
+      (dolist (descriptor descriptors)
+        (let* ((name (gethash "name" descriptor))
+               (schema (gethash "inputSchema" descriptor))
+               (properties (and (hash-table-p schema)
+                                (gethash "properties" schema)))
+               (required (and (hash-table-p schema)
+                              (coerce (gethash "required" schema) 'list)))
+               (keys (when (hash-table-p properties)
+                       (let ((acc '()))
+                         (maphash (lambda (key value)
+                                    (declare (ignore value))
+                                    (push key acc))
+                                  properties)
+                         (sort acc #'string<)))))
+          (format stream "~%- ~A(~{~A~^, ~})"
+                  name
+                  (mapcar (lambda (key)
+                            (if (member key required :test #'equal)
+                                (concatenate 'string key "*")
+                                key))
+                          keys)))))))
 
 (defun %take (n list)
   (subseq list 0 (min n (length list))))

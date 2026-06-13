@@ -204,6 +204,28 @@
       (ok (eq :given-up status))
       (ok (search "unparseable" reason)))))
 
+(deftest guided-transient-unparseable-action-recovers
+  ;; A leading malformed reply must be re-sampled (obtain-action), not fatal:
+  ;; the mission still reaches :done once a valid action follows.
+  (with-dial-kernel (kernel :responses (list "garbage not json"
+                                             *run-tests-json* *edit-json*
+                                             *run-tests-json* *finish-json*)
+                            :transport-var transport)
+    (multiple-value-bind (status reason) (run-kernel kernel)
+      (ok (eq :done status))
+      (ok (search "clean" reason)))))
+
+(deftest guided-prompt-includes-tool-schemas
+  ;; The allowed tools' schemas are injected into the step prompt so the
+  ;; model uses the right argument keys instead of guessing.
+  (let ((prompts (list nil)))
+    (with-dial-kernel (kernel :responses (list *give-up-json*)
+                              :prompts-box prompts)
+      (run-kernel kernel)
+      (let ((prompt (first (car prompts))))
+        (ok (search "lisp-edit-form" prompt))
+        (ok (search "TOOLS" prompt))))))
+
 (deftest self-directed-happy-path
   (with-dial-kernel (kernel :policy-class 'self-directed-policy
                             :responses (list *edit-json* *run-tests-json*
