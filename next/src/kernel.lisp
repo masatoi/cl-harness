@@ -20,6 +20,7 @@
                 #:consult)
   (:import-from #:cl-harness-next/src/governor
                 #:governor-intervention
+                #:intervention-reason
                 #:check-governor)
   (:export #:control-policy
            #:decide
@@ -131,36 +132,54 @@ counters then rebuild from the same log on resume)."
 (defun %governor-gate (kernel)
   "Run CHECK-GOVERNOR, letting the policy choose the restart via
 HANDLE-INTERVENTION. :continue → proceed; :demote-dial → record a dial
-event and proceed; anything else halts. True when halted."
+event and proceed; anything else records a terminal decision event
+(\"park — …\" / \"give-up — …\", carrying the breach detail) and
+halts. True when halted."
   (let ((governor (kernel-governor kernel)))
     (when governor
-      (let ((outcome
-              (handler-bind ((governor-intervention
-                               (lambda (condition)
-                                 (invoke-restart
-                                  (handle-intervention
-                                   (kernel-policy kernel)
-                                   condition)))))
-                (check-governor governor))))
-        (case outcome
-          (:continue nil)
-          (:demote-dial
-           (emit-event (kernel-event-log kernel) :decision
-                       (alexandria:plist-hash-table
-                        (list "kind" "dial"
-                              "text" "demoted one dial level")
-                        :test #'equal))
-           nil)
-          ((:park-mission :ask-human)
-           (setf (kernel-status kernel) :parked
-                 (kernel-reason kernel)
-                 (format nil "governor intervention: ~A" outcome))
-           t)
-          (t
-           (setf (kernel-status kernel) :given-up
-                 (kernel-reason kernel)
-                 (format nil "governor intervention: ~A" outcome))
-           t))))))
+      (let* ((intervention nil)
+             (outcome
+               (handler-bind ((governor-intervention
+                                (lambda (condition)
+                                  (setf intervention condition)
+                                  (invoke-restart
+                                   (handle-intervention
+                                    (kernel-policy kernel)
+                                    condition)))))
+                 (check-governor governor))))
+        (flet ((%reason ()
+                 (format nil "governor intervention: ~A~@[ (~A)~]"
+                         outcome
+                         (and intervention
+                              (intervention-reason intervention))))
+               (%record-terminal (prefix text)
+                 (emit-event (kernel-event-log kernel) :decision
+                             (alexandria:plist-hash-table
+                              (list "kind" "step"
+                                    "text" (format nil "~A — ~A"
+                                                   prefix text))
+                              :test #'equal))))
+          (case outcome
+            (:continue nil)
+            (:demote-dial
+             (emit-event (kernel-event-log kernel) :decision
+                         (alexandria:plist-hash-table
+                          (list "kind" "dial"
+                                "text" "demoted one dial level")
+                          :test #'equal))
+             nil)
+            ((:park-mission :ask-human)
+             (let ((reason (%reason)))
+               (%record-terminal "park" reason)
+               (setf (kernel-status kernel) :parked
+                     (kernel-reason kernel) reason))
+             t)
+            (t
+             (let ((reason (%reason)))
+               (%record-terminal "give-up" reason)
+               (setf (kernel-status kernel) :given-up
+                     (kernel-reason kernel) reason))
+             t)))))))
 
 (defun kernel-step (kernel)
   "One observe → decide → act → record iteration. Returns the status."

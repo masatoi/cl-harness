@@ -302,6 +302,75 @@ and its observation are recorded into the event log."))
         (ok (eq :parked status))
         (ok (search "PARK-MISSION" reason))))))
 
+(deftest park-intervention-is-recorded-with-breach-detail
+  ;; Parked missions previously left no terminal event — the log just
+  ;; stopped, and the miner could not tell a park from a truncated
+  ;; run. The gate must record WHY (the governor breach) before
+  ;; halting.
+  (with-log (log path)
+    (let* ((governor (make-instance 'governor
+                                    :max-stalled-verify-cycles 1))
+           (kernel (make-kernel
+                    :environment (make-instance 'fake-environment :log log)
+                    :event-log log
+                    :governor governor
+                    :policy (make-instance
+                             'parking-policy
+                             :decisions
+                             (list (make-decision :kind :finish
+                                                  :reason "never"))))))
+      (apply-interaction governor (%stall-interaction))
+      (ok (eq :parked (run-kernel kernel)))
+      (let ((park-event
+              (find-if (lambda (event)
+                         (and (eq :decision (event-type event))
+                              (let ((text (gethash "text"
+                                                   (event-payload event))))
+                                (and (stringp text)
+                                     (<= 4 (length text))
+                                     (string= "park" text :end2 4)))))
+                       (read-events path))))
+        (ok park-event)
+        (let ((text (gethash "text" (event-payload park-event))))
+          (ok (search "PARK-MISSION" text))
+          ;; The governor's breach description survives into the log.
+          (ok (search "stalled verify cycles" text)))))))
+
+(deftest governor-abort-is-recorded-as-give-up
+  ;; Policy give-ups were already logged via the decision path, but a
+  ;; governor-initiated abort bypassed it — same observability hole as
+  ;; the park case. The give-up prefix keeps the miner's existing
+  ;; extractor working.
+  (with-log (log path)
+    (let* ((governor (make-instance 'governor
+                                    :max-stalled-verify-cycles 1))
+           (kernel (make-kernel
+                    :environment (make-instance 'fake-environment :log log)
+                    :event-log log
+                    :governor governor
+                    ;; script-policy inherits the strict default
+                    ;; HANDLE-INTERVENTION → :abort-run.
+                    :policy (make-instance
+                             'script-policy
+                             :decisions
+                             (list (make-decision :kind :finish
+                                                  :reason "never"))))))
+      (apply-interaction governor (%stall-interaction))
+      (ok (eq :given-up (run-kernel kernel)))
+      (let ((give-up-event
+              (find-if (lambda (event)
+                         (and (eq :decision (event-type event))
+                              (let ((text (gethash "text"
+                                                   (event-payload event))))
+                                (and (stringp text)
+                                     (<= 7 (length text))
+                                     (string= "give-up" text :end2 7)))))
+                       (read-events path))))
+        (ok give-up-event)
+        (let ((text (gethash "text" (event-payload give-up-event))))
+          (ok (search "ABORT-RUN" text))
+          (ok (search "stalled verify cycles" text)))))))
+
 (defclass replanning-policy (script-policy) ())
 
 (defmethod cl-harness-next/src/kernel:handle-intervention
