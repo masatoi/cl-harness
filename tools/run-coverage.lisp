@@ -16,8 +16,11 @@
 ;;;;   <root>/clh-cov-demo.asd     defsystems `clh-cov-demo` + `clh-cov-demo/tests`
 ;;;;   <root>/src/main.lisp        correct code, e.g. (defun add (a b) (+ a b)),
 ;;;;                               package clh-cov-demo/src/main, (:export #:add)
-;;;;   <root>/tests/main-test.lisp skeleton only — defpackage
-;;;;                               (:use #:cl #:rove #:clh-cov-demo/src/main) + in-package
+;;;;   <root>/tests/main-test.lisp skeleton only — defpackage #:clh-cov-demo/tests/main-test
+;;;;                               (:use #:cl #:rove #:clh-cov-demo/src/main) + in-package.
+;;;;                               The defpackage NAME must equal :test-package below
+;;;;                               (clh-cov-demo/tests/main-test); the scoped verify
+;;;;                               run-tests "test" arg is <test-package>::cl-harness-authored-tests.
 ;;;; The dial inserts a `cl-harness-authored-tests` deftest after the in-package
 ;;;; form, verifies it green (scoped run), and finishes on review approval.
 
