@@ -390,3 +390,35 @@
         (ok (eq :given-up status))
         (ok (and (stringp reason) (search "supersedes" reason))))
       (ok (<= calls 1)))))
+
+(deftest spec-change-honors-supersedes-over-existing-fixed-name
+  ;; The file has BOTH the tool's fixed-name deftest (a prior authoring) AND a
+  ;; separate old-spec deftest. An explicit :supersedes must win — the
+  ;; idempotent seeding of authored-written-p (for the fixed name) must not
+  ;; override it, or the user's old-spec assertions survive and block clean.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes "old-add-test"
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest cl-harness-authored-tests (ok nil))
+(deftest old-add-test (ok (= 5 (add 2 3))))"
+                    :transport-var tr)
+    (run-kernel kernel :max-steps 60)
+    (ok (member '("replace" . "old-add-test") (tt-edit-forms tr) :test #'equal))))
+
+(deftest spec-change-supersedes-symbol-is-coerced
+  ;; :supersedes may be passed as a SYMBOL (the natural Lisp way to name a
+  ;; deftest); it must be coerced to a string before the MCP form_name arg, or
+  ;; YASON cannot encode it and the edit action errors → give-up.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes 'old-add-test
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest old-add-test (ok (= 5 (add 2 3))))")
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))))
