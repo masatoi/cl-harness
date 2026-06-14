@@ -1,9 +1,10 @@
 # Test authoring for cl-harness-next — `authoring-policy` (`:mode :tdd` MVP)
 
 **Date**: 2026-06-14
-**Status**: **implemented** (MVP `:mode :tdd`; real-LLM e2e reached `:done`).
-**Spec kind**: forward design (MVP = `:tdd`; `:spec-change` / `:coverage` are
-designed-for extension points, not built in the first slice).
+**Status**: **implemented** — all three modes (`:tdd`, `:spec-change`,
+`:coverage`); `:tdd` real-LLM e2e reached `:done`.
+**Spec kind**: as-built (originated as forward design for the `:tdd` MVP; §9 and
+the as-built note below record the `:spec-change` / `:coverage` extensions).
 
 > **As-built note (write mechanism, §4.2/§5):** the e2e found cl-mcp refuses to
 > overwrite an existing `.lisp` with `fs-write-file`. The shipped write mechanism
@@ -87,7 +88,7 @@ This makes the integrity gate a single, auditable choke point, and the final
 ### 4.1 Slots
 | slot | meaning |
 |------|---------|
-| `mode` | `:tdd` / `:spec-change`. Reserved: `:coverage`. |
+| `mode` | `:tdd` / `:spec-change` / `:coverage`. |
 | `supersedes` | (`:spec-change`) the existing deftest name to overwrite on the first write; default `+authored-test-name+`. |
 | `system` / `test-system` | ASDF systems (as in the fix dials). |
 | `test-file` | path the authored `deftest` forms are written to (created with a defpackage skeleton if absent). |
@@ -206,11 +207,19 @@ Replay/suspend-resume keep working (the log stays the sole source of truth).
   left at the default (the tool's own fixed name) on a project that lacks it,
   `%edit-authored` gives up immediately with a clear reason rather than burning K
   author attempts on a guaranteed edit error.
-- **`:coverage`** (designed, not built) — author tests against *correct* existing
-  code, so RED-first is
-  **inverted** (the new tests must be **green**, and must *load*); the fix phase
-  is skipped. Non-vacuity then rests on the judge (and, future, a mutation check:
-  the test must fail on a mutated SUT). Flagged as the weakest integrity case.
+- **`:coverage`** — **implemented** (as-built). Author tests against *correct*
+  existing code, so the verify gate is **GREEN-first** (inverted): the authored
+  tests must LOAD and **pass** (`%authored-tests-green-p`: a clean build AND none
+  of the authored names in `failed_tests`); a failing test means the assertion is
+  wrong or the code lacks the behavior → regenerate. The **fix phase is skipped**:
+  on review approval the mission `:finish`es ("coverage tests added and green") —
+  no `:fix-policy` delegation. Tests are managed under the fixed name like `:tdd`
+  (insert-first / replace), so `:supersedes` is unused. **Integrity rests on the
+  judge only** — GREEN-first cannot prove non-vacuity (a tautology `(ok t)` also
+  passes on correct code), so the `review-oracle` is the sole gate. The weakest
+  integrity case by design; a **mutation check** (mutate the SUT, require the
+  coverage test to fail on the mutant) is the sound follow-up, **not built** in
+  this MVP.
 
 ## 10. Testing strategy
 

@@ -68,7 +68,9 @@
                           :test-file "tests/main-test.lisp"
                           :test-package "s/tests/main-test"
                           :author-fn (lambda (x) (declare (ignore x)) "")
-                          :reviewer nil :fix-policy nil)))
+                          :reviewer nil
+                       :fix-policy (make-instance 'fake-fix-policy
+                                                  :transport nil))))
     (setf (cl-harness-next/src/authoring-policy::policy-sut-package p) "S/SRC/MAIN"
           (cl-harness-next/src/authoring-policy::policy-sut-surface p)
           "(defun add (a b) 0)")
@@ -85,6 +87,8 @@
    (test-edits :initform 0 :accessor tt-test-edits)
    (edit-forms :initform nil :accessor tt-edit-forms)
    (red-name :initform "CL-HARNESS-AUTHORED-TESTS" :accessor tt-red-name)
+   (extra-failure :initform nil :accessor tt-extra-failure)
+   (run-test-arg :initform nil :accessor tt-run-test-arg)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %h (&rest plist) (alexandria:plist-hash-table plist :test 'equal))
@@ -111,12 +115,22 @@
         (when (and end (plusp end)) (string-upcase (subseq rest 0 end)))))))
 
 (defun %tdd-tests-result (transport)
-  (if (tt-impl-done-p transport)
-      (%h "passed" 1 "failed" 0)
-      (%h "passed" 0 "failed" 1
-          "failed_tests"
-          (list (%h "test_name" (tt-red-name transport)
-                    "form" "(= 5 (ADD 2 3))" "reason" "stub")))))
+  (cond
+    ((tt-extra-failure transport)
+     ;; Authored tests pass (code is correct), but an UNRELATED test fails:
+     ;; aggregate failed=1 with a non-authored test_name. Positive-evidence
+     ;; green-first must not read this as green.
+     (%h "passed" 1 "failed" 1
+         "failed_tests"
+         (list (%h "test_name" (tt-extra-failure transport)
+                   "form" "(unrelated)" "reason" "unrelated failure"))))
+    ((tt-impl-done-p transport)
+     (%h "passed" 1 "failed" 0))
+    (t
+     (%h "passed" 0 "failed" 1
+         "failed_tests"
+         (list (%h "test_name" (tt-red-name transport)
+                   "form" "(= 5 (ADD 2 3))" "reason" "stub"))))))
 
 (defmethod transport-send-request ((tr tdd-transport) body)
   (let* ((p (yason:parse body)) (id (gethash "id" p))
@@ -168,6 +182,7 @@
             (if (tt-load-bad-p tr)
                 (%enc id (%err "compile error")) (%enc id (%ok))))
            ((equal tool "run-tests")
+            (setf (tt-run-test-arg tr) (gethash "test" args))
             (if (tt-load-bad-p tr)
                 (%enc id (%err "test system failed to load"))
                 (%enc id (%tdd-tests-result tr))))
@@ -208,6 +223,7 @@
 (in-package #:s/src/main)
 (defun add (a b) (declare (ignore a b)) 0)")
                                         (initial-test "")
+                                        impl-done
                                         transport-var)
                            &body body)
   (let ((tr (or transport-var (gensym "TR"))))
@@ -215,6 +231,7 @@
        (uiop:delete-file-if-exists log-path)
        (let* ((,tr (make-instance 'tdd-transport :src ,src))
               (log (progn (setf (tt-test-content ,tr) ,initial-test)
+                          (when ,impl-done (setf (tt-impl-done-p ,tr) t))
                           (open-event-log log-path)))
               (env (make-cl-mcp-environment
                     :client (make-mcp-client ,tr)
@@ -459,3 +476,149 @@
     (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
       (ok (eq :done status))
       (ok (and (stringp reason) (search "clean" reason))))))
+
+(deftest coverage-authors-passing-tests-and-finishes
+  ;; :coverage adds tests for existing CORRECT code: they must LOAD and PASS
+  ;; (green-first), the judge gates non-vacuity, and there is NO fix phase —
+  ;; the mission finishes once the tests are authored and green.
+  (with-tdd-kernel (kernel
+                    :mode :coverage
+                    :impl-done t          ; code is correct → authored tests pass
+                    :judge #'approve-judge
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*))
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "coverage" reason))))))
+
+(deftest coverage-failing-test-is-regenerated
+  ;; A coverage test that FAILS against the existing code is wrong (or the code
+  ;; lacks the behavior) — green-first rejects it and the run regenerates to K.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :coverage   ; impl-done NIL → authored test reported failing
+                      :judge #'approve-judge
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*))
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (declare (ignore reason))
+        (ok (eq :given-up status)))
+      (ok (>= calls 3)))))
+
+(deftest coverage-review-reject-regenerates
+  ;; Green-first can't prove non-vacuity, so the judge is the integrity gate:
+  ;; a rejected (e.g. tautological) coverage test regenerates to give-up.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :coverage :impl-done t :judge #'reject-judge
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*))
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (ok (eq :given-up status))
+        ;; the give-up is BECAUSE the judge rejected — green-first passed
+        ;; (impl-done), so the review oracle is demonstrably the gate.
+        (ok (and (stringp reason) (search "review rejected" reason))))
+      (ok (>= calls 3)))))
+
+(deftest non-coverage-requires-fix-policy
+  ;; :tdd / :spec-change delegate the fix to the inner dial; constructing one
+  ;; without a :fix-policy is a configuration error and must fail FAST at
+  ;; construction, not as a late (decide nil ...) no-applicable-method.
+  (ok (handler-case
+          (progn
+            (make-instance 'authoring-policy
+                           :mode :tdd :goal "g" :system "s"
+                           :test-system "s/tests" :test-file "t.lisp"
+                           :test-package "P"
+                           :author-fn (lambda (p) p) :reviewer nil)
+            nil)
+        (error () t))))
+
+(deftest coverage-allows-missing-fix-policy
+  ;; :coverage never reaches the fix dial, so a missing :fix-policy is fine —
+  ;; the construction check must not over-restrict it.
+  (ok (handler-case
+          (progn
+            (make-instance 'authoring-policy
+                           :mode :coverage :goal "g" :system "s"
+                           :test-system "s/tests" :test-file "t.lisp"
+                           :test-package "P"
+                           :author-fn (lambda (p) p) :reviewer nil)
+            t)
+        (error () nil))))
+
+(deftest coverage-unrelated-failure-is-not-green
+  ;; P1: green-first must rest on positive evidence. Here the authored tests
+  ;; pass (impl-done) but an UNRELATED test fails — aggregate failed=1 with a
+  ;; non-authored test_name. The old gate ("no authored name in failed_tests")
+  ;; read this as green and finished; the run is not green, so coverage must
+  ;; refuse to finish and regenerate to give-up.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :coverage :impl-done t :judge #'approve-judge
+                      :transport-var tr
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*))
+      (setf (tt-extra-failure tr) "SOME-UNRELATED-TEST")
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (declare (ignore reason))
+        (ok (eq :given-up status)))
+      (ok (>= calls 3)))))
+
+(deftest coverage-author-prompt-asks-for-passing-tests
+  ;; P2-prompt: in :coverage the code is already correct, so the per-attempt
+  ;; author prompt must tell the author the tests MUST PASS as-is — not the
+  ;; generic red-first "MUST fail".
+  (let ((seen ""))
+    (with-tdd-kernel (kernel
+                      :mode :coverage :impl-done t :judge #'approve-judge
+                      :author-fn (lambda (p) (setf seen p) *good-deftest*))
+      (run-kernel kernel :max-steps 60)
+      (ok (search "MUST PASS" (string-upcase seen)))
+      (ok (not (search "MUST FAIL" (string-upcase seen)))))))
+
+(deftest tdd-author-prompt-asks-for-failing-tests
+  ;; :tdd / :spec-change are red-first — the per-attempt author prompt must tell
+  ;; the author the tests MUST FAIL against the unfixed code.
+  (let ((seen ""))
+    (with-tdd-kernel (kernel
+                      :mode :tdd :judge #'approve-judge
+                      :author-fn (lambda (p) (setf seen p) *good-deftest*))
+      (run-kernel kernel :max-steps 60)
+      (ok (search "MUST FAIL" (string-upcase seen))))))
+
+(deftest coverage-verify-run-is-scoped-by-name
+  ;; P1 (deeper): green-first must rest on AUTHORED-scoped evidence, not the
+  ;; whole-suite aggregate. The :coverage verify run scopes run-tests to the
+  ;; authored test by name (the "test" arg = PACKAGE::NAME), so passed/failed
+  ;; count only the authored test — a partial-vacuous run (authored test never
+  ;; executed while the suite is otherwise green) cannot read as green.
+  (with-tdd-kernel (kernel
+                    :mode :coverage :impl-done t :judge #'approve-judge
+                    :transport-var tr
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*))
+    (run-kernel kernel :max-steps 60)
+    (ok (stringp (tt-run-test-arg tr)))
+    (ok (search "CL-HARNESS-AUTHORED-TESTS" (string-upcase (tt-run-test-arg tr))))
+    (ok (search "S/TESTS/MAIN-TEST" (string-upcase (tt-run-test-arg tr))))))
+
+(deftest tdd-verify-run-is-whole-system
+  ;; Red-first modes gate on authored names in failed_tests, which is robust to
+  ;; other tests, so their verify run stays whole-system (no by-name scoping).
+  ;; This locks in that the scoping change is confined to :coverage.
+  (with-tdd-kernel (kernel
+                    :mode :tdd :judge #'approve-judge
+                    :transport-var tr
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*))
+    (run-kernel kernel :max-steps 60)
+    (ok (null (tt-run-test-arg tr)))))
+
+(deftest result-count-rejects-non-numeric
+  ;; %result-count yields the count only for real numbers; a string or missing
+  ;; key yields NIL, so the green gate fails closed rather than type-confusing a
+  ;; non-numeric "failed" into a pass.
+  (flet ((rc (h k) (cl-harness-next/src/authoring-policy::%result-count h k)))
+    (ok (eql 0 (rc (%h "failed" 0) "failed")))
+    (ok (eql 3 (rc (%h "passed" 3) "passed")))
+    (ok (null (rc (%h "failed" "0") "failed")))
+    (ok (null (rc (%h) "failed")))
+    (ok (null (rc "not-a-hash-table" "failed")))))

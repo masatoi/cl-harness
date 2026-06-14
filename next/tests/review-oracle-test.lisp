@@ -94,3 +94,40 @@
                                             pack :review-tests)
                                   :judge-fn (%canned-judge "REJECT: no"))))
       (ok (eq :review-tests (verdict-oracle (evaluate oracle "tests")))))))
+
+(deftest reject-mentioning-approve-fails-closed
+  ;; P2-parser: the verdict is the first non-blank line's leading token, NOT a
+  ;; substring search. A REJECT whose prose merely mentions the word "approve"
+  ;; must not be read as a pass. (Adversarial: the review oracle is the only
+  ;; integrity gate in :coverage mode.)
+  (let ((verdict (evaluate
+                  (make-instance 'review-oracle
+                                 :profile '(:id :r :strictness :strict)
+                                 :judge-fn (%canned-judge
+                                            "I cannot APPROVE. REJECT: tautological."))
+                  "x")))
+    (ok (not (verdict-pass-p verdict)))))
+
+(deftest approve-after-blank-line-passes
+  ;; The leading token is taken from the first NON-BLANK line, so an APPROVE
+  ;; after a leading blank line still passes.
+  (let ((verdict (evaluate
+                  (make-instance 'review-oracle
+                                 :profile '(:id :r :strictness :soft)
+                                 :judge-fn (%canned-judge
+                                            (format nil "~%APPROVE: ok")))
+                  "x")))
+    (ok (verdict-pass-p verdict))))
+
+(deftest approve-in-markdown-decoration-passes
+  ;; A real reviewer LLM may decorate the verdict (**APPROVE**, "> APPROVE",
+  ;; "1. APPROVE"). Leading non-alphabetic characters are skipped before the
+  ;; token match, so a genuine approval still passes (fail-closed only on real
+  ;; ambiguity, not on decoration).
+  (dolist (reply '("**APPROVE**: looks good" "> APPROVE" "1. APPROVE - solid"))
+    (let ((verdict (evaluate
+                    (make-instance 'review-oracle
+                                   :profile '(:id :r :strictness :soft)
+                                   :judge-fn (%canned-judge reply))
+                    "x")))
+      (ok (verdict-pass-p verdict)))))
