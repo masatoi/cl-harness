@@ -207,19 +207,35 @@ Replay/suspend-resume keep working (the log stays the sole source of truth).
   left at the default (the tool's own fixed name) on a project that lacks it,
   `%edit-authored` gives up immediately with a clear reason rather than burning K
   author attempts on a guaranteed edit error.
-- **`:coverage`** — **implemented** (as-built). Author tests against *correct*
-  existing code, so the verify gate is **GREEN-first** (inverted): the authored
-  tests must LOAD and **pass** (`%authored-tests-green-p`: a clean build AND none
-  of the authored names in `failed_tests`); a failing test means the assertion is
-  wrong or the code lacks the behavior → regenerate. The **fix phase is skipped**:
-  on review approval the mission `:finish`es ("coverage tests added and green") —
-  no `:fix-policy` delegation. Tests are managed under the fixed name like `:tdd`
-  (insert-first / replace), so `:supersedes` is unused. **Integrity rests on the
-  judge only** — GREEN-first cannot prove non-vacuity (a tautology `(ok t)` also
-  passes on correct code), so the `review-oracle` is the sole gate. The weakest
-  integrity case by design; a **mutation check** (mutate the SUT, require the
-  coverage test to fail on the mutant) is the sound follow-up, **not built** in
-  this MVP.
+- **`:coverage`** — **implemented** (as-built; green gate hardened post-review,
+  commit `d2c737b`). Author tests against *correct* existing code, so the verify
+  gate is **GREEN-first** (inverted): the authored tests must LOAD and **pass**.
+  To make "pass" *positive evidence* (not merely "no authored name among the
+  failures"), the `:coverage` verify run is **scoped to the authored test by
+  name** (`run-tests` `test = PACKAGE::NAME`, via `%verify-run-args` /
+  `%fq-authored-name`), so the result's `passed`/`failed` counts cover *exactly*
+  the authored test. `%authored-tests-green-p` then requires a clean build,
+  aggregate `failed = 0`, `passed ≥ #authored-names`, and no authored name in
+  `failed_tests`; a failing test means the assertion is wrong or the code lacks
+  the behavior → regenerate. The scoping **closes the partial-vacuous hole**
+  where an authored test that *never executed* (e.g. a rove discovery miss) could
+  read green off the whole-suite aggregate — a scoped run of an absent test
+  reports `failed = 1` under the requested name, so it cannot pass. (Red-first
+  modes keep the whole-system run; their gate keys on the authored names in
+  `failed_tests`, which is robust to other tests.) The author is told the mode's
+  expectation (`%mode-expectation`: coverage ⇒ tests **MUST PASS** as-is, the
+  inverse of red-first modes). The **fix phase is skipped**: on review approval
+  the mission `:finish`es ("coverage tests added and green") — no `:fix-policy`
+  delegation (and `initialize-instance` exempts `:coverage` from the otherwise
+  required `:fix-policy`). Tests are managed under the fixed name like `:tdd`
+  (insert-first / replace), so `:supersedes` is unused. **Non-tautology integrity
+  still rests on the judge**: the scoped run proves the authored test *ran and
+  passed*, but green-first cannot prove the assertion is *non-trivial* (a
+  tautology `(ok t)` also passes on correct code), so the `review-oracle` (whose
+  verdict parser is fail-closed — first-line leading token, decoration-tolerant)
+  remains the sole gate against tautology / faithfulness. A **mutation check**
+  (mutate the SUT, require the coverage test to fail on the mutant) is the sound
+  follow-up for that residual, **not built** in this MVP.
 
 ## 10. Testing strategy
 
@@ -244,8 +260,11 @@ Replay/suspend-resume keep working (the log stays the sole source of truth).
 - **Author/judge collusion**: same base model authors and reviews. RED-first is
   the model-independent backstop; the judge is advisory faithfulness. Acceptable
   for MVP (autonomous by choice); a different reviewer model is a config knob.
-- **`:coverage` non-vacuity** without RED-first is genuinely weaker — deferred
-  with mutation testing noted as the sound follow-up.
+- **`:coverage` non-vacuity** without RED-first is genuinely weaker. The scoped
+  verify run gives positive evidence the authored test *ran and passed* (closing
+  the "test silently didn't run" hole), but the *tautology* case (a trivially-true
+  assertion that also passes on correct code) is still caught only by the judge;
+  mutation testing remains the sound follow-up for that residual.
 
 ## 12. File / package layout
 
