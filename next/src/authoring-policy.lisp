@@ -120,10 +120,11 @@ no package: prefixes): ~A" err)))
 test, reply with ONLY one or more rove DEFTEST forms exercising the
 goal — no defpackage, no in-package, no prose, no markdown, no code
 fence. Shape: (deftest NAME (ok EXPR) (ok EXPR) ...). Reference the code
-under test by the symbols shown. The tests MUST fail against the current
-(unimplemented/stub) code and pass once the goal is met. Use BARE symbol
-names exactly as shown (e.g. add) — never package-qualified (no colon
-prefixes). The deftest name does not matter."
+under test by the symbols shown. Whether the tests should fail now
+(red-first) or pass against already-correct code is stated in the user
+prompt — follow its EXPECTATION line. Use BARE symbol names exactly as
+shown (e.g. add) — never package-qualified (no colon prefixes). The
+deftest name does not matter."
   "System prompt for the test-author oracle; pair with MAKE-JUDGE-FN.")
 
 (defclass authoring-policy (control-policy)
@@ -156,6 +157,16 @@ author failing tests, gate them (RED-first + review), then delegate the
 fix to FIX-POLICY. The fix dial patches src/ only, so it cannot weaken
 the gated tests."))
 
+(defmethod initialize-instance :after ((policy authoring-policy) &key)
+  "Fail fast on misconfiguration. Every mode except :coverage delegates the
+fix to the inner dial, so a missing :fix-policy there is a configuration
+error — caught here at construction rather than surfacing later as a
+no-applicable-method on (decide nil ...)."
+  (when (and (not (eq :coverage (policy-mode policy)))
+             (null (policy-fix-policy policy)))
+    (error "authoring-policy mode ~S requires a :fix-policy (the inner fix dial)."
+           (policy-mode policy))))
+
 (defun %managed-name (policy)
   "The deftest name this policy owns. :spec-change keeps the :supersedes
 form's own name (replaced in place, so a second fixed-name deftest is never
@@ -165,19 +176,27 @@ symbol or string; coerce to a string."
       (string (policy-supersedes policy))
       +authored-test-name+))
 
+(defun %mode-expectation (policy)
+  "The RED/GREEN instruction the author must follow, by mode. :coverage adds
+tests for already-correct code (they must pass as-is); every other mode is
+red-first (the tests must fail until the goal is implemented)."
+  (if (eq :coverage (policy-mode policy))
+      "EXPECTATION: these are COVERAGE tests for code that is ALREADY CORRECT — \
+every test MUST PASS as-is; assert the behavior the code already has."
+      "EXPECTATION: these tests MUST FAIL against the current (unfixed) code and \
+pass only once the goal is implemented (red-first)."))
+
 (defun %author-prompt (policy)
   "The per-attempt author prompt: goal + acceptance criteria + the SUT
-surface (package, class, stub signatures), plus feedback from a rejected
-attempt."
-  (format nil
-          "GOAL:~%~A~@[~2%ACCEPTANCE CRITERIA:~%~{- ~A~%~}~]~2%~
+surface (package, class, stub signatures), the mode's RED/GREEN
+expectation, plus feedback from a rejected attempt."
+  (format nil "GOAL:~%~A~@[~2%ACCEPTANCE CRITERIA:~%~{- ~A~%~}~]~2%~
 CODE UNDER TEST (package ~A):~%~A~@[~2%PREVIOUS ATTEMPT REJECTED:~%~A~]~2%~
-Reply with ONLY rove deftest form(s)."
-          (policy-goal policy)
-          (policy-criteria policy)
-          (policy-sut-package policy)
-          (policy-sut-surface policy)
-          (policy-feedback policy)))
+~A~2%Reply with ONLY rove deftest form(s)."
+          (policy-goal policy) (policy-criteria policy)
+          (policy-sut-package policy) (policy-sut-surface policy)
+          (policy-feedback policy)
+          (%mode-expectation policy)))
 
 (defun %result-text (result)
   "Text payload of an MCP content-style RESULT, or NIL."
@@ -335,16 +354,37 @@ the test file (the default names the tool's own fixed deftest, absent here)")
                       (when (%clear-fasls-p policy) (list "clear_fasls" t)))
               "load the authored test system"))))
 
+(defun %fq-authored-name (policy)
+  "The fully-qualified rove test name PACKAGE::NAME of the managed authored
+deftest, for run-tests' by-name scoping. run-tests resolves the name
+case-insensitively."
+  (format nil "~A::~A"
+          (policy-test-package policy)
+          (or (first (policy-authored-names policy)) (%managed-name policy))))
+
+(defun %verify-run-args (policy)
+  "run-tests arguments for the verify step. :coverage scopes the run to the
+authored test by name so the pass/fail counts cover EXACTLY the authored
+test (genuine authored-scoped positive evidence for green-first); red-first
+modes run the whole system, since their gate keys on the authored names
+appearing in failed_tests, which is robust to other tests in the suite."
+  (if (eq :coverage (policy-mode policy))
+      (list "system" (policy-test-system policy)
+            "test" (%fq-authored-name policy))
+      (list "system" (policy-test-system policy))))
+
 (defun %author-loaded (policy kernel)
   "After loading the authored tests: on a load error regenerate; else run
-them to confirm they fail (RED-first) against the unfixed code."
+them to check their status by mode. :coverage runs the authored test BY
+NAME (see %VERIFY-RUN-ARGS) so the counts are authored-scoped; red-first
+modes run the whole system and gate on the authored names in failed_tests."
   (if (kernel-last-action-error kernel)
       (%regenerate policy (format nil "authored tests did not load: ~A"
                                   (kernel-last-action-error kernel)))
       (progn
         (setf (policy-state policy) :author-verify)
-        (%act "run-tests" (list "system" (policy-test-system policy))
-              "RED-first: authored tests must fail"))))
+        (%act "run-tests" (%verify-run-args policy)
+              "verify the authored tests (mode-gated)"))))
 
 (defun %mentions (needle text)
   "True when TEXT is a string containing NEEDLE (case-insensitive)."
@@ -367,15 +407,29 @@ gave a failed_tests array and EVERY authored name appears in it."
               (every (lambda (n) (%name-in-failures-p n failed))
                      (policy-authored-names policy))))))
 
+(defun %result-count (result key)
+  "The numeric count under KEY in RESULT, or NIL when absent or non-numeric."
+  (let ((v (and (hash-table-p result) (gethash key result))))
+    (and (realp v) v)))
+
 (defun %authored-tests-green-p (policy result)
-  "True when the build is clean (loaded, not a tool error) and NONE of the
-authored test names appears in failed_tests — the authored coverage tests
-pass against the existing (correct) code."
+  "True only on positive evidence the authored coverage tests ran and passed.
+The :coverage verify run is scoped to the authored test by name (see
+%VERIFY-RUN-ARGS), so RESULT's aggregate counts cover exactly the authored
+tests: require a clean load, zero failures, at least as many passes as
+authored test names, and no authored name among the failures. A vacuous run
+— the authored test absent (run-tests reports it failed/not-found) or empty
+(no assertions, passed below the threshold) — therefore cannot read green."
   (and (hash-table-p result)
        (not (gethash "isError" result))
-       (let ((failed (gethash "failed_tests" result)))
-         (notany (lambda (n) (%name-in-failures-p n failed))
-                 (policy-authored-names policy)))))
+       (let ((failed (gethash "failed_tests" result))
+             (failed-count (%result-count result "failed"))
+             (passed-count (%result-count result "passed"))
+             (names (policy-authored-names policy)))
+         (and (eql failed-count 0)
+              passed-count
+              (>= passed-count (length names))
+              (notany (lambda (n) (%name-in-failures-p n failed)) names)))))
 
 (defun %review-subject (policy)
   "The review prompt: the goal, acceptance criteria, and the authored tests,

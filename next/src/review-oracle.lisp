@@ -51,19 +51,41 @@ REJECT: <feedback>.~%~%---~%~A"
             (getf profile :instructions)
             subject)))
 
+(defun %first-content-line (text)
+  "The first non-blank line of TEXT, trimmed of surrounding whitespace, or
+the empty string when TEXT is entirely blank."
+  (with-input-from-string (in text)
+    (loop for line = (read-line in nil nil)
+          while line
+          for trimmed = (string-trim '(#\Space #\Tab #\Return #\Page) line)
+          when (plusp (length trimmed)) return trimmed
+          finally (return ""))))
+
+(defun %starts-with (prefix string)
+  "True when STRING begins with PREFIX (exact, case-sensitive)."
+  (let ((n (length prefix)))
+    (and (>= (length string) n) (string= prefix string :end2 n))))
+
+(defun %leading-alpha (string)
+  "STRING with leading non-alphabetic characters removed, so a verdict wrapped
+in markdown / list / quote decoration (**APPROVE**, \"> APPROVE\", \"1. APPROVE\")
+still exposes its leading token. Returns \"\" when STRING has no letters."
+  (let ((start (position-if #'alpha-char-p string)))
+    (if start (subseq string start) "")))
+
 (defun %parse-judgement (response)
-  "Return (values pass-p feedback). The earlier of APPROVE/REJECT
-(case-insensitive) wins; anything else fails closed."
+  "Return (values pass-p feedback). The verdict is the leading alphabetic
+token of the first non-blank line — APPROVE or REJECT (case-insensitive),
+with leading markdown/list/quote decoration skipped. Anything else fails
+closed. Matching the leading token, rather than searching the whole text,
+keeps a REJECT whose prose merely mentions \"approve\" from being read as a
+pass."
   (let* ((text (or response ""))
-         (upcased (string-upcase text))
-         (approve (search "APPROVE" upcased))
-         (reject (search "REJECT" upcased)))
-    (cond
-      ((and approve (or (null reject) (< approve reject)))
-       (values t text))
-      (reject (values nil text))
-      (t (values nil (format nil "unparseable review response: ~S"
-                             text))))))
+         (head (string-upcase (%leading-alpha (%first-content-line text)))))
+    (cond ((%starts-with "APPROVE" head) (values t text))
+          ((%starts-with "REJECT" head) (values nil text))
+          (t
+           (values nil (format nil "unparseable review response: ~S" text))))))
 
 (defmethod evaluate ((oracle review-oracle) (subject string))
   (handler-case
