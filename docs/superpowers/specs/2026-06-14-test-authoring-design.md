@@ -202,7 +202,10 @@ Replay/suspend-resume keep working (the log stays the sole source of truth).
   **Limitation** (cl-mcp has no form-delete, only replace): exactly one
   superseded deftest is overwritten; an old spec split across multiple deftests
   leaves the others (they'd block clean-verify) — handle by pointing
-  `:supersedes` at the one that matters, or as a follow-up.
+  `:supersedes` at the one that matters, or as a follow-up. If `:supersedes` is
+  left at the default (the tool's own fixed name) on a project that lacks it,
+  `%edit-authored` gives up immediately with a clear reason rather than burning K
+  author attempts on a guaranteed edit error.
 - **`:coverage`** (designed, not built) — author tests against *correct* existing
   code, so RED-first is
   **inverted** (the new tests must be **green**, and must *load*); the fix phase

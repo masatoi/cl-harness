@@ -129,6 +129,8 @@ prefixes). The deftest name does not matter."
 
 (defclass authoring-policy (control-policy)
   ((mode :initarg :mode :initform :tdd :reader policy-mode)
+   (supersedes :initarg :supersedes :initform +authored-test-name+
+               :reader policy-supersedes)
    (goal :initarg :goal :reader policy-goal)
    (criteria :initarg :criteria :initform nil :reader policy-criteria)
    (system :initarg :system :reader policy-system)
@@ -275,23 +277,40 @@ the test-file edit (insert on the first write, replace thereafter)."
                 (%edit-authored policy text)))))))
 
 (defun %edit-authored (policy text)
-  "Emit the lisp-edit-form for the authored deftest: insert it after the
-in-package form on the first write, replace it by name thereafter."
-  (if (policy-authored-written-p policy)
-      (%act "lisp-edit-form"
-            (list "file_path" (policy-test-file policy)
-                  "form_type" "deftest"
-                  "form_name" +authored-test-name+
-                  "operation" "replace"
-                  "content" text)
-            "replace authored tests")
-      (%act "lisp-edit-form"
-            (list "file_path" (policy-test-file policy)
-                  "form_type" "in-package"
-                  "form_name" (policy-test-package policy)
-                  "operation" "insert_after"
-                  "content" text)
-            "insert authored tests")))
+  "Emit the lisp-edit-form for the authored deftest. Once the fixed-name
+deftest exists, replace it. On the FIRST write: :spec-change replaces the
+superseded existing deftest (turning it into the fixed-name one); :tdd
+inserts after the in-package form."
+  (cond
+    ((policy-authored-written-p policy)
+     (%act "lisp-edit-form"
+           (list "file_path" (policy-test-file policy)
+                 "form_type" "deftest" "form_name" +authored-test-name+
+                 "operation" "replace" "content" text)
+           "replace authored tests"))
+    ((eq :spec-change (policy-mode policy))
+     (if (string= (policy-supersedes policy) +authored-test-name+)
+         ;; Reaching this branch means the fixed-name deftest is NOT in the
+         ;; file (else %ensure-skeleton would have set authored-written-p →
+         ;; the first cond clause). The default :supersedes names the tool's
+         ;; own fixed deftest, which is absent here, so a replace is a
+         ;; guaranteed edit error — fail fast with a clear reason instead of
+         ;; burning K author attempts.
+         (make-decision
+          :kind :give-up
+          :reason ":spec-change needs :supersedes to name an existing deftest in \
+the test file (the default names the tool's own fixed deftest, absent here)")
+         (%act "lisp-edit-form"
+               (list "file_path" (policy-test-file policy)
+                     "form_type" "deftest" "form_name" (policy-supersedes policy)
+                     "operation" "replace" "content" text)
+               "replace superseded tests")))
+    (t
+     (%act "lisp-edit-form"
+           (list "file_path" (policy-test-file policy)
+                 "form_type" "in-package" "form_name" (policy-test-package policy)
+                 "operation" "insert_after" "content" text)
+           "insert authored tests"))))
 
 (defun %author-written (policy kernel)
   (if (kernel-last-action-error kernel)

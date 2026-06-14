@@ -83,6 +83,7 @@
    (impl-done-p :initform nil :accessor tt-impl-done-p)
    (load-bad-p :initform nil :accessor tt-load-bad-p)
    (test-edits :initform 0 :accessor tt-test-edits)
+   (edit-forms :initform nil :accessor tt-edit-forms)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %h (&rest plist) (alexandria:plist-hash-table plist :test 'equal))
@@ -142,6 +143,8 @@
             (let ((fp (gethash "file_path" args)))
               (when (and fp (search "test" fp))
                 (incf (tt-test-edits tr))
+                (push (cons (gethash "operation" args) (gethash "form_name" args))
+                      (tt-edit-forms tr))
                 (setf (tt-test-content tr)
                       (format nil "~A~%~A"
                               (tt-test-content tr) (or (gethash "content" args) "")))))
@@ -186,6 +189,8 @@
   (defun reject-judge (prompt) (declare (ignore prompt)) "REJECT: too weak"))
 
 (defmacro with-tdd-kernel ((kernel &key author-fn (judge '#'approve-judge)
+                                        (mode :tdd)
+                                        (supersedes "cl-harness-authored-tests")
                                         (src "(defpackage #:s/src/main (:use #:cl) (:export #:add))
 (in-package #:s/src/main)
 (defun add (a b) (declare (ignore a b)) 0)")
@@ -207,6 +212,8 @@
               (,kernel (make-kernel
                         :environment env :event-log log
                         :policy (make-instance 'authoring-policy
+                                               :mode ,mode
+                                               :supersedes ,supersedes
                                                :goal "add must return a+b"
                                                :system "s" :test-system "s/tests"
                                                :test-file "tests/main-test.lisp"
@@ -343,3 +350,43 @@
     (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
       (ok (eq :done status))
       (ok (and (stringp reason) (search "clean" reason))))))
+
+(deftest spec-change-replaces-superseded-deftest
+  ;; :spec-change re-specs an existing project: the first authored write
+  ;; REPLACES the named old-spec deftest (turning it into the fixed-name
+  ;; tests) rather than inserting — so old-spec assertions don't survive to
+  ;; block clean-verify.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes "old-add-test"
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest old-add-test (ok (= 5 (add 2 3))))"
+                    :transport-var tr)
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))
+    ;; the first authored edit was a REPLACE of the superseded deftest
+    (ok (member '("replace" . "old-add-test") (tt-edit-forms tr) :test #'equal))
+    ;; and NOT an insert_after of the in-package form
+    (ok (not (member "insert_after" (tt-edit-forms tr)
+                     :key #'car :test #'equal)))))
+
+(deftest spec-change-without-supersedes-target-gives-up
+  ;; :spec-change with the DEFAULT :supersedes (the tool's fixed name) on a
+  ;; project that has no such deftest can't replace anything — give up
+  ;; immediately with a clear reason, not after K author attempts on a
+  ;; guaranteed edit error.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :spec-change
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*)
+                      :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest some-other-test (ok t))")
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 40)
+        (ok (eq :given-up status))
+        (ok (and (stringp reason) (search "supersedes" reason))))
+      (ok (<= calls 1)))))
