@@ -427,8 +427,9 @@ grep clean-verification /tmp/clh-next-*.jsonl
   - `:spec-change` — 既存実装＋旧仕様テストを、新仕様に書き換え（`:supersedes`
     で旧 deftest を in-place 置換）→ コード追随。内側 fix は `scripted`/`guided`。
   - `:coverage` — **正しい**既存コードに新テストを追加。verify は **GREEN-first**
-    （著作テストはパスを要求）、fix 相は無し、非空性は **judge のみ**が担保
-    （mutation テストは follow-up）。`:fix-policy` 不要。
+    （著作テストを**名前スコープ実行**し、`failed=0 ∧ passed≥著作数`でパスを正の
+    証拠化＝「テストが実際に走って通った」）、fix 相は無し、`:fix-policy` 不要。
+    残る **tautology の非空性のみ judge** が担保（mutation テストは follow-up）。
 
 > 以下は fix ダイヤル間の差し替え（テスト著作が不要で、既に失敗テストがある場合）。
 
