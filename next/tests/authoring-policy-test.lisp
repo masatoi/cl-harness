@@ -330,3 +330,16 @@
       (ok (eq :given-up status))
       (ok (and (stringp reason)
                (or (search "skeleton" reason) (search "in-package" reason)))))))
+
+(deftest uppercase-in-package-anchor-is-recognized
+  ;; A test file written with uppercase (IN-PACKAGE …) is a valid existing
+  ;; file: it must be recognized case-insensitively and authored into via
+  ;; lisp-edit-form — NOT fall through to fs-write-file (which cl-mcp refuses
+  ;; on an existing .lisp) and give up.
+  (with-tdd-kernel (kernel
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(DEFPACKAGE #:S/TESTS/MAIN-TEST (:USE #:CL #:ROVE #:S/SRC/MAIN))
+(IN-PACKAGE #:S/TESTS/MAIN-TEST)")
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))))

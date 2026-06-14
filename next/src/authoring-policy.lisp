@@ -216,11 +216,12 @@ read of the test file to decide whether a skeleton is needed."
 
 (defun %ensure-skeleton (policy kernel)
   (let ((existing (or (%result-text (kernel-last-result kernel)) "")))
-    (if (search "(in-package" existing)
+    (if (search "(in-package" existing :test #'char-equal)
         (progn
           ;; A prior run may have left the fixed-name deftest; replace it on the
-          ;; first write rather than inserting a duplicate.
-          (when (search +authored-test-name+ existing)
+          ;; first write rather than inserting a duplicate. Both checks are
+          ;; case-insensitive: CL source may be written upper- or lower-case.
+          (when (search +authored-test-name+ existing :test #'char-equal)
             (setf (policy-authored-written-p policy) t))
           (%author policy))
         (progn
