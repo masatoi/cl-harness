@@ -83,6 +83,8 @@
    (impl-done-p :initform nil :accessor tt-impl-done-p)
    (load-bad-p :initform nil :accessor tt-load-bad-p)
    (test-edits :initform 0 :accessor tt-test-edits)
+   (edit-forms :initform nil :accessor tt-edit-forms)
+   (red-name :initform "CL-HARNESS-AUTHORED-TESTS" :accessor tt-red-name)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %h (&rest plist) (alexandria:plist-hash-table plist :test 'equal))
@@ -99,12 +101,21 @@
 (defun %err (text)
   (%h "isError" t "content" (list (%h "type" "text" "text" text))))
 
+(defun %deftest-name-in (content)
+  "Upcased name of the first (deftest NAME …) in CONTENT, or NIL."
+  (let ((p (search "(deftest " content :test #'char-equal)))
+    (when p
+      (let* ((start (+ p (length "(deftest ")))
+             (rest (string-left-trim '(#\Space #\Tab #\Newline) (subseq content start)))
+             (end (position-if (lambda (c) (member c '(#\Space #\Tab #\Newline #\) #\())) rest)))
+        (when (and end (plusp end)) (string-upcase (subseq rest 0 end)))))))
+
 (defun %tdd-tests-result (transport)
   (if (tt-impl-done-p transport)
       (%h "passed" 1 "failed" 0)
       (%h "passed" 0 "failed" 1
           "failed_tests"
-          (list (%h "test_name" "CL-HARNESS-AUTHORED-TESTS"
+          (list (%h "test_name" (tt-red-name transport)
                     "form" "(= 5 (ADD 2 3))" "reason" "stub")))))
 
 (defmethod transport-send-request ((tr tdd-transport) body)
@@ -142,6 +153,11 @@
             (let ((fp (gethash "file_path" args)))
               (when (and fp (search "test" fp))
                 (incf (tt-test-edits tr))
+                (push (cons (gethash "operation" args) (gethash "form_name" args))
+                      (tt-edit-forms tr))
+                (alexandria:when-let
+                    ((n (%deftest-name-in (or (gethash "content" args) ""))))
+                  (setf (tt-red-name tr) n))
                 (setf (tt-test-content tr)
                       (format nil "~A~%~A"
                               (tt-test-content tr) (or (gethash "content" args) "")))))
@@ -186,6 +202,8 @@
   (defun reject-judge (prompt) (declare (ignore prompt)) "REJECT: too weak"))
 
 (defmacro with-tdd-kernel ((kernel &key author-fn (judge '#'approve-judge)
+                                        (mode :tdd)
+                                        (supersedes "cl-harness-authored-tests")
                                         (src "(defpackage #:s/src/main (:use #:cl) (:export #:add))
 (in-package #:s/src/main)
 (defun add (a b) (declare (ignore a b)) 0)")
@@ -207,6 +225,8 @@
               (,kernel (make-kernel
                         :environment env :event-log log
                         :policy (make-instance 'authoring-policy
+                                               :mode ,mode
+                                               :supersedes ,supersedes
                                                :goal "add must return a+b"
                                                :system "s" :test-system "s/tests"
                                                :test-file "tests/main-test.lisp"
@@ -340,6 +360,102 @@
                     :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
                     :initial-test "(DEFPACKAGE #:S/TESTS/MAIN-TEST (:USE #:CL #:ROVE #:S/SRC/MAIN))
 (IN-PACKAGE #:S/TESTS/MAIN-TEST)")
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))))
+
+(deftest spec-change-replaces-superseded-deftest
+  ;; :spec-change re-specs an existing project: the first authored write
+  ;; REPLACES the named old-spec deftest (turning it into the fixed-name
+  ;; tests) rather than inserting — so old-spec assertions don't survive to
+  ;; block clean-verify.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes "old-add-test"
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest old-add-test (ok (= 5 (add 2 3))))"
+                    :transport-var tr)
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "clean" reason))))
+    ;; the first authored edit was a REPLACE of the superseded deftest
+    (ok (member '("replace" . "old-add-test") (tt-edit-forms tr) :test #'equal))
+    ;; and NOT an insert_after of the in-package form
+    (ok (not (member "insert_after" (tt-edit-forms tr)
+                     :key #'car :test #'equal)))))
+
+(deftest spec-change-without-supersedes-target-gives-up
+  ;; :spec-change with the DEFAULT :supersedes (the tool's fixed name) on a
+  ;; project that has no such deftest can't replace anything — give up
+  ;; immediately with a clear reason, not after K author attempts on a
+  ;; guaranteed edit error.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :spec-change
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*)
+                      :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest some-other-test (ok t))")
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 40)
+        (ok (eq :given-up status))
+        (ok (and (stringp reason) (search "supersedes" reason))))
+      (ok (<= calls 1)))))
+
+(deftest spec-change-honors-supersedes-over-existing-fixed-name
+  ;; The file has BOTH the tool's fixed-name deftest (a prior authoring) AND a
+  ;; separate old-spec deftest. An explicit :supersedes must win — the
+  ;; idempotent seeding of authored-written-p (for the fixed name) must not
+  ;; override it, or the user's old-spec assertions survive and block clean.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes "old-add-test"
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest cl-harness-authored-tests (ok nil))
+(deftest old-add-test (ok (= 5 (add 2 3))))"
+                    :transport-var tr)
+    (run-kernel kernel :max-steps 60)
+    (ok (member '("replace" . "old-add-test") (tt-edit-forms tr) :test #'equal))
+    ;; no fixed-name edit is ever issued: the authored bodies are re-wrapped
+    ;; under the :supersedes name and replaced in place, so a second
+    ;; cl-harness-authored-tests deftest is structurally impossible.
+    (ok (not (member '("replace" . "cl-harness-authored-tests")
+                     (tt-edit-forms tr) :test #'equal)))))
+
+(deftest spec-change-manages-the-supersedes-name
+  ;; managed-name: :spec-change owns the :supersedes deftest name. The authored
+  ;; bodies are re-wrapped under that name (so authored-names tracks it for the
+  ;; RED-first check), and the lisp-edit-form content carries (deftest
+  ;; old-add-test …) — never the fixed name.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes "old-add-test"
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest old-add-test (ok (= 5 (add 2 3))))"
+                    :transport-var tr)
+    (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
+      (run-kernel kernel :max-steps 60)
+      (ok (equal '("OLD-ADD-TEST") (policy-authored-names policy)))
+      (ok (search "(deftest old-add-test" (tt-test-content tr)))
+      (ok (not (search "deftest cl-harness-authored-tests" (tt-test-content tr)))))))
+
+(deftest spec-change-supersedes-symbol-is-coerced
+  ;; :supersedes may be passed as a SYMBOL (the natural Lisp way to name a
+  ;; deftest); it must be coerced to a string before the MCP form_name arg, or
+  ;; YASON cannot encode it and the edit action errors → give-up.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes 'old-add-test
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest old-add-test (ok (= 5 (add 2 3))))")
     (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
       (ok (eq :done status))
       (ok (and (stringp reason) (search "clean" reason))))))

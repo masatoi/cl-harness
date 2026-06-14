@@ -87,7 +87,8 @@ This makes the integrity gate a single, auditable choke point, and the final
 ### 4.1 Slots
 | slot | meaning |
 |------|---------|
-| `mode` | `:tdd` (MVP). Reserved: `:spec-change`, `:coverage`. |
+| `mode` | `:tdd` / `:spec-change`. Reserved: `:coverage`. |
+| `supersedes` | (`:spec-change`) the existing deftest name to overwrite on the first write; default `+authored-test-name+`. |
 | `system` / `test-system` | ASDF systems (as in the fix dials). |
 | `test-file` | path the authored `deftest` forms are written to (created with a defpackage skeleton if absent). |
 | `author-fn` | `(prompt-string → raw-LLM-string)` producing `deftest` form(s); a `make-judge-fn` over `+test-author-system-prompt+`. |
@@ -182,12 +183,31 @@ Replay/suspend-resume keep working (the log stays the sole source of truth).
 - Inner fix dial `:give-up` → mission `:give-up` (the authored tests stand; the
   failure is the implementation's).
 
-## 9. Extension points (designed, not built in MVP)
+## 9. Extension points
 
-- **`:spec-change`** — `:author` *replaces* the named existing `deftest`s
-  (`lisp-edit-form` `replace`) instead of appending; RED-first still holds (old
-  code fails the new tests); then fix. Needs: target-existing-deftest selection.
-- **`:coverage`** — author tests against *correct* existing code, so RED-first is
+- **`:spec-change`** — **implemented** (as-built; supersedes the original §9
+  sketch, which predated the F3 fixed-name redesign). Re-specs an existing
+  project: existing implementation + existing test(s) encoding the OLD spec + a
+  goal describing the NEW spec → author the new-spec tests → RED-first (the old
+  code fails the new tests — same "authored tests are red" check) → fix (the
+  inner `:fix-policy`, here `scripted`/`guided`, modifies the existing code; NOT
+  `template-fix`, since the code is not a stub). The only mechanism change is in
+  `%edit-authored`: a new `:supersedes` slot (the existing deftest name to
+  overwrite, default `+authored-test-name+` for re-authoring a previously
+  tool-authored project). On the FIRST write, `:spec-change` does
+  `lisp-edit-form replace` of the `:supersedes` deftest (turning it into the
+  fixed-name `cl-harness-authored-tests`) instead of `:tdd`'s `insert_after`; on
+  later writes both modes replace the fixed-name deftest. So the old-spec
+  assertions are overwritten and don't survive to block clean-verify.
+  **Limitation** (cl-mcp has no form-delete, only replace): exactly one
+  superseded deftest is overwritten; an old spec split across multiple deftests
+  leaves the others (they'd block clean-verify) — handle by pointing
+  `:supersedes` at the one that matters, or as a follow-up. If `:supersedes` is
+  left at the default (the tool's own fixed name) on a project that lacks it,
+  `%edit-authored` gives up immediately with a clear reason rather than burning K
+  author attempts on a guaranteed edit error.
+- **`:coverage`** (designed, not built) — author tests against *correct* existing
+  code, so RED-first is
   **inverted** (the new tests must be **green**, and must *load*); the fix phase
   is skipped. Non-vacuity then rests on the judge (and, future, a mutation check:
   the test must fail on a mutated SUT). Flagged as the weakest integrity case.

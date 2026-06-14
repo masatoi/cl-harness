@@ -87,12 +87,12 @@ retained as a reusable deftest checker."
         (t (values text
                    (mapcar (lambda (f) (symbol-name (second f))) forms)))))))
 
-(defun %normalize-authored (raw)
+(defun %normalize-authored (raw name)
   "Read RAW (the LLM reply) as one-or-more rove deftest forms, collect
-their assertion bodies, and re-emit them as ONE deftest named
-+AUTHORED-TEST-NAME+. Bodies are printed bare in CL-USER so their symbols
-re-read in the test package (which :uses the SUT package). Returns
-(values TEXT NIL) or (values NIL REASON) for the regenerate loop."
+their assertion bodies, and re-emit them as ONE deftest named NAME. Bodies
+are printed bare in CL-USER so their symbols re-read in the test package
+(which :uses the SUT package). Returns (values TEXT NIL) or (values NIL
+REASON) for the regenerate loop."
   (let ((text (string-trim +ws+ (strip-code-fence raw))))
     (when (zerop (length text))
       (return-from %normalize-authored
@@ -112,8 +112,7 @@ no package: prefixes): ~A" err)))
                      (*print-case* :downcase)
                      (*print-right-margin* nil)
                      (*print-pretty* t))
-                 (values (format nil "(deftest ~A~%~{  ~S~^~%~})"
-                                 +authored-test-name+ bodies)
+                 (values (format nil "(deftest ~A~%~{  ~S~^~%~})" name bodies)
                          nil)))))))))
 
 (defparameter +test-author-system-prompt+
@@ -129,6 +128,8 @@ prefixes). The deftest name does not matter."
 
 (defclass authoring-policy (control-policy)
   ((mode :initarg :mode :initform :tdd :reader policy-mode)
+   (supersedes :initarg :supersedes :initform +authored-test-name+
+               :reader policy-supersedes)
    (goal :initarg :goal :reader policy-goal)
    (criteria :initarg :criteria :initform nil :reader policy-criteria)
    (system :initarg :system :reader policy-system)
@@ -154,6 +155,15 @@ prefixes). The deftest name does not matter."
 author failing tests, gate them (RED-first + review), then delegate the
 fix to FIX-POLICY. The fix dial patches src/ only, so it cannot weaken
 the gated tests."))
+
+(defun %managed-name (policy)
+  "The deftest name this policy owns. :spec-change keeps the :supersedes
+form's own name (replaced in place, so a second fixed-name deftest is never
+created); :tdd uses the fixed name +AUTHORED-TEST-NAME+. SUPERSEDES may be a
+symbol or string; coerce to a string."
+  (if (eq :spec-change (policy-mode policy))
+      (string (policy-supersedes policy))
+      +authored-test-name+))
 
 (defun %author-prompt (policy)
   "The per-attempt author prompt: goal + acceptance criteria + the SUT
@@ -219,9 +229,13 @@ read of the test file to decide whether a skeleton is needed."
     (if (search "(in-package" existing :test #'char-equal)
         (progn
           ;; A prior run may have left the fixed-name deftest; replace it on the
-          ;; first write rather than inserting a duplicate. Both checks are
-          ;; case-insensitive: CL source may be written upper- or lower-case.
-          (when (search +authored-test-name+ existing :test #'char-equal)
+          ;; first write rather than inserting a duplicate. Only seed when
+          ;; SUPERSEDES targets the fixed name (the default / re-author case);
+          ;; an explicit :spec-change :supersedes for a different deftest must
+          ;; win over this idempotent seeding. Checks are case-insensitive.
+          (when (and (search +authored-test-name+ existing :test #'char-equal)
+                     (string-equal (string (policy-supersedes policy))
+                                   +authored-test-name+))
             (setf (policy-authored-written-p policy) t))
           (%author policy))
         (progn
@@ -255,8 +269,9 @@ test file must be absent or already contain a defpackage + (in-package …)"
                                      reason))))
 
 (defun %author (policy)
-  "Sample deftest form(s), normalize to the fixed-name deftest, and emit
-the test-file edit (insert on the first write, replace thereafter)."
+  "Sample deftest form(s), normalize to the managed deftest name (the
+:supersedes name for :spec-change, else the fixed name), and emit the
+test-file edit (insert on the first write, replace thereafter)."
   (let ((raw (handler-case (funcall (policy-author-fn policy)
                                     (%author-prompt policy))
                (error (c) (setf (policy-feedback policy)
@@ -264,34 +279,49 @@ the test-file edit (insert on the first write, replace thereafter)."
                  nil))))
     (if (null raw)
         (%regenerate policy (policy-feedback policy))
-        (multiple-value-bind (text reason) (%normalize-authored raw)
-          (if (null text)
-              (%regenerate policy reason)
-              (progn
-                (setf (policy-authored-names policy)
-                        (list (string-upcase +authored-test-name+))
-                      (%last-attempt-text policy) text
-                      (policy-state policy) :author-written)
-                (%edit-authored policy text)))))))
+        (let ((name (%managed-name policy)))
+          (multiple-value-bind (text reason) (%normalize-authored raw name)
+            (if (null text)
+                (%regenerate policy reason)
+                (progn
+                  (setf (policy-authored-names policy) (list (string-upcase name))
+                        (%last-attempt-text policy) text
+                        (policy-state policy) :author-written)
+                  (%edit-authored policy text))))))))
 
 (defun %edit-authored (policy text)
-  "Emit the lisp-edit-form for the authored deftest: insert it after the
-in-package form on the first write, replace it by name thereafter."
-  (if (policy-authored-written-p policy)
-      (%act "lisp-edit-form"
-            (list "file_path" (policy-test-file policy)
-                  "form_type" "deftest"
-                  "form_name" +authored-test-name+
-                  "operation" "replace"
-                  "content" text)
-            "replace authored tests")
-      (%act "lisp-edit-form"
-            (list "file_path" (policy-test-file policy)
-                  "form_type" "in-package"
-                  "form_name" (policy-test-package policy)
-                  "operation" "insert_after"
-                  "content" text)
-            "insert authored tests")))
+  "Emit the lisp-edit-form for the authored deftest. :spec-change replaces the
+:supersedes form in place under its own name (so no duplicate fixed-name form
+is created). :tdd manages the fixed name: insert after the in-package form on
+the first write, replace it thereafter."
+  (let ((name (%managed-name policy)))
+    (cond
+      ((eq :spec-change (policy-mode policy))
+       (if (and (string-equal name +authored-test-name+)
+                (not (policy-authored-written-p policy)))
+           ;; default :supersedes (= the tool's fixed name) but it is absent
+           ;; from the file → a replace is a guaranteed edit error; fail fast.
+           (make-decision
+            :kind :give-up
+            :reason ":spec-change needs :supersedes to name an existing deftest in \
+the test file (the default names the tool's own fixed deftest, absent here)")
+           (%act "lisp-edit-form"
+                 (list "file_path" (policy-test-file policy)
+                       "form_type" "deftest" "form_name" name
+                       "operation" "replace" "content" text)
+                 "replace superseded tests")))
+      ((policy-authored-written-p policy)
+       (%act "lisp-edit-form"
+             (list "file_path" (policy-test-file policy)
+                   "form_type" "deftest" "form_name" +authored-test-name+
+                   "operation" "replace" "content" text)
+             "replace authored tests"))
+      (t
+       (%act "lisp-edit-form"
+             (list "file_path" (policy-test-file policy)
+                   "form_type" "in-package" "form_name" (policy-test-package policy)
+                   "operation" "insert_after" "content" text)
+             "insert authored tests")))))
 
 (defun %author-written (policy kernel)
   (if (kernel-last-action-error kernel)
