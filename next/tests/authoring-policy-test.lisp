@@ -189,13 +189,15 @@
                                         (src "(defpackage #:s/src/main (:use #:cl) (:export #:add))
 (in-package #:s/src/main)
 (defun add (a b) (declare (ignore a b)) 0)")
+                                        (initial-test "")
                                         transport-var)
                            &body body)
   (let ((tr (or transport-var (gensym "TR"))))
     `(uiop:with-temporary-file (:pathname log-path :type "jsonl")
        (uiop:delete-file-if-exists log-path)
        (let* ((,tr (make-instance 'tdd-transport :src ,src))
-              (log (open-event-log log-path))
+              (log (progn (setf (tt-test-content ,tr) ,initial-test)
+                          (open-event-log log-path)))
               (env (make-cl-mcp-environment
                     :client (make-mcp-client ,tr)
                     :condition :runtime-native :event-log log))
@@ -295,3 +297,36 @@
                     :transport-var tr)
     (run-kernel kernel :max-steps 60)
     (ok (= 2 (tt-test-edits tr)))))
+
+(deftest rerun-with-existing-authored-test-replaces-not-duplicates
+  ;; A file already containing the fixed-name deftest (a prior run) must make
+  ;; the first author REPLACE it — authored-written-p is seeded from the file,
+  ;; not the (fresh) policy instance.
+  (with-tdd-kernel (kernel
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test
+  (:use #:cl #:rove #:s/src/main))
+
+(in-package #:s/tests/main-test)
+
+(deftest cl-harness-authored-tests
+  (ok nil))")
+    (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
+      ;; step exactly through :ensure-skeleton (step 3), where the fix seeds
+      ;; the flag from the file — BEFORE %author-written would set it anyway.
+      (dotimes (_ 3) (cl-harness-next/src/kernel::kernel-step kernel))
+      (ok (cl-harness-next/src/authoring-policy::policy-authored-written-p policy)))))
+
+(deftest existing-test-file-without-in-package-gives-up-cleanly
+  ;; A non-empty test file lacking (in-package …) can't be skeleton-written
+  ;; (fs-write-file refuses to overwrite an existing .lisp), and there is no
+  ;; in-package anchor to insert after — give up with a clear reason instead
+  ;; of looping on failed edits.
+  (with-tdd-kernel (kernel
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test ";;; a stray comment, no defpackage/in-package
+")
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 40)
+      (ok (eq :given-up status))
+      (ok (and (stringp reason)
+               (or (search "skeleton" reason) (search "in-package" reason)))))))

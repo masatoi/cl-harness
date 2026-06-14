@@ -217,13 +217,31 @@ read of the test file to decide whether a skeleton is needed."
 (defun %ensure-skeleton (policy kernel)
   (let ((existing (or (%result-text (kernel-last-result kernel)) "")))
     (if (search "(in-package" existing)
-        (%author policy)
+        (progn
+          ;; A prior run may have left the fixed-name deftest; replace it on the
+          ;; first write rather than inserting a duplicate.
+          (when (search +authored-test-name+ existing)
+            (setf (policy-authored-written-p policy) t))
+          (%author policy))
         (progn
           (setf (policy-state policy) :author-skeleton-written)
           (%act "fs-write-file"
                 (list "path" (policy-test-file policy)
                       "content" (%skeleton policy))
                 "write test-file defpackage skeleton")))))
+
+(defun %skeleton-written (policy kernel)
+  "After the skeleton fs-write-file: a tool error means the test file
+exists but has no (in-package …) form (cl-mcp refuses to overwrite an
+existing .lisp, and there is no anchor to insert after). Give up with a
+clear reason rather than looping on failed authored edits."
+  (if (kernel-last-action-error kernel)
+      (make-decision
+       :kind :give-up
+       :reason (format nil "could not create the test-file skeleton (~A); the \
+test file must be absent or already contain a defpackage + (in-package …)"
+                       (kernel-last-action-error kernel)))
+      (%author policy)))
 
 (defun %regenerate (policy reason)
   "Record feedback and re-author within K, else give up."
@@ -363,7 +381,7 @@ One decision per step; :fix hands off to FIX-POLICY's own DECIDE."
     (:init (%read-source policy))
     (:parse-source (%parse-source policy kernel))
     (:ensure-skeleton (%ensure-skeleton policy kernel))
-    (:author-skeleton-written (%author policy))
+    (:author-skeleton-written (%skeleton-written policy kernel))
     (:author (%author policy))
     (:author-written (%author-written policy kernel))
     (:author-loaded (%author-loaded policy kernel))
