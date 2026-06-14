@@ -227,6 +227,9 @@
                 #:adaptive-policy
                 #:policy-levels
                 #:policy-level-index)
+  (:import-from #:cl-harness-next/src/authoring-policy
+                #:authoring-policy
+                #:+test-author-system-prompt+)
   (:import-from #:cl-harness-next/src/mission
                 #:mission
                 #:mission-id
@@ -499,6 +502,9 @@
            #:adaptive-policy
            #:policy-levels
            #:policy-level-index
+           ;; authoring-policy
+           #:authoring-policy
+           #:+test-author-system-prompt+
            ;; kernel/governor SP6 additions
            #:decision-payload
            #:handle-intervention

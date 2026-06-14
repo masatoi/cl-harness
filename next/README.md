@@ -33,9 +33,12 @@
   [`../docs/superpowers/specs/2026-06-11-autonomous-harness-redesign-design.md`](../docs/superpowers/specs/2026-06-11-autonomous-harness-redesign-design.md)
   に沿って育っています。
 
-**できないこと**: ゴール文から機能をゼロから作る用途（プランナーがサブゴールに
-分解して実装する）は安定版の `cl-harness develop` の領分です。`next` は現時点では
-fix 型（既に失敗テストがある状態を緑にする）に特化しています。
+**fix 型がベース。テスト著作は `authoring-policy`（§8）で**: 既定は fix 型
+（既に失敗テストがある状態を緑にする）ですが、`authoring-policy` を使うと
+**goal からテストを著作 → 実装して緑にする TDD ブートストラップ**まで回せます
+（弱モデル Qwen3.6 で実機完走を確認）。一方、ゴール文から大きな機能をプランナーが
+サブゴールに分解してゼロから作る用途は、引き続き安定版の `cl-harness develop` の
+領分です。
 
 ---
 
@@ -370,7 +373,57 @@ grep clean-verification /tmp/clh-next-*.jsonl
 
 ---
 
-## 8. ダイヤルを差し替える
+## 8. ダイヤルを差し替える / テストを著作する
+
+### authoring-policy（goal からテストを著作 → 実装、TDD ブートストラップ）
+
+ここまでは「既に失敗テストがある」前提でしたが、`authoring-policy`（`:mode :tdd`）は
+その**前段**を担います。fix ダイヤルの**上のモード**で、1 ミッション内で:
+
+1. **author** — goal から `deftest` を生成（LLM はテストの本体だけを書く body オラクル）
+2. **integrity gate** — **RED-first**（著作テストが現コードで赤いこと）を機械確認
+   ＋ **LLM テストレビュア**（`review-oracle`）で goal との整合を `:consult`
+3. **fix** — 内側の fix ダイヤル（既定 `template-fix`）へ委譲してコードを緑に
+
+**オラクル健全性は「相分離」で確保**: テストは phase 1 でゲート済み凍結、fix は
+`src/` のみ対象なので fix 中にテストを弱められません（自作テスト＋自作コードの
+緑偽装を構造的に排除）。テストファイルへの書込は cl-mcp の「既存 `.lisp` 上書き禁止」
+に従い `lisp-edit-form`（固定名 deftest の insert/replace）で行います。
+
+```lisp
+(asdf:load-system "cl-harness-next/src/template-policy")   ; 内側 fix に使用
+
+(defun policy-factory (mission)
+  (make-instance 'cl-harness-next/src/authoring-policy:authoring-policy
+   :mode :tdd
+   :goal (mission-goal mission)
+   :system "clh-demo" :test-system "clh-demo/tests"
+   :source-file "src/main.lisp" :test-file "tests/main-test.lisp"
+   :test-package "clh-demo/tests/main-test"
+   :author-fn (make-judge-fn
+               *provider*
+               :system-prompt cl-harness-next/src/authoring-policy:+test-author-system-prompt+)
+   :reviewer (make-instance 'cl-harness-next/src/review-oracle:review-oracle
+              :judge-fn (make-judge-fn *provider*)
+              :profile (list :id :tests-review :strictness :strict
+                             :instructions "Approve only tests that genuinely assert the goal."))
+   :fix-policy (make-instance 'cl-harness-next/src/template-policy:template-fix-policy
+                :system "clh-demo" :test-system "clh-demo/tests"
+                :snippet-fn (make-judge-fn
+                             *provider*
+                             :system-prompt cl-harness-next/src/template-policy:+template-snippet-system-prompt+)
+                :source-files (list "src/main.lisp") :clear-fasls t :k 3)
+   :clear-fasls t :k 3))
+```
+
+- **用途**: 対象は**スタブ穴埋め**（内側が template-fix のため。`src/main.lisp` に
+  `(defun add (a b) 0)` のような定数本体スタブがある状態から、goal を満たす実装へ）。
+- **実機実証**: ローカル Qwen3.6 で「goal → 失敗テスト著作 → RED-first/review ゲート →
+  template-fix で実装 → clean green」を**完走**（`tools/run-tdd.lisp`、§10 の実験ノート）。
+- `authoring-policy` はファサード（`cl-harness-next`）に `authoring-policy` /
+  `+test-author-system-prompt+` を公開済み。
+
+> 以下は fix ダイヤル間の差し替え（テスト著作が不要で、既に失敗テストがある場合）。
 
 ダイヤルの差し替えは、**`policy-factory` が返すポリシーを変えるだけ**です
 （environment / governor / mission の配線はそのまま）。scripted より**下げる**
@@ -527,6 +580,10 @@ scripted）が give-up した時に自動でここへ落ちます（§1 の demo
   — L0〜L5、policy pack、governor、ダイヤルの設計。
 - template-fix spec: [`../docs/superpowers/specs/2026-06-13-template-fix-policy-design.md`](../docs/superpowers/specs/2026-06-13-template-fix-policy-design.md)
   — 最下段ダイヤルの FSM・本体抽出・スタブ発見・既知の限界。
+- test authoring spec: [`../docs/superpowers/specs/2026-06-14-test-authoring-design.md`](../docs/superpowers/specs/2026-06-14-test-authoring-design.md)
+  — `authoring-policy` の FSM・RED-first/review ゲート・相分離 integrity。
 - 実機記録（scripted/guided/adaptive の落とし穴）: [`../docs/notes/2026-06-13-live-fire-experiments.md`](../docs/notes/2026-06-13-live-fire-experiments.md)。
 - 実機記録（template-fix で clh-histogram 5/5）: [`../docs/notes/2026-06-13-next-complex-task-experiment.md`](../docs/notes/2026-06-13-next-complex-task-experiment.md)。
+- 実機記録（TDD ブートストラップ完走）: [`../docs/notes/2026-06-14-tdd-authoring-experiment.md`](../docs/notes/2026-06-14-tdd-authoring-experiment.md)
+  — Qwen3.6 が author→fix→green を完走。途中で見つけた cl-mcp 制約（`fs-write-file` の `.lisp` 上書き禁止）と再設計も記録。
 - 安定版 CLI と conditions / トランスクリプト: [`../README.md`](../README.md)。
