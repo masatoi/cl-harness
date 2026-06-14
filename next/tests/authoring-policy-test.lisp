@@ -104,7 +104,7 @@
       (%h "passed" 1 "failed" 0)
       (%h "passed" 0 "failed" 1
           "failed_tests"
-          (list (%h "test_name" "ADD-ADDS"
+          (list (%h "test_name" "CL-HARNESS-AUTHORED-TESTS"
                     "form" "(= 5 (ADD 2 3))" "reason" "stub")))))
 
 (defmethod transport-send-request ((tr tdd-transport) body)
@@ -128,11 +128,23 @@
             (%enc id (%text-result
                       (if (search "src" (or path ""))
                           (tt-src tr) (tt-test-content tr)))))
-           ((member tool '("fs-write-file" "lisp-edit-form") :test #'equal)
-            (when (search "test" (or path ""))
-              (incf (tt-test-edits tr))
-              (setf (tt-test-content tr)
-                    (or (gethash "content" args) (tt-test-content tr))))
+           ((equal tool "fs-write-file")
+            (let ((wp (gethash "path" args)))
+              (cond
+                ((and wp (search "test" wp) (plusp (length (tt-test-content tr))))
+                 (%enc id (%err "Cannot overwrite existing .lisp; use lisp-edit-form")))
+                ((and wp (search "test" wp))
+                 (incf (tt-test-edits tr))
+                 (setf (tt-test-content tr) (or (gethash "content" args) ""))
+                 (%enc id (%ok)))
+                (t (%enc id (%ok))))))
+           ((equal tool "lisp-edit-form")
+            (let ((fp (gethash "file_path" args)))
+              (when (and fp (search "test" fp))
+                (incf (tt-test-edits tr))
+                (setf (tt-test-content tr)
+                      (format nil "~A~%~A"
+                              (tt-test-content tr) (or (gethash "content" args) "")))))
             (%enc id (%ok)))
            ((equal tool "pool-kill-worker")
             (incf (tt-kill-count tr)) (%enc id (%ok)))
@@ -218,7 +230,7 @@
       (ok (equal "S/SRC/MAIN"
                  (cl-harness-next/src/authoring-policy::policy-sut-package policy)))
       (ok (search "(in-package #:s/tests/main-test)" (tt-test-content tr)))
-      (ok (search "deftest add-adds" (tt-test-content tr))))))
+      (ok (search "cl-harness-authored-tests" (tt-test-content tr))))))
 
 (deftest author-writes-validated-deftests-then-loads
   (let ((calls 0))
@@ -229,8 +241,8 @@
       (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
         (dotimes (_ 9) (cl-harness-next/src/kernel::kernel-step kernel))
         (ok (>= calls 1))
-        (ok (equal '("ADD-ADDS") (policy-authored-names policy)))
-        (ok (search "deftest add-adds" (tt-test-content tr)))
+        (ok (equal '("CL-HARNESS-AUTHORED-TESTS") (policy-authored-names policy)))
+        (ok (search "cl-harness-authored-tests" (tt-test-content tr)))
         (ok (search "(in-package" (tt-test-content tr)))))))
 
 (deftest red-first-vacuous-test-is-regenerated

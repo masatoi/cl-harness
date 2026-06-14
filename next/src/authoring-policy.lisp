@@ -36,6 +36,11 @@
 
 (defparameter +ws+ '(#\Space #\Tab #\Newline #\Return #\Page))
 
+(defparameter +authored-test-name+ "cl-harness-authored-tests"
+  "The single deftest name the authoring dial manages via lisp-edit-form
+replace, so re-authoring overwrites rather than accumulating and
+fs-write-file (which cannot overwrite an existing .lisp) is avoided.")
+
 (defun %read-forms (text)
   "Read all top-level forms from TEXT under *read-eval* nil in CL-USER.
 Returns (values forms error-string)."
@@ -77,13 +82,43 @@ deftest-name strings — or (values NIL REASON) for the regenerate loop."
         (t (values text
                    (mapcar (lambda (f) (symbol-name (second f))) forms)))))))
 
+(defun %normalize-authored (raw)
+  "Read RAW (the LLM reply) as one-or-more rove deftest forms, collect
+their assertion bodies, and re-emit them as ONE deftest named
++AUTHORED-TEST-NAME+. Bodies are printed bare in CL-USER so their symbols
+re-read in the test package (which :uses the SUT package). Returns
+(values TEXT NIL) or (values NIL REASON) for the regenerate loop."
+  (let ((text (string-trim +ws+ (strip-code-fence raw))))
+    (when (zerop (length text))
+      (return-from %normalize-authored
+        (values nil "reply was empty; emit a rove deftest")))
+    (multiple-value-bind (forms err) (%read-forms text)
+      (cond
+        (err (values nil (format nil "unreadable reply (use BARE symbol names, \
+no package: prefixes): ~A" err)))
+        ((null forms) (values nil "no forms; emit a rove deftest"))
+        ((not (every #'%deftest-form-p forms))
+         (values nil "reply must be ONLY rove deftest form(s)"))
+        (t
+         (let ((bodies (loop for f in forms append (cddr f))))
+           (if (null bodies)
+               (values nil "the deftest has no assertions")
+               (let ((*package* (find-package :cl-user))
+                     (*print-case* :downcase)
+                     (*print-right-margin* nil))
+                 (values (format nil "(deftest ~A~%~{  ~S~^~%~})"
+                                 +authored-test-name+ bodies)
+                         nil)))))))))
+
 (defparameter +test-author-system-prompt+
   "You are a Common Lisp test author. Given a GOAL and the code under
 test, reply with ONLY one or more rove DEFTEST forms exercising the
 goal — no defpackage, no in-package, no prose, no markdown, no code
 fence. Shape: (deftest NAME (ok EXPR) (ok EXPR) ...). Reference the code
 under test by the symbols shown. The tests MUST fail against the current
-(unimplemented/stub) code and pass once the goal is met."
+(unimplemented/stub) code and pass once the goal is met. Use BARE symbol
+names exactly as shown (e.g. add) — never package-qualified (no colon
+prefixes). The deftest name does not matter."
   "System prompt for the test-author oracle; pair with MAKE-JUDGE-FN.")
 
 (defclass authoring-policy (control-policy)
@@ -106,9 +141,9 @@ under test by the symbols shown. The tests MUST fail against the current
    (feedback :initform nil :accessor policy-feedback)
    (sut-package :initform "CL-USER" :accessor policy-sut-package)
    (sut-surface :initform "" :accessor policy-sut-surface)
-   (base-content :initform nil :accessor policy-base-content)
    (authored-names :initform nil :accessor policy-authored-names)
-   (last-attempt-text :initform "" :accessor %last-attempt-text))
+   (last-attempt-text :initform "" :accessor %last-attempt-text)
+   (authored-written-p :initform nil :accessor policy-authored-written-p))
   (:documentation "Test-authoring dial (spec 2026-06-14). MVP mode :tdd:
 author failing tests, gate them (RED-first + review), then delegate the
 fix to FIX-POLICY. The fix dial patches src/ only, so it cannot weaken
@@ -174,15 +209,11 @@ read of the test file to decide whether a skeleton is needed."
         "read test file"))
 
 (defun %ensure-skeleton (policy kernel)
-  "If the test file already has an (in-package …), reuse it as the base
-content and author straight away; otherwise write a fresh skeleton first."
   (let ((existing (or (%result-text (kernel-last-result kernel)) "")))
     (if (search "(in-package" existing)
-        (progn (setf (policy-base-content policy) existing)
-               (%author policy))
+        (%author policy)
         (progn
-          (setf (policy-base-content policy) (%skeleton policy)
-                (policy-state policy) :author-skeleton-written)
+          (setf (policy-state policy) :author-skeleton-written)
           (%act "fs-write-file"
                 (list "path" (policy-test-file policy)
                       "content" (%skeleton policy))
@@ -199,7 +230,8 @@ content and author straight away; otherwise write a fresh skeleton first."
                                      reason))))
 
 (defun %author (policy)
-  "Sample deftest form(s), validate, and emit the test-file write."
+  "Sample deftest form(s), normalize to the fixed-name deftest, and emit
+the test-file edit (insert on the first write, replace thereafter)."
   (let ((raw (handler-case (funcall (policy-author-fn policy)
                                     (%author-prompt policy))
                (error (c) (setf (policy-feedback policy)
@@ -207,29 +239,42 @@ content and author straight away; otherwise write a fresh skeleton first."
                  nil))))
     (if (null raw)
         (%regenerate policy (policy-feedback policy))
-        ;; EXTRACT-DEFTEST-FORMS returns (values TEXT NAMES) on success and
-        ;; (values NIL REASON) on a bad reply — the second value is dual-use.
-        (multiple-value-bind (text names-or-reason) (extract-deftest-forms raw)
+        (multiple-value-bind (text reason) (%normalize-authored raw)
           (if (null text)
-              (%regenerate policy names-or-reason)
+              (%regenerate policy reason)
               (progn
-                (setf (policy-authored-names policy) names-or-reason
+                (setf (policy-authored-names policy)
+                        (list (string-upcase +authored-test-name+))
                       (%last-attempt-text policy) text
                       (policy-state policy) :author-written)
-                (%act "fs-write-file"
-                      (list "path" (policy-test-file policy)
-                            "content" (format nil "~A~%~%~A~%"
-                                              (policy-base-content policy) text))
-                      "write authored tests")))))))
+                (%edit-authored policy text)))))))
+
+(defun %edit-authored (policy text)
+  "Emit the lisp-edit-form for the authored deftest: insert it after the
+in-package form on the first write, replace it by name thereafter."
+  (if (policy-authored-written-p policy)
+      (%act "lisp-edit-form"
+            (list "file_path" (policy-test-file policy)
+                  "form_type" "deftest"
+                  "form_name" +authored-test-name+
+                  "operation" "replace"
+                  "content" text)
+            "replace authored tests")
+      (%act "lisp-edit-form"
+            (list "file_path" (policy-test-file policy)
+                  "form_type" "in-package"
+                  "form_name" (policy-test-package policy)
+                  "operation" "insert_after"
+                  "content" text)
+            "insert authored tests")))
 
 (defun %author-written (policy kernel)
-  "After writing the tests: on a write error regenerate; else load the
-authored test system."
   (if (kernel-last-action-error kernel)
       (%regenerate policy (format nil "writing tests failed: ~A"
                                   (kernel-last-action-error kernel)))
       (progn
-        (setf (policy-state policy) :author-loaded)
+        (setf (policy-authored-written-p policy) t
+              (policy-state policy) :author-loaded)
         (%act "load-system"
               (append (list "system" (policy-test-system policy))
                       (when (%clear-fasls-p policy) (list "clear_fasls" t)))
