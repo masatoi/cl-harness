@@ -266,6 +266,24 @@
 (deftest render-tool-schemas-empty-is-nil
   (ok (null (render-tool-schemas '()))))
 
+(deftest render-tool-schemas-drops-noise-optionals
+  ;; G1: niche optional keys a weak model fills spuriously (esp. readtable) must
+  ;; NOT be rendered — showing them tempts the model to pass e.g.
+  ;; readtable=:common-lisp, which cl-mcp rejects ("Readtable :X not found"),
+  ;; stalling the patch loop. Required + genuinely-useful optionals still render.
+  (let* ((desc
+          (%hash "name" "lisp-patch-form" "inputSchema"
+           (%hash "properties"
+                  (%hash "file_path" (%hash) "form_name" (%hash)
+                         "old_text" (%hash) "new_text" (%hash)
+                         "readtable" (%hash) "dry_run" (%hash))
+                  "required" (vector "file_path" "form_name" "old_text" "new_text"))))
+         (out (render-tool-schemas (list desc))))
+    (ok (search "file_path*" out))
+    (ok (search "old_text*" out))
+    (ok (not (search "readtable" out)))
+    (ok (not (search "dry_run" out)))))
+
 (deftest failure-view-shows-current-patch-content
   ;; The agent must see the source it just wrote (the latest successful
   ;; patch's content), not only that a form was patched — otherwise it
