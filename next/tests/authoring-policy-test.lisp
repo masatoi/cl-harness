@@ -84,6 +84,7 @@
    (load-bad-p :initform nil :accessor tt-load-bad-p)
    (test-edits :initform 0 :accessor tt-test-edits)
    (edit-forms :initform nil :accessor tt-edit-forms)
+   (red-name :initform "CL-HARNESS-AUTHORED-TESTS" :accessor tt-red-name)
    (kill-count :initform 0 :accessor tt-kill-count)))
 
 (defun %h (&rest plist) (alexandria:plist-hash-table plist :test 'equal))
@@ -100,12 +101,21 @@
 (defun %err (text)
   (%h "isError" t "content" (list (%h "type" "text" "text" text))))
 
+(defun %deftest-name-in (content)
+  "Upcased name of the first (deftest NAME …) in CONTENT, or NIL."
+  (let ((p (search "(deftest " content :test #'char-equal)))
+    (when p
+      (let* ((start (+ p (length "(deftest ")))
+             (rest (string-left-trim '(#\Space #\Tab #\Newline) (subseq content start)))
+             (end (position-if (lambda (c) (member c '(#\Space #\Tab #\Newline #\) #\())) rest)))
+        (when (and end (plusp end)) (string-upcase (subseq rest 0 end)))))))
+
 (defun %tdd-tests-result (transport)
   (if (tt-impl-done-p transport)
       (%h "passed" 1 "failed" 0)
       (%h "passed" 0 "failed" 1
           "failed_tests"
-          (list (%h "test_name" "CL-HARNESS-AUTHORED-TESTS"
+          (list (%h "test_name" (tt-red-name transport)
                     "form" "(= 5 (ADD 2 3))" "reason" "stub")))))
 
 (defmethod transport-send-request ((tr tdd-transport) body)
@@ -145,6 +155,9 @@
                 (incf (tt-test-edits tr))
                 (push (cons (gethash "operation" args) (gethash "form_name" args))
                       (tt-edit-forms tr))
+                (alexandria:when-let
+                    ((n (%deftest-name-in (or (gethash "content" args) ""))))
+                  (setf (tt-red-name tr) n))
                 (setf (tt-test-content tr)
                       (format nil "~A~%~A"
                               (tt-test-content tr) (or (gethash "content" args) "")))))
@@ -406,7 +419,31 @@
 (deftest old-add-test (ok (= 5 (add 2 3))))"
                     :transport-var tr)
     (run-kernel kernel :max-steps 60)
-    (ok (member '("replace" . "old-add-test") (tt-edit-forms tr) :test #'equal))))
+    (ok (member '("replace" . "old-add-test") (tt-edit-forms tr) :test #'equal))
+    ;; no fixed-name edit is ever issued: the authored bodies are re-wrapped
+    ;; under the :supersedes name and replaced in place, so a second
+    ;; cl-harness-authored-tests deftest is structurally impossible.
+    (ok (not (member '("replace" . "cl-harness-authored-tests")
+                     (tt-edit-forms tr) :test #'equal)))))
+
+(deftest spec-change-manages-the-supersedes-name
+  ;; managed-name: :spec-change owns the :supersedes deftest name. The authored
+  ;; bodies are re-wrapped under that name (so authored-names tracks it for the
+  ;; RED-first check), and the lisp-edit-form content carries (deftest
+  ;; old-add-test …) — never the fixed name.
+  (with-tdd-kernel (kernel
+                    :mode :spec-change
+                    :supersedes "old-add-test"
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*)
+                    :initial-test "(defpackage #:s/tests/main-test (:use #:cl #:rove #:s/src/main))
+(in-package #:s/tests/main-test)
+(deftest old-add-test (ok (= 5 (add 2 3))))"
+                    :transport-var tr)
+    (let ((policy (cl-harness-next/src/kernel::kernel-policy kernel)))
+      (run-kernel kernel :max-steps 60)
+      (ok (equal '("OLD-ADD-TEST") (policy-authored-names policy)))
+      (ok (search "(deftest old-add-test" (tt-test-content tr)))
+      (ok (not (search "deftest cl-harness-authored-tests" (tt-test-content tr)))))))
 
 (deftest spec-change-supersedes-symbol-is-coerced
   ;; :supersedes may be passed as a SYMBOL (the natural Lisp way to name a
