@@ -140,7 +140,7 @@ prefixes). The deftest name does not matter."
    (test-package :initarg :test-package :reader policy-test-package)
    (author-fn :initarg :author-fn :reader policy-author-fn)
    (reviewer :initarg :reviewer :reader policy-reviewer)
-   (fix-policy :initarg :fix-policy :reader policy-fix-policy)
+   (fix-policy :initarg :fix-policy :initform nil :reader policy-fix-policy)
    (clear-fasls-p :initarg :clear-fasls :initform t :reader %clear-fasls-p)
    (k :initarg :k :initform 3 :reader policy-k)
    (state :initform :init :accessor policy-state)
@@ -367,6 +367,16 @@ gave a failed_tests array and EVERY authored name appears in it."
               (every (lambda (n) (%name-in-failures-p n failed))
                      (policy-authored-names policy))))))
 
+(defun %authored-tests-green-p (policy result)
+  "True when the build is clean (loaded, not a tool error) and NONE of the
+authored test names appears in failed_tests — the authored coverage tests
+pass against the existing (correct) code."
+  (and (hash-table-p result)
+       (not (gethash "isError" result))
+       (let ((failed (gethash "failed_tests" result)))
+         (notany (lambda (n) (%name-in-failures-p n failed))
+                 (policy-authored-names policy)))))
+
 (defun %review-subject (policy)
   "The review prompt: the goal, acceptance criteria, and the authored tests,
 asking the reviewer to reject tautologies / dodges."
@@ -385,24 +395,41 @@ AUTHORED TESTS:~%~A"
                  :reason "review authored tests against the goal"))
 
 (defun %author-verify (policy kernel)
-  "After RED-first run-tests: if the authored tests fail against the unfixed
-code, send them to review; otherwise they are vacuous — regenerate."
-  (if (%authored-tests-red-p policy (kernel-last-result kernel))
-      (%emit-review policy)
-      (%regenerate policy
-                   "your tests passed on the unfixed code (vacuous or already \
-met); assert the goal so they fail until it is implemented")))
+  "After the authored run-tests: gate the tests by mode. :coverage is
+GREEN-first — against correct code the authored tests must pass (clean
+build, no authored name in failed_tests); a failing test is wrong and
+regenerates. :tdd / :spec-change are RED-first — the authored tests must
+fail against the unfixed code, else they are vacuous and regenerate."
+  (let ((result (kernel-last-result kernel)))
+    (if (eq :coverage (policy-mode policy))
+        (if (%authored-tests-green-p policy result)
+            (%emit-review policy)
+            (%regenerate policy
+                         "your test failed against the existing code; a coverage \
+test must pass — assert the behavior the code actually has"))
+        (if (%authored-tests-red-p policy result)
+            (%emit-review policy)
+            (%regenerate policy
+                         "your tests passed on the unfixed code (vacuous or already \
+met); assert the goal so they fail until it is implemented")))))
 
 (defun %author-reviewed (policy kernel)
-  "After the review verdict: on PASS advance to the inner fix dial (same
-step, mirroring the adaptive dial); on a reject regenerate."
+  "After the review verdict: a reject regenerates. On PASS, :coverage has
+nothing to fix (the tests are authored and green), so the mission finishes;
+:tdd / :spec-change advance to the inner fix dial (same step, mirroring the
+adaptive dial)."
   (let ((verdict (kernel-last-verdict kernel)))
-    (if (and verdict (verdict-pass-p verdict))
-        (progn (setf (policy-state policy) :fix)
-               (decide (policy-fix-policy policy) kernel))
-        (%regenerate policy
-                     (format nil "review rejected the tests: ~A"
-                             (and verdict (verdict-reason verdict)))))))
+    (cond
+      ((not (and verdict (verdict-pass-p verdict)))
+       (%regenerate policy
+                    (format nil "review rejected the tests: ~A"
+                            (and verdict (verdict-reason verdict)))))
+      ((eq :coverage (policy-mode policy))
+       (make-decision :kind :finish
+                      :reason "coverage tests added and green"))
+      (t
+       (setf (policy-state policy) :fix)
+       (decide (policy-fix-policy policy) kernel)))))
 
 (defmethod decide ((policy authoring-policy) kernel)
   "The test-authoring FSM (spec 2026-06-14): read source → ensure skeleton →

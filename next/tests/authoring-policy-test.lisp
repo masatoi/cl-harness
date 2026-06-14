@@ -208,6 +208,7 @@
 (in-package #:s/src/main)
 (defun add (a b) (declare (ignore a b)) 0)")
                                         (initial-test "")
+                                        impl-done
                                         transport-var)
                            &body body)
   (let ((tr (or transport-var (gensym "TR"))))
@@ -215,6 +216,7 @@
        (uiop:delete-file-if-exists log-path)
        (let* ((,tr (make-instance 'tdd-transport :src ,src))
               (log (progn (setf (tt-test-content ,tr) ,initial-test)
+                          (when ,impl-done (setf (tt-impl-done-p ,tr) t))
                           (open-event-log log-path)))
               (env (make-cl-mcp-environment
                     :client (make-mcp-client ,tr)
@@ -459,3 +461,45 @@
     (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
       (ok (eq :done status))
       (ok (and (stringp reason) (search "clean" reason))))))
+
+(deftest coverage-authors-passing-tests-and-finishes
+  ;; :coverage adds tests for existing CORRECT code: they must LOAD and PASS
+  ;; (green-first), the judge gates non-vacuity, and there is NO fix phase —
+  ;; the mission finishes once the tests are authored and green.
+  (with-tdd-kernel (kernel
+                    :mode :coverage
+                    :impl-done t          ; code is correct → authored tests pass
+                    :judge #'approve-judge
+                    :author-fn (lambda (p) (declare (ignore p)) *good-deftest*))
+    (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+      (ok (eq :done status))
+      (ok (and (stringp reason) (search "coverage" reason))))))
+
+(deftest coverage-failing-test-is-regenerated
+  ;; A coverage test that FAILS against the existing code is wrong (or the code
+  ;; lacks the behavior) — green-first rejects it and the run regenerates to K.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :coverage   ; impl-done NIL → authored test reported failing
+                      :judge #'approve-judge
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*))
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (declare (ignore reason))
+        (ok (eq :given-up status)))
+      (ok (>= calls 3)))))
+
+(deftest coverage-review-reject-regenerates
+  ;; Green-first can't prove non-vacuity, so the judge is the integrity gate:
+  ;; a rejected (e.g. tautological) coverage test regenerates to give-up.
+  (let ((calls 0))
+    (with-tdd-kernel (kernel
+                      :mode :coverage :impl-done t :judge #'reject-judge
+                      :author-fn (lambda (p) (declare (ignore p))
+                                   (incf calls) *good-deftest*))
+      (multiple-value-bind (status reason) (run-kernel kernel :max-steps 60)
+        (ok (eq :given-up status))
+        ;; the give-up is BECAUSE the judge rejected — green-first passed
+        ;; (impl-done), so the review oracle is demonstrably the gate.
+        (ok (and (stringp reason) (search "review rejected" reason))))
+      (ok (>= calls 3)))))
