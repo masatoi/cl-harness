@@ -201,3 +201,62 @@ human にエスカレーション(subagent-driven の「plan が誤りなら esc
 - **Qwen は author 相を回せる**(初回で goal 正しい失敗テスト生成、再現)。
 - **残るブロッカーは F3(write 機構)**で、上記再設計が必要。RED-first 以降
   (review / template-fix)の実機観測は F3 解消後に持ち越し。
+
+---
+
+## 完走 — write 機構 再設計後の e2e(2026-06-14, controller)
+
+提案した再設計(固定名 deftest `cl-harness-authored-tests` ＋ `lisp-edit-form`
+insert/replace、author prompt に「bare シンボル名」明示)を実装(commit
+`ce5b493`、canned 全 301 緑)。fixture をクリーンに戻して**再走 → `STATUS: DONE`、
+`REASON: clean verification green`(終了コード 0)**。**Qwen3.6 が TDD ブートストラップを
+最後まで完走**。
+
+### 実機の最終成果物(fixture)
+
+`tests/main-test.lisp`(Qwen が著作 → 固定名で正規化 → `lisp-edit-form` insert):
+```lisp
+(deftest cl-harness-authored-tests
+  (ok (= (add 1 2) 3))
+  (ok (= (add 0 0) 0))
+  (ok (= (add -1 1) 0)))
+```
+`src/main.lisp`(template-fix が stub を充填):
+```lisp
+(defun add (a b)
+  (+ a b))
+```
+著作テストは **bare `add`** を使用(強化した author prompt が効き、F2 の package 修飾は
+再発せず)。
+
+### ログのフェーズ列(seq、40 イベント超)
+
+| seq | フェーズ | 内容 |
+|-----|---------|------|
+| 2-7 | init | `fs-read-file` src/test → SUT surface 導出 |
+| 8-10 | **author 書込** | `lisp-edit-form insert authored tests`(in-package アンカー) **成功** |
+| 11-13 | load | 著作テストを含む test system ロード |
+| 14-16 | **RED-first** | `run-tests` → 著作テスト赤(stub `add`→0)を確認 |
+| 17-18 | **review** | `consult` tests-review(Qwen judge)→ **承認** |
+| 19-27 | fix(discover) | template-fix が `ADD` stub を発見 + baseline cross-check |
+| 28-39+ | fix(fill) | `lisp-edit-form template-fix: ADD` で本体充填 → reload → verify |
+| … | final | clean verification green → `:done` |
+
+### フェーズ別の結果(全成功)
+
+| フェーズ | 結果 |
+|----------|------|
+| author | **成功**(bare シンボルで goal 正しい失敗テスト) |
+| test 書込 | **成功**(`lisp-edit-form` insert、上書きガード回避) |
+| RED-first | **成功**(著作テスト赤を確認) |
+| review | **成功**(Qwen judge 承認) |
+| fix(template) | **成功**(stub `add` を `(+ a b)` に充填) |
+| clean-verify | **成功**(`:done clean verification green`) |
+
+### 結論
+
+弱モデル(Qwen3.6-35B-A3B)で **goal → 失敗テスト著作 → ゲート(RED-first + review) →
+実装 → クリーン緑** の TDD ブートストラップが**実機で完走**。これは「authoring の
+agency をハーネスが所有し、LLM は body オラクル(author / judge / snippet)に縮約する」
+設計が弱モデルでも機能することの初の e2e 実証。canned 301 件 + 本 e2e で MVP(`:mode :tdd`)
+の正しさを多層に確認。
