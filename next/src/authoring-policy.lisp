@@ -68,7 +68,12 @@ Returns (values forms error-string)."
   "Validate RAW (an LLM reply) as one-or-more rove DEFTEST forms, parsed
 with the Lisp reader (*read-eval* nil). Returns (values TEXT NAMES) on
 success — TEXT the verbatim trimmed/de-fenced reply, NAMES the upcased
-deftest-name strings — or (values NIL REASON) for the regenerate loop."
+deftest-name strings — or (values NIL REASON) for the regenerate loop.
+
+Standalone reader-based validator. The authoring FSM's live author path
+uses %NORMALIZE-AUTHORED (which validates AND re-wraps the bodies into the
+single fixed-name deftest the write mechanism replaces); this function is
+retained as a reusable deftest checker."
   (let ((text (string-trim +ws+ (strip-code-fence raw))))
     (when (zerop (length text))
       (return-from extract-deftest-forms

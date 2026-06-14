@@ -1,9 +1,22 @@
 # Test authoring for cl-harness-next — `authoring-policy` (`:mode :tdd` MVP)
 
 **Date**: 2026-06-14
-**Status**: design (approved in brainstorming; not yet implemented)
+**Status**: **implemented** (MVP `:mode :tdd`; real-LLM e2e reached `:done`).
 **Spec kind**: forward design (MVP = `:tdd`; `:spec-change` / `:coverage` are
 designed-for extension points, not built in the first slice).
+
+> **As-built note (write mechanism, §4.2/§5):** the e2e found cl-mcp refuses to
+> overwrite an existing `.lisp` with `fs-write-file`. The shipped write mechanism
+> therefore differs from §4.2/§5 below: instead of appending the validated
+> `deftest`(s) and rewriting the whole file, the dial normalizes all authored
+> bodies into **one fixed-name deftest** (`cl-harness-authored-tests`,
+> `%normalize-authored`) and writes it via **`lisp-edit-form`** — `insert_after`
+> the `in-package` form on the first write, `replace` by name thereafter
+> (`fs-write-file` only creates an absent skeleton). RED-first then matches the
+> fixed name. The §6 integrity model and the phase pipeline are unchanged. See
+> `docs/notes/2026-06-14-tdd-authoring-experiment.md` (F3) for the rationale.
+> The review judge reuses the existing `review-oracle` (a `:tests-review`
+> profile), not a new `tests-review-oracle` class.
 
 ## 1. Problem & scope
 
