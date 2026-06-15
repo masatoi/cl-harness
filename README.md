@@ -62,6 +62,24 @@ agent that can fix but never declares completion into a finished,
 clean-verified mission (the first live data point for the
 capability-adaptive dial hypothesis).
 
+A follow-on benchmark campaign (see
+`docs/notes/2026-06-16-dial-ladder-bottlenecks.md`) measured the dial
+ladder against a weak model (Qwen3.6) on a 12-fixture fix suite and
+found that success rate *inverts* with agency —
+`template-fix` 9/9 (body bugs) > `scripted` 8/12 > `guided` 1/12 —
+because the limit is the harness's two layers, not the model's
+reasoning: constructing valid tool calls, then recognising completion.
+The model emitted correct fixes at every dial; a higher dial just hands
+it more tool calls to get wrong, and more chances to overshoot a green
+it can't declare done. Repairing both (argument coercion for the first;
+a harness "green-stop" for the second) brings `guided` to 8/12 —
+parity with `scripted`. The green-stop half shipped: the guided dial
+now finishes at the first green via the mandatory clean gate by default
+(`:green-stop`, opt-out via `CLH_GREEN_STOP=0`). Two false-failure
+harness bugs had to be removed first — schema noise feeding optional-arg
+hallucination, and benchmark sandboxes shadowed on ASDF's registry (the
+latter fixed in cl-mcp).
+
 ## Quick start
 
 ### Prerequisites
