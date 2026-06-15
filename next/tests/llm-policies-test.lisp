@@ -29,6 +29,7 @@
   (:import-from #:cl-harness-next/src/llm-policies
                 #:guided-policy
                 #:self-directed-policy
+                #:policy-green-stop-p
                 #:%clean-oracle)
   (:import-from #:cl-harness-next/src/verification-oracle
                 #:oracle-clear-fasls-p))
@@ -156,6 +157,7 @@
 (deftest guided-happy-path-passes-the-clean-gate
   (with-dial-kernel (kernel :responses (list *run-tests-json* *edit-json*
                                              *run-tests-json* *finish-json*)
+                            :policy-extra-args (list :green-stop nil)
                             :transport-var transport)
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :done status))
@@ -173,7 +175,8 @@
                               :prompts-box prompts
                               :policy-extra-args
                               (list :invariants
-                                    (list "never edit test files")))
+                                    (list "never edit test files")
+                                    :green-stop nil))
       (ok (eq :done (run-kernel kernel)))
       (let* ((chronological (reverse (car prompts)))
              (first-prompt (first chronological))
@@ -186,6 +189,7 @@
 (deftest guided-failed-clean-gate-resumes-stepping
   (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
                                              *finish-json* *give-up-json*)
+                            :policy-extra-args (list :green-stop nil)
                             :transport-args (list :kill-resets-p t)
                             :transport-var transport)
     (multiple-value-bind (status reason) (run-kernel kernel)
@@ -194,13 +198,13 @@
     (ok (= 1 (dial-kill-count transport)))))
 
 (deftest guided-green-stop-finishes-at-green-without-model-finish
-  ;; With :green-stop t, once the world model shows the tests green the harness
-  ;; drives straight to the mandatory clean gate and finishes — it does NOT wait
-  ;; for the agent's :finish.  Here the agent reaches green (edit -> run-tests)
-  ;; and would then GIVE UP; green-stop must finish before that give-up is read.
+  ;; green-stop is ON BY DEFAULT: once the world model shows the tests green the
+  ;; harness drives straight to the mandatory clean gate and finishes — it does
+  ;; NOT wait for the agent's :finish.  Here the agent reaches green (edit ->
+  ;; run-tests) and would then GIVE UP; green-stop must finish first.  No
+  ;; :green-stop arg is passed, so this also pins the default-on behaviour.
   (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
                                              *give-up-json*)
-                            :policy-extra-args (list :green-stop t)
                             :transport-var transport)
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :done status))
@@ -209,12 +213,13 @@
          (world-model-projection (kernel-world-model kernel) :verification)))
     (ok (= 1 (dial-kill-count transport)))))
 
-(deftest guided-without-green-stop-needs-model-finish
-  ;; Default (green-stop off): the same green-then-give-up script does NOT
-  ;; finish — the harness waits for the agent, which gives up.  Pins the opt-in
-  ;; nature of green-stop (the default dial is unchanged).
+(deftest guided-green-stop-opt-out-needs-model-finish
+  ;; Opt out with :green-stop nil: the same green-then-give-up script does NOT
+  ;; finish — the harness waits for the agent, which gives up.  green-stop is
+  ;; default-on, so opting out must restore the pure agent-driven dial.
   (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
-                                             *give-up-json*))
+                                             *give-up-json*)
+                            :policy-extra-args (list :green-stop nil))
     (ok (eq :given-up (run-kernel kernel)))))
 
 (deftest guided-green-stop-failed-clean-gate-resumes-and-stays-fire-once
@@ -274,10 +279,13 @@
 
 (deftest guided-transient-unparseable-action-recovers
   ;; A leading malformed reply must be re-sampled (obtain-action), not fatal:
-  ;; the mission still reaches :done once a valid action follows.
+  ;; the mission still reaches :done via the agent's explicit :finish once a
+  ;; valid action follows.  :green-stop nil so green-stop does not preempt the
+  ;; finish — this test is about transient-reply recovery, not green-stop.
   (with-dial-kernel (kernel :responses (list "garbage not json"
                                              *run-tests-json* *edit-json*
                                              *run-tests-json* *finish-json*)
+                            :policy-extra-args (list :green-stop nil)
                             :transport-var transport)
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :done status))
@@ -346,3 +354,17 @@
                                :system "s" :test-system "s/tests"
                                :step-fn (constantly ""))))
     (ok (not (oracle-clear-fasls-p (%clean-oracle policy))))))
+
+(deftest guided-green-stop-default-is-on
+  ;; The slot initform is t: a guided-policy built with no :green-stop arg has
+  ;; green-stop enabled.  Pins the default at the SLOT level — a unit complement
+  ;; to guided-green-stop-finishes-at-green-without-model-finish, which only
+  ;; observes the effect.  Opting out (:green-stop nil) flips it off.
+  (let ((on (make-instance 'guided-policy
+                           :system "s" :test-system "s/tests"
+                           :step-fn (constantly "")))
+        (off (make-instance 'guided-policy
+                            :system "s" :test-system "s/tests"
+                            :step-fn (constantly "") :green-stop nil)))
+    (ok (policy-green-stop-p on))
+    (ok (not (policy-green-stop-p off)))))
