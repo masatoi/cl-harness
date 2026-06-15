@@ -41,7 +41,8 @@
                   :reader dial-kill-resets-p)
    (edit-fails-p :initarg :edit-fails-p :initform nil
                  :reader dial-edit-fails-p)
-   (fixed-p :initform nil :accessor dial-fixed-p)
+   (fixed-p :initarg :fixed-p :initform nil :accessor dial-fixed-p)
+   (no-counts-p :initarg :no-counts-p :initform nil :reader dial-no-counts-p)
    (kill-count :initform 0 :accessor dial-kill-count)))
 
 (defmethod transport-send-request ((transport dial-transport) body)
@@ -80,12 +81,14 @@
                       (setf (dial-fixed-p transport) t))
                     "{\"content\":[]}")
                    ((equal tool "run-tests")
-                    (if (dial-fixed-p transport)
-                        "{\"passed\":3,\"failed\":0}"
-                        (concatenate 'string
-                                     "{\"passed\":2,\"failed\":1,"
-                                     "\"failed_tests\":[{\"test_name\":"
-                                     "\"t-x\",\"reason\":\"boom\"}]}")))
+                    (cond
+                      ((dial-no-counts-p transport)
+                       "{\"content\":[{\"type\":\"text\",\"text\":\"ran\"}]}")
+                      ((dial-fixed-p transport) "{\"passed\":3,\"failed\":0}")
+                      (t (concatenate 'string
+                                      "{\"passed\":2,\"failed\":1,"
+                                      "\"failed_tests\":[{\"test_name\":"
+                                      "\"t-x\",\"reason\":\"boom\"}]}"))))
                    ((equal tool "pool-kill-worker")
                     (incf (dial-kill-count transport))
                     (when (dial-kill-resets-p transport)
@@ -213,6 +216,47 @@
   (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
                                              *give-up-json*))
     (ok (eq :given-up (run-kernel kernel)))))
+
+(deftest guided-green-stop-failed-clean-gate-resumes-and-stays-fire-once
+  ;; green-stop fires at green, but the clean gate FAILS (kill-resets-p t resets
+  ;; the fix when the worker is killed).  The policy must resume stepping, must
+  ;; NOT loop, and must NOT report a false done: the fire-once guard keeps
+  ;; green-stop from re-firing on the still-green incremental projection, so the
+  ;; agent's give-up is reached.  Exactly one clean gate ran (one worker kill).
+  (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
+                                             *give-up-json*)
+                            :policy-extra-args (list :green-stop t)
+                            :transport-args (list :kill-resets-p t)
+                            :transport-var transport)
+    (ok (eq :given-up (run-kernel kernel)))
+    (ok (= 1 (dial-kill-count transport)))))
+
+(deftest guided-green-stop-fires-on-a-green-baseline
+  ;; If the tests are already green at baseline (nothing to fix), green-stop
+  ;; fires on the first run-tests and finishes via the clean gate — the mission
+  ;; is trivially satisfied, so this is correct.  Documents that green-stop is
+  ;; gated on the tests being green, NOT on whether a patch was applied.
+  (with-dial-kernel (kernel :responses (list *run-tests-json* *give-up-json*)
+                            :policy-extra-args (list :green-stop t)
+                            :transport-args (list :fixed-p t)
+                            :transport-var transport)
+    (multiple-value-bind (status reason) (run-kernel kernel)
+      (ok (eq :done status))
+      (ok (search "clean" reason)))
+    (ok (= 1 (dial-kill-count transport)))))
+
+(deftest guided-green-stop-ignores-a-run-with-no-counts
+  ;; A run-tests result carrying no structured pass/fail counts (failed=NIL) must
+  ;; NOT be read as green: %preempt-finish-p requires (eql 0 failed) AND a
+  ;; positive passed count.  green-stop stays silent, no clean gate runs, and the
+  ;; agent's give-up is reached (no false done on a count-less run).
+  (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
+                                             *give-up-json*)
+                            :policy-extra-args (list :green-stop t)
+                            :transport-args (list :no-counts-p t)
+                            :transport-var transport)
+    (ok (eq :given-up (run-kernel kernel)))
+    (ok (= 0 (dial-kill-count transport)))))
 
 (deftest guided-findings-fold-into-the-ledger
   (with-dial-kernel (kernel :responses (list *finding-json* *give-up-json*))

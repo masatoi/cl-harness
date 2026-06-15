@@ -269,7 +269,11 @@ first green tests (via the mandatory clean gate) instead of waiting for
 the agent's :finish.  See %PREEMPT-FINISH-P.")
    (green-stop-spent :initform nil :accessor %green-stop-spent
                      :documentation "Guards green-stop to fire at most
-once per mission; a failed clean gate then falls back to agent steps."))
+once per mission: set on the first fire and never cleared.  This both
+prevents an infinite loop (after a failed clean gate the still-green
+incremental projection would otherwise re-fire every step) AND trades
+away re-triggering on a later, genuinely-different green — past one
+failed clean gate the agent must drive an explicit :finish itself."))
   (:documentation "The guided dial (spec §6): the harness holds the
 agenda and invariants; the agent chooses each step."))
 
