@@ -48,6 +48,7 @@
   (:import-from #:cl-harness-next/src/verification-ledger
                 #:last-test
                 #:test-run-failed
+                #:test-run-passed
                 #:clean-verified-p)
   (:import-from #:cl-harness-next/src/change-ledger
                 #:patches)
@@ -188,9 +189,32 @@ context view, or NIL."))
                      (or (agent-action-summary action)
                          "(no summary)")))))))
 
+(defgeneric %preempt-finish-p (policy kernel)
+  (:documentation "True when the harness should drive straight to the
+mandatory clean gate itself instead of asking the agent for another
+step — i.e. the mission's green acceptance is already met.  Default NIL
+(agent-driven finish: the original llm-step behaviour).")
+  (:method ((policy llm-step-policy) kernel)
+    (declare (ignore kernel))
+    nil))
+
+(defgeneric %note-preempt-fired (policy)
+  (:documentation "Hook run when the harness preempts the agent's finish
+via %PREEMPT-FINISH-P.  Default no-op.")
+  (:method ((policy llm-step-policy))
+    nil))
+
 (defmethod decide ((policy llm-step-policy) kernel)
   (ecase (%policy-state policy)
-    (:stepping (%llm-step policy kernel))
+    (:stepping
+     (if (%preempt-finish-p policy kernel)
+         (progn
+           (%note-preempt-fired policy)
+           (setf (%policy-state policy) :clean-gate)
+           (make-decision :kind :consult
+                          :oracle (%clean-oracle policy)
+                          :reason "green-stop: tests green, mandatory clean gate"))
+         (%llm-step policy kernel)))
     (:clean-gate
      (let ((verdict (kernel-last-verdict kernel)))
        (if (and verdict (verdict-pass-p verdict))
@@ -238,7 +262,14 @@ the world model, never asserted by the agent."
 DEFAULT-FIX-AGENDA.")
    (invariants :initarg :invariants :initform nil
                :reader policy-invariants
-               :documentation "Strings rendered as hard constraints."))
+               :documentation "Strings rendered as hard constraints.")
+   (green-stop :initarg :green-stop :initform nil :reader policy-green-stop-p
+               :documentation "When true, the harness finishes at the
+first green tests (via the mandatory clean gate) instead of waiting for
+the agent's :finish.  See %PREEMPT-FINISH-P.")
+   (green-stop-spent :initform nil :accessor %green-stop-spent
+                     :documentation "Guards green-stop to fire at most
+once per mission; a failed clean gate then falls back to agent steps."))
   (:documentation "The guided dial (spec §6): the harness holds the
 agenda and invariants; the agent chooses each step."))
 
@@ -256,6 +287,25 @@ agenda and invariants; the agent chooses each step."))
                               (subgoal-label subgoal)))
                     (policy-agenda policy))
             (policy-invariants policy))))
+
+(defmethod %preempt-finish-p ((policy guided-policy) kernel)
+  "Guided green-stop: when enabled and not yet spent, drive to the clean
+gate as soon as the world model shows the tests green (failed=0,
+passed>0).  A weak model reaches green but then fails to emit :finish and
+overshoots — re-breaking the code; green-stop confirms via the mandatory
+clean gate (so no false done) and finishes at the right moment.  Fires at
+most once per mission, so a spurious green whose clean gate fails falls
+back to agent-driven steps."
+  (and (policy-green-stop-p policy)
+       (not (%green-stop-spent policy))
+       (let ((run (last-test (world-model-projection
+                              (kernel-world-model kernel) :verification))))
+         (and run
+              (eql 0 (test-run-failed run))
+              (plusp (or (test-run-passed run) 0))))))
+
+(defmethod %note-preempt-fired ((policy guided-policy))
+  (setf (%green-stop-spent policy) t))
 
 ;; --- Self-directed dial -----------------------------------------------------
 

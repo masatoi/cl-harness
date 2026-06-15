@@ -190,6 +190,30 @@
       (ok (search "stuck" reason)))
     (ok (= 1 (dial-kill-count transport)))))
 
+(deftest guided-green-stop-finishes-at-green-without-model-finish
+  ;; With :green-stop t, once the world model shows the tests green the harness
+  ;; drives straight to the mandatory clean gate and finishes — it does NOT wait
+  ;; for the agent's :finish.  Here the agent reaches green (edit -> run-tests)
+  ;; and would then GIVE UP; green-stop must finish before that give-up is read.
+  (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
+                                             *give-up-json*)
+                            :policy-extra-args (list :green-stop t)
+                            :transport-var transport)
+    (multiple-value-bind (status reason) (run-kernel kernel)
+      (ok (eq :done status))
+      (ok (search "clean" reason)))
+    (ok (clean-verified-p
+         (world-model-projection (kernel-world-model kernel) :verification)))
+    (ok (= 1 (dial-kill-count transport)))))
+
+(deftest guided-without-green-stop-needs-model-finish
+  ;; Default (green-stop off): the same green-then-give-up script does NOT
+  ;; finish — the harness waits for the agent, which gives up.  Pins the opt-in
+  ;; nature of green-stop (the default dial is unchanged).
+  (with-dial-kernel (kernel :responses (list *edit-json* *run-tests-json*
+                                             *give-up-json*))
+    (ok (eq :given-up (run-kernel kernel)))))
+
 (deftest guided-findings-fold-into-the-ledger
   (with-dial-kernel (kernel :responses (list *finding-json* *give-up-json*))
     (ok (eq :given-up (run-kernel kernel)))
