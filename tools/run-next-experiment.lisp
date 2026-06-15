@@ -177,15 +177,20 @@ behavior proposed for the harness."
                  :system *system* :test-system *test-system*
                  :diagnose-fn *diagnose-fn* :clear-fasls t))
 
-;; CLH_GREEN_STOP=1 enables the guided dial's harness green-stop: the harness
-;; finishes at the first green (via the mandatory clean gate) instead of waiting
-;; for the agent's :finish (which a weak model reaches green but fails to emit,
-;; then overshoots). Opt-in; default off preserves the pure agent-driven dial.
+;; Green-stop (the harness finishes at the first green, via the mandatory clean
+;; gate, instead of waiting for the agent's :finish) is ON BY DEFAULT in
+;; guided-policy. CLH_GREEN_STOP overrides it for dogfood runs: 0/off/no/false
+;; opts out (pure agent-driven finish); any other value keeps it on. When the
+;; variable is unset, the policy default (on) applies.
 (defun make-guided ()
-  (make-instance 'guided-policy
-                 :system *system* :test-system *test-system*
-                 :step-fn *step-fn* :clear-fasls t
-                 :green-stop (and (uiop:getenv "CLH_GREEN_STOP") t)))
+  (let ((env (uiop:getenv "CLH_GREEN_STOP")))
+    (apply #'make-instance 'guided-policy
+           :system *system* :test-system *test-system*
+           :step-fn *step-fn* :clear-fasls t
+           (when env
+             (list :green-stop
+                   (not (member env '("0" "off" "no" "false" "")
+                                :test #'string-equal)))))))
 
 (defun policy-factory (mission)
   (declare (ignore mission))

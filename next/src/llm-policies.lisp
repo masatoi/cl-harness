@@ -263,10 +263,12 @@ DEFAULT-FIX-AGENDA.")
    (invariants :initarg :invariants :initform nil
                :reader policy-invariants
                :documentation "Strings rendered as hard constraints.")
-   (green-stop :initarg :green-stop :initform nil :reader policy-green-stop-p
-               :documentation "When true, the harness finishes at the
-first green tests (via the mandatory clean gate) instead of waiting for
-the agent's :finish.  See %PREEMPT-FINISH-P.")
+   (green-stop :initarg :green-stop :initform t :reader policy-green-stop-p
+               :documentation "When true (the DEFAULT), the harness
+finishes at the first green tests (via the mandatory clean gate) instead
+of waiting for the agent's :finish — addressing the weak-model
+done-recognition bottleneck.  Pass :green-stop nil to opt out and get the
+pure agent-driven finish.  See %PREEMPT-FINISH-P.")
    (green-stop-spent :initform nil :accessor %green-stop-spent
                      :documentation "Guards green-stop to fire at most
 once per mission: set on the first fire and never cleared.  This both
