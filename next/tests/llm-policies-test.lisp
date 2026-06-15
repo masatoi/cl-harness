@@ -29,6 +29,7 @@
   (:import-from #:cl-harness-next/src/llm-policies
                 #:guided-policy
                 #:self-directed-policy
+                #:policy-green-stop-p
                 #:%clean-oracle)
   (:import-from #:cl-harness-next/src/verification-oracle
                 #:oracle-clear-fasls-p))
@@ -278,10 +279,13 @@
 
 (deftest guided-transient-unparseable-action-recovers
   ;; A leading malformed reply must be re-sampled (obtain-action), not fatal:
-  ;; the mission still reaches :done once a valid action follows.
+  ;; the mission still reaches :done via the agent's explicit :finish once a
+  ;; valid action follows.  :green-stop nil so green-stop does not preempt the
+  ;; finish — this test is about transient-reply recovery, not green-stop.
   (with-dial-kernel (kernel :responses (list "garbage not json"
                                              *run-tests-json* *edit-json*
                                              *run-tests-json* *finish-json*)
+                            :policy-extra-args (list :green-stop nil)
                             :transport-var transport)
     (multiple-value-bind (status reason) (run-kernel kernel)
       (ok (eq :done status))
@@ -350,3 +354,17 @@
                                :system "s" :test-system "s/tests"
                                :step-fn (constantly ""))))
     (ok (not (oracle-clear-fasls-p (%clean-oracle policy))))))
+
+(deftest guided-green-stop-default-is-on
+  ;; The slot initform is t: a guided-policy built with no :green-stop arg has
+  ;; green-stop enabled.  Pins the default at the SLOT level — a unit complement
+  ;; to guided-green-stop-finishes-at-green-without-model-finish, which only
+  ;; observes the effect.  Opting out (:green-stop nil) flips it off.
+  (let ((on (make-instance 'guided-policy
+                           :system "s" :test-system "s/tests"
+                           :step-fn (constantly "")))
+        (off (make-instance 'guided-policy
+                            :system "s" :test-system "s/tests"
+                            :step-fn (constantly "") :green-stop nil)))
+    (ok (policy-green-stop-p on))
+    (ok (not (policy-green-stop-p off)))))
