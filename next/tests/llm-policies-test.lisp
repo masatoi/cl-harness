@@ -72,7 +72,7 @@
                         (concatenate 'string
                                      "{\"isError\":true,\"content\":"
                                      "[{\"type\":\"text\","
-                                     "\"text\":\"form not found\"}]}")
+                                     "\"text\":\"Form F not found in a.lisp\"}]}")
                         (progn
                           (when (dial-fixable-p transport)
                             (setf (dial-fixed-p transport) t))

@@ -320,12 +320,14 @@ The dominant high-agency dead-end is a lisp-patch-form whose old_text
 will not whitespace-match: the model has the right fix but keeps
 re-trying an unmatchable old_text. The hint redirects it to re-emit the
 WHOLE form via a lisp-edit-form replace, which REPAIR-EDIT-ACTION then
-routes cleanly. A form-not-found error gets a form_name hint."
+routes cleanly. A form-not-found locate error (matched narrowly on the
+cl-mcp \"... not found in <path>\" shape, so a \"system not found\" /
+\"package not found\" does NOT mis-fire) gets a form_name hint."
   (when (stringp error-text)
     (cond
       ((search "old_text not found" error-text)
-       "Hint: stop retrying old_text — it must match the source text exactly, including whitespace. Instead re-emit the COMPLETE corrected form using lisp-edit-form with operation \"replace\" and the whole (def...) form in \"content\" (no old_text).")
-      ((search "not found" error-text)
+       "Hint: stop retrying old_text -- it must match the source text exactly, including whitespace. Instead re-emit the COMPLETE corrected form using lisp-edit-form with operation \"replace\" and the whole (def...) form in \"content\" (no old_text).")
+      ((search "not found in" error-text)
        "Hint: the form_name did not resolve. Use the bare symbol for a defun/defmacro, the full specializer list for a defmethod (e.g. \"area ((s square))\"), and the package name for a defpackage.")
       (t nil))))
 

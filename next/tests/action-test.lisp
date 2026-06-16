@@ -315,6 +315,16 @@ applied. Returns the (repaired) AGENT-ACTION."
   (ok (null (action-error-hint "3 tests passed, 0 failed")))
   (ok (null (action-error-hint nil))))
 
+(deftest action-error-hint-form-branch-is-narrow
+  ;; The form_name branch matches the cl-mcp "... not found in <path>" shape,
+  ;; so an unrelated "not found" (a system / package load error) does NOT
+  ;; mis-fire into a misleading form_name hint.
+  (ok (null (action-error-hint "system clh-foo not found")))
+  (ok (null (action-error-hint "package FOO not found")))
+  ;; the real form-locate shape still fires
+  (ok (search "form_name"
+              (action-error-hint "Form defun gret not found in /x/main.lisp"))))
+
 (deftest obtain-action-retry-prompt-carries-json-guidance
   ;; The corrective re-prompt steers the model toward valid JSON — the
   ;; tool_call envelope and escaped newlines — not just "reply with JSON".
