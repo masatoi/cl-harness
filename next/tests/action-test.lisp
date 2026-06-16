@@ -10,6 +10,7 @@
   (:import-from #:cl-harness-next/src/action
                 #:parse-action
                 #:repair-edit-action
+                #:action-error-hint
                 #:obtain-action
                 #:agent-action-type
                 #:agent-action-tool
@@ -290,3 +291,40 @@ applied. Returns the (repaired) AGENT-ACTION."
     (ok (equal "lisp-edit-form" (agent-action-tool repaired)))
     (ok (equal "defun" (gethash "form_type" (agent-action-arguments repaired))))
     (ok (null (gethash "old_text" (agent-action-arguments repaired))))))
+
+(deftest action-error-hint-steers-old-text-failure-to-full-form
+  ;; The dominant high-agency dead-end (an unmatchable old_text) is redirected
+  ;; to a whole-form lisp-edit-form replace, which repair-edit-action routes.
+  (let ((hint (action-error-hint
+               (concatenate 'string
+                "old_text not found in DEFUN DESCRIBE-PAIR form. "
+                "Note: matching is exact and whitespace-sensitive."))))
+    (ok (stringp hint))
+    (ok (search "lisp-edit-form" hint))
+    (ok (search "replace" hint))
+    (ok (search "content" hint))))
+
+(deftest action-error-hint-steers-form-not-found-to-form-name
+  (let ((hint (action-error-hint
+               "Form defun gret not found in /x/src/main.lisp")))
+    (ok (stringp hint))
+    (ok (search "form_name" hint))
+    (ok (search "specializer" hint))))
+
+(deftest action-error-hint-nil-for-unrelated-and-non-string
+  (ok (null (action-error-hint "3 tests passed, 0 failed")))
+  (ok (null (action-error-hint nil))))
+
+(deftest obtain-action-retry-prompt-carries-json-guidance
+  ;; The corrective re-prompt steers the model toward valid JSON — the
+  ;; tool_call envelope and escaped newlines — not just "reply with JSON".
+  (let* ((prompts '())
+         (fn (lambda (prompt)
+               (push prompt prompts)
+               (if (rest prompts)
+                   "{\"type\":\"finish\",\"status\":\"give_up\"}"
+                   "garbage"))))
+    (obtain-action fn "VIEW" :max-tries 3)
+    (let ((retry (first prompts)))
+      (ok (search "tool_call" retry))
+      (ok (search "\\n" retry)))))
