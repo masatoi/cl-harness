@@ -9,6 +9,7 @@
   (:use #:cl #:rove)
   (:import-from #:cl-harness-next/src/action
                 #:parse-action
+                #:repair-edit-action
                 #:obtain-action
                 #:agent-action-type
                 #:agent-action-tool
@@ -230,3 +231,62 @@ applied. Returns the (repaired) AGENT-ACTION."
                 "\"arguments\":{\"system\":\"s\",\"form_type\":\"function\"}}")))))
     (ok (equal "insert_after" (gethash "operation" edit)))
     (ok (equal "function" (gethash "form_type" run)))))
+
+(deftest repair-leaves-complex-form-names-intact
+  ;; The package-qualifier strip applies ONLY to a bare symbol token: a
+  ;; (setf …) accessor and a specialized defmethod head — both of which carry
+  ;; parens/spaces — must NOT be mangled by the "::" de-qualification.
+  (let ((setf-name
+          (gethash "form_name"
+                   (agent-action-arguments
+                    (%parsed
+                     (concatenate 'string
+                      "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                      "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defun\","
+                      "\"form_name\":\"(setf pkg::field)\",\"operation\":\"replace\","
+                      "\"content\":\"c\"}}")))))
+        (method-name
+          (gethash "form_name"
+                   (agent-action-arguments
+                    (%parsed
+                     (concatenate 'string
+                      "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                      "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defmethod\","
+                      "\"form_name\":\"area ((s pkg::square))\",\"operation\":\"replace\","
+                      "\"content\":\"c\"}}"))))))
+    (ok (equal "(setf pkg::field)" setf-name))
+    (ok (equal "area ((s pkg::square))" method-name))))
+
+(deftest repair-keeps-insert-shaped-operations
+  ;; An insert-shaped (but invalid) operation keeps its positional intent — it
+  ;; is NOT silently forced to replace (better to fail/feed back than to turn
+  ;; an insert into a replace).
+  (let ((args (agent-action-arguments
+               (%parsed
+                (concatenate 'string
+                 "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                 "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defun\","
+                 "\"form_name\":\"f\",\"operation\":\"insert\","
+                 "\"content\":\"c\"}}")))))
+    (ok (equal "insert" (gethash "operation" args)))))
+
+(deftest repair-does-not-mutate-the-original-action
+  ;; repair-edit-action is non-destructive: the parsed action it is handed (and
+  ;; the arguments table it shares with the action's :raw slot) is left
+  ;; untouched; the repair is built over a copy.
+  (let* ((original (parse-action
+                    (concatenate 'string
+                     "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\","
+                     "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"function\","
+                     "\"form_name\":\"f\",\"old_text\":\"o\","
+                     "\"new_text\":\"(defun f () 1)\"}}")))
+         (orig-args (agent-action-arguments original))
+         (repaired (repair-edit-action original)))
+    ;; original: still a patch-form with its function/old_text intact
+    (ok (equal "lisp-patch-form" (agent-action-tool original)))
+    (ok (equal "function" (gethash "form_type" orig-args)))
+    (ok (equal "o" (gethash "old_text" orig-args)))
+    ;; repaired (a distinct object): routed to an edit-form replace
+    (ok (equal "lisp-edit-form" (agent-action-tool repaired)))
+    (ok (equal "defun" (gethash "form_type" (agent-action-arguments repaired))))
+    (ok (null (gethash "old_text" (agent-action-arguments repaired))))))
