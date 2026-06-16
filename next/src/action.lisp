@@ -25,6 +25,7 @@
            #:agent-action-finding
            #:agent-action-decision
            #:parse-action
+           #:repair-edit-action
            #:obtain-action
            #:strip-code-fence
            #:action-parse-error
@@ -195,6 +196,120 @@ declares an unknown TYPE, or is missing a required field for its variant."
                                    (or type "<missing>"))
                   :raw parsed))))))
 
+(defun full-definition-form-p (text)
+  "True when TEXT reads as exactly one complete (defXXX ...) form with
+nothing but whitespace after it. Used to decide whether a patch's
+new_text is a whole replacement form (so it can be routed to an
+edit-form replace, sidestepping a brittle old_text). Reads with
+*READ-EVAL* nil into a throwaway package that is deleted afterwards, so
+the form's symbols never pollute a long-lived package. A read error or a
+trailing form yields NIL."
+  (let ((scratch (make-package (gensym "ACTION-READ-SCRATCH-") :use nil)))
+    (unwind-protect
+        (handler-case
+            (let ((*read-eval* nil)
+                  (*package* scratch))
+              (with-input-from-string (stream text)
+                (let ((form (read stream nil nil)))
+                  (and (consp form)
+                       (symbolp (first form))
+                       (let ((name (symbol-name (first form))))
+                         (and (>= (length name) 3)
+                              (string-equal (subseq name 0 3) "DEF")))
+                       (null (read stream nil nil))))))
+          (error () nil))
+      (delete-package scratch))))
+
+(defun %copy-arguments (table)
+  "Shallow copy of an EQUAL-keyed arguments hash-table, so a repair can
+build a fresh action without mutating the parsed original (and the
+ORIGINAL it aliases via the action's :raw slot)."
+  (let ((copy (make-hash-table :test 'equal
+                               :size (max 1 (hash-table-count table)))))
+    (maphash (lambda (k v) (setf (gethash k copy) v)) table)
+    copy))
+
+(defun repair-edit-action (action)
+  "Repair the common malformed tool-call arguments a weak local model
+emits for the cl-mcp editing tools, so a semantically-correct edit still
+dispatches. Returns ACTION unchanged unless it is a :TOOL-CALL for
+lisp-edit-form / lisp-patch-form with a repairable argument; this is a
+no-op for well-formed edits and for every non-editing tool. The original
+ACTION (and the parsed object it aliases via :raw) is never mutated — a
+repair builds a fresh action over a copied arguments table.
+
+Repairs: form_type \"function\" -> \"defun\"; an invalid operation that is
+NOT insert-like (overwrite / edit / delete-and-replace / ...) -> \"replace\"
+(an insert-shaped operation keeps its positional intent); a form_name
+carrying a leading form_type token (\"defmethod bark\" -> \"bark\"), plus —
+only for a bare symbol token — a leading package qualifier
+(\"pkg::user\" -> \"user\", while \"(setf pkg::x)\" and specializer lists
+are left intact); and a lisp-patch-form whose new_text is a COMPLETE
+definition form -> a lisp-edit-form replace with that form as content,
+dropping the brittle whitespace-sensitive old_text (the dominant
+high-agency failure: a correct fix the model cannot land because old_text
+will not match)."
+  (let ((tool (agent-action-tool action))
+        (source (agent-action-arguments action)))
+    (unless (and (eq :tool-call (agent-action-type action))
+                 (hash-table-p source)
+                 (member tool '("lisp-edit-form" "lisp-patch-form")
+                         :test #'string=))
+      (return-from repair-edit-action action))
+    (let ((args (%copy-arguments source))
+          (new-tool tool)
+          (changed nil))
+      ;; form_type: "function" is not a form type; the model means "defun".
+      (when (equal (gethash "form_type" args) "function")
+        (setf (gethash "form_type" args) "defun" changed t))
+      ;; operation: an invalid value that is NOT insert-shaped is the
+      ;; model's word for "replace this form" (overwrite / edit / ...).
+      ;; An insert-shaped value keeps its positional intent (do not force
+      ;; a replace).
+      (let ((op (gethash "operation" args)))
+        (when (and (stringp op)
+                   (not (member op '("replace" "insert_before" "insert_after")
+                                :test #'string=))
+                   (not (search "insert" (string-downcase op))))
+          (setf (gethash "operation" args) "replace" changed t)))
+      ;; form_name: strip a leading "<form_type> " token; then, only for a
+      ;; bare symbol token (no paren or space, so (setf pkg::x) and
+      ;; specializer lists stay intact), strip a leading package qualifier.
+      (let ((form-name (gethash "form_name" args))
+            (form-type (gethash "form_type" args)))
+        (when (stringp form-name)
+          (let ((bare form-name))
+            (when (and (stringp form-type)
+                       (> (length bare) (1+ (length form-type)))
+                       (string-equal (subseq bare 0 (length form-type)) form-type)
+                       (char= (char bare (length form-type)) #\Space))
+              (setf bare (string-left-trim " " (subseq bare (length form-type)))))
+            (when (and (not (find #\( bare))
+                       (not (find #\Space bare)))
+              (let ((sep (search "::" bare)))
+                (when sep (setf bare (subseq bare (+ sep 2))))))
+            (unless (equal bare form-name)
+              (setf (gethash "form_name" args) bare changed t)))))
+      ;; A patch whose new_text is a whole definition form: route to an
+      ;; edit-form replace and drop old_text.
+      (when (and (string= tool "lisp-patch-form")
+                 (stringp (gethash "new_text" args))
+                 (full-definition-form-p (gethash "new_text" args)))
+        (setf (gethash "content" args) (gethash "new_text" args)
+              (gethash "operation" args) "replace"
+              new-tool "lisp-edit-form"
+              changed t)
+        (remhash "new_text" args)
+        (remhash "old_text" args))
+      (if changed
+          (make-instance 'agent-action
+                         :type :tool-call
+                         :tool new-tool
+                         :arguments args
+                         :thought (agent-action-thought action)
+                         :raw (agent-action-raw action))
+          action))))
+
 (defun obtain-action (fn prompt &key (max-tries 3))
   "Call FN (a function of one prompt string returning a raw LLM response)
 and PARSE-ACTION the result, retrying up to MAX-TRIES.
@@ -212,7 +327,9 @@ on the first bad reply."
         (last-error "(no attempt)"))
     (dotimes (i max-tries (values nil last-error))
       (handler-case
-          (return (values (parse-action (funcall fn current)) nil))
+          (return (values (repair-edit-action
+                           (parse-action (funcall fn current)))
+                          nil))
         (error (condition)
           (setf last-error (princ-to-string condition))
           (setf current
