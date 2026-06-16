@@ -22,6 +22,12 @@
 
 (in-package #:cl-harness-next/tests/action-test)
 
+(defun %parsed (json)
+  "Parse JSON through OBTAIN-ACTION so the argument-repair pass — which
+lives in OBTAIN-ACTION, the way every policy obtains an action — is
+applied. Returns the (repaired) AGENT-ACTION."
+  (nth-value 0 (obtain-action (constantly json) "view")))
+
 (deftest tool-call-with-nested-arguments
   (let ((action (parse-action
                  (concatenate 'string
@@ -135,3 +141,92 @@
     (let ((retry-prompt (first prompts)))  ; most recent push = 2nd call's prompt
       (ok (search "MY-UNIQUE-VIEW" retry-prompt))
       (ok (search "valid" retry-prompt)))))
+
+(deftest repair-coerces-invalid-operation-to-replace
+  ;; A weak model emits operation:"overwrite" (or edit/delete-and-replace/…);
+  ;; the repair coerces any non-{replace,insert_before,insert_after} to replace.
+  (let ((args (agent-action-arguments
+               (%parsed
+                (concatenate 'string
+                 "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                 "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defun\","
+                 "\"form_name\":\"f\",\"operation\":\"overwrite\","
+                 "\"content\":\"(defun f () 1)\"}}")))))
+    (ok (equal "replace" (gethash "operation" args)))))
+
+(deftest repair-coerces-form-type-function-to-defun
+  (let ((args (agent-action-arguments
+               (%parsed
+                (concatenate 'string
+                 "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                 "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"function\","
+                 "\"form_name\":\"f\",\"operation\":\"replace\","
+                 "\"content\":\"(defun f () 1)\"}}")))))
+    (ok (equal "defun" (gethash "form_type" args)))))
+
+(deftest repair-strips-form-name-prefix-and-package-qualifier
+  ;; form_name "defmethod bark" (a leaked form_type token) -> "bark";
+  ;; "pkg::user" (a package qualifier) -> "user".
+  (let ((pre (agent-action-arguments
+              (%parsed
+               (concatenate 'string
+                "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defmethod\","
+                "\"form_name\":\"defmethod bark\",\"operation\":\"replace\","
+                "\"content\":\"c\"}}"))))
+        (qual (agent-action-arguments
+               (%parsed
+                (concatenate 'string
+                 "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                 "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defclass\","
+                 "\"form_name\":\"pkg::user\",\"operation\":\"replace\","
+                 "\"content\":\"c\"}}")))))
+    (ok (equal "bark" (gethash "form_name" pre)))
+    (ok (equal "user" (gethash "form_name" qual)))))
+
+(deftest repair-routes-patch-full-form-new-text-to-edit-replace
+  ;; A lisp-patch-form whose new_text is a complete definition form is routed
+  ;; to a lisp-edit-form replace, dropping the brittle whitespace-sensitive
+  ;; old_text (the dominant guided failure: correct fix, unmatchable old_text).
+  (let ((action (%parsed
+                 (concatenate 'string
+                  "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\","
+                  "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defun\","
+                  "\"form_name\":\"gret\",\"old_text\":\"(defun gret (n)\","
+                  "\"new_text\":\"(defun greet (n) (format nil \\\"Hi\\\"))\"}}"))))
+    (ok (equal "lisp-edit-form" (agent-action-tool action)))
+    (let ((args (agent-action-arguments action)))
+      (ok (equal "replace" (gethash "operation" args)))
+      (ok (search "greet" (gethash "content" args)))
+      (ok (null (gethash "old_text" args)))
+      (ok (null (gethash "new_text" args))))))
+
+(deftest repair-leaves-snippet-patch-as-patch
+  ;; new_text is a snippet, not a whole form -> stays a lisp-patch-form (old_text
+  ;; matching is still the right tool for a sub-form edit).
+  (let ((action (%parsed
+                 (concatenate 'string
+                  "{\"type\":\"tool_call\",\"tool\":\"lisp-patch-form\","
+                  "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defun\","
+                  "\"form_name\":\"f\",\"old_text\":\"(- a b)\","
+                  "\"new_text\":\"(+ a b)\"}}"))))
+    (ok (equal "lisp-patch-form" (agent-action-tool action)))
+    (ok (equal "(+ a b)" (gethash "new_text" (agent-action-arguments action))))))
+
+(deftest repair-is-a-no-op-on-wellformed-and-non-edit-actions
+  ;; A valid edit operation is preserved; a non-editing tool (run-tests) is left
+  ;; entirely alone even if it carries a stray edit-shaped key.
+  (let ((edit (agent-action-arguments
+               (%parsed
+                (concatenate 'string
+                 "{\"type\":\"tool_call\",\"tool\":\"lisp-edit-form\","
+                 "\"arguments\":{\"file_path\":\"x\",\"form_type\":\"defun\","
+                 "\"form_name\":\"f\",\"operation\":\"insert_after\","
+                 "\"content\":\"c\"}}"))))
+        (run (agent-action-arguments
+              (%parsed
+               (concatenate 'string
+                "{\"type\":\"tool_call\",\"tool\":\"run-tests\","
+                "\"arguments\":{\"system\":\"s\",\"form_type\":\"function\"}}")))))
+    (ok (equal "insert_after" (gethash "operation" edit)))
+    (ok (equal "function" (gethash "form_type" run)))))

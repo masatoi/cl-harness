@@ -195,6 +195,91 @@ declares an unknown TYPE, or is missing a required field for its variant."
                                    (or type "<missing>"))
                   :raw parsed))))))
 
+(defun full-definition-form-p (text)
+  "True when TEXT reads as exactly one complete (defXXX ...) form with
+nothing but whitespace after it. Used to decide whether a patch's
+new_text is a whole replacement form (so it can be routed to an
+edit-form replace, sidestepping a brittle old_text). Reads with
+*READ-EVAL* nil; a read error or trailing form yields NIL."
+  (handler-case
+      (let ((*read-eval* nil)
+            (*package* (find-package :cl-user)))
+        (with-input-from-string (stream text)
+          (let ((form (read stream nil nil)))
+            (and (consp form)
+                 (symbolp (first form))
+                 (let ((name (symbol-name (first form))))
+                   (and (>= (length name) 3)
+                        (string-equal (subseq name 0 3) "DEF")))
+                 (null (read stream nil nil))))))
+    (error () nil)))
+
+(defun repair-edit-action (action)
+  "Repair the common malformed tool-call arguments a weak local model
+emits for the cl-mcp editing tools, so a semantically-correct edit still
+dispatches. Returns ACTION unchanged unless it is a :TOOL-CALL for
+lisp-edit-form / lisp-patch-form with a repairable argument; this is a
+no-op for well-formed edits and for every non-editing tool.
+
+Repairs: form_type \"function\" -> \"defun\"; an invalid operation (e.g.
+\"overwrite\", \"edit\", \"delete-and-replace\") -> \"replace\"; a
+form_name carrying a leading form_type token (\"defmethod bark\" ->
+\"bark\") or a package qualifier (\"pkg::user\" -> \"user\"); and a
+lisp-patch-form whose new_text is a COMPLETE definition form -> a
+lisp-edit-form replace with that form as content, dropping the brittle
+whitespace-sensitive old_text (the dominant high-agency failure: a
+correct fix the model cannot land because old_text will not match)."
+  (let ((tool (agent-action-tool action))
+        (args (agent-action-arguments action)))
+    (unless (and (eq :tool-call (agent-action-type action))
+                 (hash-table-p args)
+                 (member tool '("lisp-edit-form" "lisp-patch-form")
+                         :test #'string=))
+      (return-from repair-edit-action action))
+    ;; form_type: "function" is not a form type; the model means "defun".
+    (when (equal (gethash "form_type" args) "function")
+      (setf (gethash "form_type" args) "defun"))
+    ;; operation: anything outside the valid set is the model's word for
+    ;; "replace this form" (overwrite / edit / delete-and-replace / ...).
+    (let ((op (gethash "operation" args)))
+      (when (and (stringp op)
+                 (not (member op '("replace" "insert_before" "insert_after")
+                              :test #'string=)))
+        (setf (gethash "operation" args) "replace")))
+    ;; form_name: strip a leading "<form_type> " token and a package
+    ;; qualifier, both of which the model sometimes prepends.
+    (let ((form-name (gethash "form_name" args))
+          (form-type (gethash "form_type" args)))
+      (when (stringp form-name)
+        (let ((bare form-name))
+          (when (and (stringp form-type)
+                     (> (length bare) (1+ (length form-type)))
+                     (string-equal (subseq bare 0 (length form-type)) form-type)
+                     (char= (char bare (length form-type)) #\Space))
+            (setf bare (string-left-trim " " (subseq bare (length form-type)))))
+          (let ((sep (search "::" bare)))
+            (when sep (setf bare (subseq bare (+ sep 2)))))
+          (unless (equal bare form-name)
+            (setf (gethash "form_name" args) bare)))))
+    ;; A patch whose new_text is a whole definition form: route to an
+    ;; edit-form replace and drop old_text. Returns a fresh action (the
+    ;; tool slot is read-only).
+    (when (and (string= tool "lisp-patch-form")
+               (stringp (gethash "new_text" args))
+               (full-definition-form-p (gethash "new_text" args)))
+      (setf (gethash "content" args) (gethash "new_text" args)
+            (gethash "operation" args) "replace")
+      (remhash "new_text" args)
+      (remhash "old_text" args)
+      (return-from repair-edit-action
+        (make-instance 'agent-action
+                       :type :tool-call
+                       :tool "lisp-edit-form"
+                       :arguments args
+                       :thought (agent-action-thought action)
+                       :raw (agent-action-raw action))))
+    action))
+
 (defun obtain-action (fn prompt &key (max-tries 3))
   "Call FN (a function of one prompt string returning a raw LLM response)
 and PARSE-ACTION the result, retrying up to MAX-TRIES.
@@ -212,7 +297,9 @@ on the first bad reply."
         (last-error "(no attempt)"))
     (dotimes (i max-tries (values nil last-error))
       (handler-case
-          (return (values (parse-action (funcall fn current)) nil))
+          (return (values (repair-edit-action
+                           (parse-action (funcall fn current)))
+                          nil))
         (error (condition)
           (setf last-error (princ-to-string condition))
           (setf current
