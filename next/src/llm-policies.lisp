@@ -33,6 +33,7 @@
                 #:environment-action-space)
   (:import-from #:cl-harness-next/src/action
                 #:obtain-action
+                #:action-error-hint
                 #:agent-action-type
                 #:agent-action-tool
                 #:agent-action-arguments
@@ -142,12 +143,14 @@ self-directed dials, with the mandatory clean gate on finish."))
 context view, or NIL."))
 
 (defun %step-prompt (policy kernel)
-  (format nil "~@[~A~%~%~]~@[~A~%~%~]~A~@[~%~%Last action error: ~A~]"
-          (render-tool-schemas
-           (environment-action-space (kernel-environment kernel)))
-          (policy-prompt-sections policy kernel)
-          (compile-context (kernel-world-model kernel))
-          (kernel-last-action-error kernel)))
+  (let ((last-error (kernel-last-action-error kernel)))
+    (format nil "~@[~A~%~%~]~@[~A~%~%~]~A~@[~%~%Last action error: ~A~@[~%~A~]~]"
+            (render-tool-schemas
+             (environment-action-space (kernel-environment kernel)))
+            (policy-prompt-sections policy kernel)
+            (compile-context (kernel-world-model kernel))
+            last-error
+            (and last-error (action-error-hint last-error)))))
 
 (defun %give-up (control &rest arguments)
   (make-decision :kind :give-up

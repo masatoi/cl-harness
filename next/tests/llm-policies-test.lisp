@@ -72,7 +72,7 @@
                         (concatenate 'string
                                      "{\"isError\":true,\"content\":"
                                      "[{\"type\":\"text\","
-                                     "\"text\":\"form not found\"}]}")
+                                     "\"text\":\"Form F not found in a.lisp\"}]}")
                         (progn
                           (when (dial-fixable-p transport)
                             (setf (dial-fixed-p transport) t))
@@ -301,6 +301,19 @@
       (let ((prompt (first (car prompts))))
         (ok (search "lisp-edit-form" prompt))
         (ok (search "TOOLS" prompt))))))
+
+(deftest guided-step-prompt-appends-error-hint
+  ;; A failed edit (form not found) surfaces BOTH the raw error and an
+  ;; actionable hint on the next step's prompt, steering the model out of the
+  ;; dead-end instead of leaving it to re-guess the same call.
+  (let ((prompts (list nil)))
+    (with-dial-kernel (kernel :responses (list *edit-json* *give-up-json*)
+                              :transport-args (list :edit-fails-p t)
+                              :prompts-box prompts)
+      (ok (eq :given-up (run-kernel kernel)))
+      (let ((last-prompt (first (car prompts))))
+        (ok (search "Last action error" last-prompt))
+        (ok (search "form_name" last-prompt))))))
 
 (deftest self-directed-happy-path
   (with-dial-kernel (kernel :policy-class 'self-directed-policy

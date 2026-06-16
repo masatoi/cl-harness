@@ -26,6 +26,7 @@
            #:agent-action-decision
            #:parse-action
            #:repair-edit-action
+           #:action-error-hint
            #:obtain-action
            #:strip-code-fence
            #:action-parse-error
@@ -310,6 +311,29 @@ will not match)."
                          :raw (agent-action-raw action))
           action))))
 
+(defun action-error-hint (error-text)
+  "Given a cl-mcp tool-error string ERROR-TEXT (e.g. the kernel's
+last-action-error), return a short actionable hint steering a weak model
+out of a known dead-end on its next step, or NIL when no hint applies.
+
+The dominant high-agency dead-end is a lisp-patch-form whose old_text
+will not whitespace-match: the model has the right fix but keeps
+re-trying an unmatchable old_text. The hint redirects it to re-emit the
+WHOLE form via a lisp-edit-form replace, which REPAIR-EDIT-ACTION then
+routes cleanly. A form-locate failure gets a form_name hint, matched on
+cl-mcp's distinctive \"Form <type> <name> not found in <path>\" shape
+(both \"Form \" and \"not found in\"), so the sibling \"Symbol ... not
+found in <package>\" / \"Section ... not found in ...\" errors do NOT
+mis-fire into a form_name hint."
+  (when (stringp error-text)
+    (cond
+      ((search "old_text not found" error-text)
+       "Hint: stop retrying old_text -- it must match the source text exactly, including whitespace. Instead re-emit the COMPLETE corrected form using lisp-edit-form with operation \"replace\" and the whole (def...) form in \"content\" (no old_text).")
+      ((and (search "Form " error-text)
+            (search "not found in" error-text))
+       "Hint: the form_name did not resolve. Use the bare symbol for a defun/defmacro, the full specializer list for a defmethod (e.g. \"area ((s square))\"), and the package name for a defpackage.")
+      (t nil))))
+
 (defun obtain-action (fn prompt &key (max-tries 3))
   "Call FN (a function of one prompt string returning a raw LLM response)
 and PARSE-ACTION the result, retrying up to MAX-TRIES.
@@ -334,5 +358,8 @@ on the first bad reply."
           (setf last-error (princ-to-string condition))
           (setf current
                 (format nil "~A~2%IMPORTANT: your previous reply was not a ~
-valid action (~A). Reply with EXACTLY ONE valid JSON object and nothing else."
+valid action (~A). Reply with EXACTLY ONE valid JSON object and nothing ~
+else -- no markdown fences, no prose. Escape every newline inside a ~
+string value as \\n. For a tool call, \"type\" must be \"tool_call\" and ~
+the tool's arguments go under \"arguments\"."
                         prompt last-error)))))))
