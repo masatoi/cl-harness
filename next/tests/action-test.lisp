@@ -316,11 +316,13 @@ applied. Returns the (repaired) AGENT-ACTION."
   (ok (null (action-error-hint nil))))
 
 (deftest action-error-hint-form-branch-is-narrow
-  ;; The form_name branch matches the cl-mcp "... not found in <path>" shape,
-  ;; so an unrelated "not found" (a system / package load error) does NOT
-  ;; mis-fire into a misleading form_name hint.
-  (ok (null (action-error-hint "system clh-foo not found")))
-  (ok (null (action-error-hint "package FOO not found")))
+  ;; The form_name branch matches cl-mcp's distinctive "Form ... not found in
+  ;; <path>" shape, so its sibling "not found" / "not found in" errors do NOT
+  ;; mis-fire into a misleading form_name hint:
+  (ok (null (action-error-hint "system clh-foo not found")))      ; no "in"
+  (ok (null (action-error-hint "package FOO not found")))         ; no "in"
+  (ok (null (action-error-hint "Symbol BAR not found in COMMON-LISP-USER")))
+  (ok (null (action-error-hint "Section 3.4 not found in local HyperSpec index")))
   ;; the real form-locate shape still fires
   (ok (search "form_name"
               (action-error-hint "Form defun gret not found in /x/main.lisp"))))
